@@ -1,4 +1,4 @@
-"""Session scope (MEM-1 Plan §5; spec § Scopes): which prefixes a session reads and writes.
+"""Session scope: which prefixes a session reads and writes.
 
 Resolved on every tool call, so moving the session into another Hermes project
 mid-chat applies straight away. The project comes from Hermes's own Projects

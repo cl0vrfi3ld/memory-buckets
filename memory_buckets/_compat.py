@@ -2,8 +2,8 @@
 
 Inside Hermes we subclass the real ``MemoryProvider``. Outside it (unit tests,
 a bare Python) we fall back to a shim with the same abstract surface, so
-the plugin stays importable. ``tests/test_abi.py`` (MEM-1 T2) checks the shim
-hasn't drifted from the real ABC when ``HERMES_PYTHON`` is available.
+the plugin stays importable. ``tests/hermes_probe.py`` checks the provider's
+overrides against the real ABC when ``HERMES_PYTHON`` is set.
 """
 
 from __future__ import annotations

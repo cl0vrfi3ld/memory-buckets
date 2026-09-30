@@ -86,7 +86,7 @@ try:
 except SystemExit as exc:
     out["diagnose_exit"] = exc.code
 
-# ADR-0016: the sort-inbox skill and the user-only slash commands.
+# The sort-inbox skill and the user-only slash commands.
 from hermes_cli.plugins import get_plugin_command_handler  # noqa: E402
 from tools.skills_tool import skill_view  # noqa: E402
 

@@ -1,4 +1,4 @@
-# The built-in embedding model (ADR-0015): minishlab/potion-retrieval-32M at the
+# The built-in embedding model: minishlab/potion-retrieval-32M at the
 # revision static_model.py pins, converted to float16 by the plugin's own stdlib
 # converter. That halves it to ~65 MB with cosine differences around 2e-5. Wheels
 # built outside Nix get the same files from hatch_build.py.

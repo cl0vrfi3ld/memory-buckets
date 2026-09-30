@@ -1,4 +1,4 @@
-"""Frontmatter: a restricted YAML subset, since stdlib has no YAML (MEM-1 Plan §3).
+"""Frontmatter: a restricted YAML subset, since stdlib has no YAML.
 
 Understood, per key:
 

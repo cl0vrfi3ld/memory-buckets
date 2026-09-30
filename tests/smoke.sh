@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# MEM-1 T3: live smoke test on a THROWAWAY Hermes profile. Manual, not part of `check`.
+# Live smoke test on a THROWAWAY Hermes profile. Manual, not part of `check`.
 #
 #   tests/smoke.sh TEST_CONFIG_YAML [TEST_ENV_FILE]
 #

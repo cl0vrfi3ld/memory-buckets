@@ -1,4 +1,4 @@
-"""The built-in static embedding model (ADR-0015).
+"""The built-in static embedding model.
 
 Unit tests use a tiny synthetic model written by the test. Real-model tests run
 when MEMORY_BUCKETS_MODEL_DIR points at potion-retrieval-32M (the Nix check does

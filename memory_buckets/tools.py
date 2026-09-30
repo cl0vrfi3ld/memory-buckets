@@ -1,4 +1,4 @@
-"""Tool schemas and handlers (MEM-1 Plan §6).
+"""Tool schemas and handlers.
 
 Every result carries ``ok``. Errors are ``{"ok": false, "error": {"code", "message"}, ...}``:
 

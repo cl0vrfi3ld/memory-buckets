@@ -1,4 +1,4 @@
-"""``hermes memory-buckets``: status, lint, reindex, search, import, proposals (MEM-1 Plan §8).
+"""``hermes memory-buckets``: status, lint, reindex, search, import, proposals.
 
 Hermes imports the plugin directory's ``cli.py`` (which re-exports ``register_cli``
 from here) only while memory-buckets is the active provider. It looks for
@@ -489,7 +489,7 @@ def cmd_apply(args) -> int:
     except StoreError as err:
         _out(f"error: {err.message}")
         return 1
-    # Applying is the user's decision (ADR-0016): insist on a person at a terminal.
+    # Applying is the user's decision: insist on a person at a terminal.
     if not sys.stdin.isatty():
         _out("error: apply asks for confirmation, so it needs an interactive terminal")
         return 2

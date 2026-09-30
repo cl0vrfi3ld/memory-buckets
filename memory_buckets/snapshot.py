@@ -1,4 +1,4 @@
-"""The ``system_prompt_block`` snapshot (MEM-1 Plan §5; spec § Hooks and tools).
+"""The ``system_prompt_block`` snapshot.
 
 Contents, in order: usage rules, ``global/profile.md`` and ``global/preferences.md``
 in full, the project's ``index.md`` when the session has a project, then a path

@@ -1,4 +1,4 @@
-"""MemoryBucketsProvider: Hermes hooks, per-session state and wiring (MEM-1 Plan §5).
+"""MemoryBucketsProvider: Hermes hooks, per-session state and wiring.
 
 Hermes runs ``register()`` once per ``AIAgent``, so one instance serves one
 agent, which may rotate through several session ids (``on_session_switch``:
@@ -252,7 +252,7 @@ class MemoryBucketsProvider(MemoryProvider):
         try:
             return json.dumps(tools.handle(tool_name, args or {}, ctx), ensure_ascii=False)
         except sqlite3.Error as err:
-            # The index is a cache (ADR-0010): a corrupt SQLite file is rebuilt, never a crash.
+            # The index is only a cache: a corrupt SQLite file is rebuilt, never a crash.
             # Only sqlite3.Error: store writes never touch SQLite synchronously, so a retry here
             # can't repeat a write (an OSError from a write could, e.g. a double append).
             logger.warning("memory-buckets: index error (%s); rebuilding the cache and retrying", err)
@@ -295,7 +295,7 @@ class MemoryBucketsProvider(MemoryProvider):
         self._embed_thread = spawn_context_thread(run, name="memory-buckets-embed")
         self._embed_thread.start()
 
-    # -- migration bridge (ADR-0011) -------------------------------------------------
+    # -- migration bridge ------------------------------------------------------------
 
     @_traced
     def on_memory_write(self, action: str, target: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:

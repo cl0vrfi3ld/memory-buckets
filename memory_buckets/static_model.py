@@ -1,4 +1,4 @@
-"""Built-in embeddings: a Model2Vec static model in pure stdlib (ADR-0015).
+"""Built-in embeddings: a Model2Vec static model in pure stdlib.
 
 ``potion-retrieval-32M`` (MinishLab, MIT) is a transformer distilled into a
 lookup table, so embedding text is:

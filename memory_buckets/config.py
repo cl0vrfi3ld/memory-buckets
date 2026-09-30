@@ -1,4 +1,4 @@
-"""Plugin config (MEM-1 Plan §4, §5).
+"""Plugin config.
 
 Inside Hermes, the config is ``plugins.memory-buckets`` in ``config.yaml``, read with
 ``hermes_cli.config.load_config_readonly`` (imported lazily). Outside Hermes
@@ -32,7 +32,7 @@ class Config:
     prefetch_min_similarity: float = -1.0  # < 0: the built-in model's measured default, 0.27
     prefetch_max_hints: int = 4
     snapshot_max_chars: int = 12000  # the rules alone are ~4k; the rest is profile, preferences and the file list
-    nudge_interval: int = 10  # user turns between filing reminders; 0 = off (ADR-0011)
+    nudge_interval: int = 10  # user turns between filing reminders; 0 = off
     write_policy: str = "shared"  # or "confined": project sessions can't write global files
     cron_writes: bool = False
     readonly: bool = False

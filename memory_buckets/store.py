@@ -1,4 +1,4 @@
-"""The store contract (MEM-1 Plan §3; ADR-0007, ADR-0012, ADR-0013, ADR-0014).
+"""The store contract.
 
 Owns: path rules, version tokens, read/list, compare-and-swap write and delete,
 and the ``.lock`` flock. The store is a plain directory, not a git repo.
@@ -53,7 +53,7 @@ _PATH_RES = tuple(
 
 
 class StoreError(Exception):
-    """A contract error. ``code`` is one of the closed set in the plan; ``fields``
+    """A contract error. ``code`` is a short machine-readable reason; ``fields``
     carry extra result data (e.g. ``current_version`` on a conflict)."""
 
     def __init__(self, code: str, message: str, **fields) -> None:

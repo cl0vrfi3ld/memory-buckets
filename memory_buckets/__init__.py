@@ -2,11 +2,11 @@
 
 Hermes calls ``register(ctx)`` once per ``AIAgent``, so each call hands back a
 fresh provider. Concurrent chats get separate instances that share the store
-through its lock. See ``05 Plan/MEM-1 Plan.md`` §5 in the design vault.
+through its lock.
 
 It also registers the ``memory-buckets:sort-inbox`` skill and the
-``/memory-pending``, ``/memory-apply`` and ``/memory-reject`` slash commands
-(ADR-0016). Those are optional: a context without them still gets the provider.
+``/memory-pending``, ``/memory-apply`` and ``/memory-reject`` slash commands.
+Those are optional: a context without them still gets the provider.
 """
 
 from ._paths import SKILLS_DIR

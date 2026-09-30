@@ -1,4 +1,4 @@
-"""Embeddings (ADR-0010, ADR-0015; MEM-1 Plan §4): the built-in ``potion-retrieval-32M``
+"""Embeddings: the built-in ``potion-retrieval-32M``
 static model (``static_model.py``), run in-process. No server.
 
 ``StaticEmbedder`` exposes ``identity``, ``describe()``, ``down_reason()``,

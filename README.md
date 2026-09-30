@@ -37,6 +37,10 @@ install, some of which bundle the model, are under [Install](#install).
 Hermes finds the plugin whichever way you install it. In every case you still
 set `memory.provider: memory-buckets` yourself.
 
+It needs Linux or macOS, Python 3.10 or later, and a `sqlite3` built with FTS5
+(`hermes memory-buckets diagnose` tells you if it isn't). Windows isn't
+supported: the store locks with `fcntl`, which Windows doesn't have.
+
 ### Plugin directory
 
 `hermes plugins install`, as in the quick start, clones it into

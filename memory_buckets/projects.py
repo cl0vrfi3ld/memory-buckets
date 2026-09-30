@@ -1,4 +1,4 @@
-"""Which Hermes Project a session is in (spec § Scopes).
+"""Which Hermes Project a session is in.
 
 Projects are Hermes's own: named workspaces kept in the profile's ``projects.db``
 (``hermes project create <name> <folder>``, the desktop sidebar, the

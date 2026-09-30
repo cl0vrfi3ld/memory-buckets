@@ -1,4 +1,4 @@
-"""Search index at ``<store>/.index/memory.sqlite``: a cache, never the source of truth (ADR-0010; MEM-1 Plan §4).
+"""Search index at ``<store>/.index/memory.sqlite``: a cache, never the source of truth.
 
 Every search and prefetch reconciles first: one ``stat`` per file, and a
 re-read only when size or mtime changed. So hand edits from Obsidian or the

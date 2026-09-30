@@ -1,4 +1,4 @@
-"""Staged project sorts from ``global/inbox.md`` (ADR-0016).
+"""Staged project sorts from ``global/inbox.md``.
 
 The agent sorts general inbox entries straight into ``global/``, but anything
 bound for a project (including a new project) is only *proposed*: the

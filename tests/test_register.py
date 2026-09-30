@@ -24,7 +24,7 @@ class RegisterTest(unittest.TestCase):
         self.assertEqual([s["name"] for s in provider.get_tool_schemas()], tools.TOOL_NAMES)
 
     def test_each_register_call_is_a_fresh_instance(self):
-        # Hermes calls register() once per AIAgent (MEM-1 Plan §5).
+        # Hermes calls register() once per AIAgent.
         ctx = _Ctx()
         memory_buckets.register(ctx)
         memory_buckets.register(ctx)
@@ -91,7 +91,7 @@ class RegisterTest(unittest.TestCase):
         self.assertTrue(callable(cli.register_cli))
 
     def test_tool_names_are_unique_and_not_hermes_core(self):
-        # Mirrors toolsets._HERMES_CORE_TOOLS at rev 59004a62; test_abi checks the real list.
+        # Mirrors toolsets._HERMES_CORE_TOOLS at rev 59004a62; hermes_probe.py checks the real list.
         core = {"memory", "session_search", "read_file", "write_file", "search_files", "todo_list"}
         self.assertEqual(len(set(tools.TOOL_NAMES)), 8)
         self.assertFalse(core & set(tools.TOOL_NAMES))

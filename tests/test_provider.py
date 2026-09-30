@@ -132,7 +132,7 @@ class ProviderTest(StoreCase):
         self.assertEqual(json.loads(p.handle_tool_call("memory_list", {}))["ok"], False)
 
     def test_corrupt_index_is_rebuilt_not_a_crash(self):
-        # The index is a cache (ADR-0010): a broken SQLite file must be rebuilt and the
+        # The index is only a cache: a broken SQLite file must be rebuilt and the
         # tool call retried, not propagate sqlite3.Error to Hermes (review finding).
         p = self.make()
         self.assertTrue(self.call(p, "memory_list")["ok"])

@@ -1,4 +1,4 @@
-"""``global/inbox.md``: imported memory waiting to be sorted (MEM-1 Plan §8; ADR-0011).
+"""``global/inbox.md``: imported memory waiting to be sorted.
 
 Used by ``hermes memory-buckets import`` and by the provider's ``on_memory_write`` bridge,
 which mirrors built-in memory writes while built-in memory is still on.
