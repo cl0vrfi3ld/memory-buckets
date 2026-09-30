@@ -12,6 +12,11 @@ license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []  # stdlib only, ever
 
+[project.urls]
+Homepage = "https://git.cl0vr.co/cl0vr/memory-buckets"
+Source = "https://git.cl0vr.co/cl0vr/memory-buckets"
+Mirror = "https://github.com/cl0vrfi3ld/memory-buckets"
+
 [project.entry-points."hermes_agent.memory_providers"]
 # Hermes's name for the provider (memory.provider: memory-buckets) -> module with register(ctx)
 memory-buckets = "memory_buckets"

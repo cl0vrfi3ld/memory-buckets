@@ -74,6 +74,7 @@ buildPythonPackage {
 
   meta = {
     inherit (pyproject.project) description;
+    homepage = "https://git.cl0vr.co/cl0vr/memory-buckets";
     license = lib.licenses.mit;
   };
 }
