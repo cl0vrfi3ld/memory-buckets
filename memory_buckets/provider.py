@@ -249,7 +249,22 @@ class MemoryBucketsProvider(MemoryProvider):
         state = self._state()
         ctx = tools.Context(store=self.store, index=self.index, scope=self._scope(), config=self.config,
                             source=state.platform, on_write=self._after_write)
-        return json.dumps(tools.handle(tool_name, args or {}, ctx), ensure_ascii=False)
+        try:
+            return json.dumps(tools.handle(tool_name, args or {}, ctx), ensure_ascii=False)
+        except sqlite3.Error as err:
+            # The index is a cache (ADR-0010): a corrupt SQLite file is rebuilt, never a crash.
+            # Only sqlite3.Error: store writes never touch SQLite synchronously, so a retry here
+            # can't repeat a write (an OSError from a write could, e.g. a double append).
+            logger.warning("memory-buckets: index error (%s); rebuilding the cache and retrying", err)
+            try:
+                if self.index is not None:
+                    self.index.rebuild()
+                return json.dumps(tools.handle(tool_name, args or {}, ctx), ensure_ascii=False)
+            except sqlite3.Error as err2:
+                logger.warning("memory-buckets: index still failing after rebuild: %s", err2)
+                return json.dumps({"ok": False, "error": {"code": "index_error",
+                                                          "message": f"the search index is broken and couldn't be rebuilt: {err2}"}},
+                                  ensure_ascii=False)
 
     def _after_write(self, path: str) -> None:
         if self.index is None or self.index.embedder is None or self._shut:

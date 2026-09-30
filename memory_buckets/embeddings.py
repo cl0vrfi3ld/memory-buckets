@@ -10,6 +10,7 @@ cosine similarity is a dot product.
 from __future__ import annotations
 
 import logging
+import struct
 import threading
 from array import array
 from pathlib import Path
@@ -67,7 +68,8 @@ class StaticEmbedder:
                     status or "built-in embedding model not present; run `hermes memory-buckets fetch-model`")
             try:
                 self._model = static_model.load(found)
-            except (OSError, ValueError, KeyError, static_model.ModelUnavailable) as err:
+            except (OSError, ValueError, KeyError, struct.error, static_model.ModelUnavailable) as err:
+                # struct.error: a truncated/corrupt model.safetensors; the model is down, not a crash.
                 raise static_model.ModelUnavailable(f"built-in embedding model at {found} is unusable: {err}") from None
             return self._model
 

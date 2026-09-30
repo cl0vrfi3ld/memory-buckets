@@ -2,6 +2,7 @@ import multiprocessing
 import os
 import time
 import unittest
+from unittest import mock
 
 from .helpers import StoreCase, doc
 from memory_buckets import store as st
@@ -31,6 +32,15 @@ class StoreTest(StoreCase):
         self.store.write("global/topics/nix.md", doc("nix", "Nix"), "new")
         leftovers = [n for _, _, names in os.walk(self.store.root) for n in names if ".tmp." in n]
         self.assertEqual(leftovers, [])
+
+    def test_failed_write_leaves_no_temp_file(self):
+        # _atomic_write must unlink its .tmp when the write itself fails (review finding).
+        with mock.patch("os.fsync", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.store.write("global/topics/nix.md", doc("nix", "Nix"), "new")
+        leftovers = [n for _, _, names in os.walk(self.store.root) for n in names if ".tmp." in n]
+        self.assertEqual(leftovers, [])
+        self.assertIsNone(self.store.read_bytes("global/topics/nix.md"))
 
     def test_lock_times_out_while_another_process_holds_it(self):
         ctx = multiprocessing.get_context("fork")

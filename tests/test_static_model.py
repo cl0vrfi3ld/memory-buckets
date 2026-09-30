@@ -136,6 +136,22 @@ class FetchTest(unittest.TestCase):
                 sm.fetch(self.store)
         self.assertFalse((sm.download_dir(self.store) / "vocab.txt").exists())
 
+    def test_preexisting_file_is_hash_checked_and_redownloaded(self):
+        # A corrupt file already at the destination must not be accepted as complete.
+        dest = sm.download_dir(self.store)
+        dest.mkdir(parents=True)
+        (dest / "vocab.txt").write_text("garbage")
+        (dest / "model.safetensors").write_bytes(b"garbage")
+        sm.fetch(self.store)
+        self.assertTrue(sm.is_complete(dest))
+        self.assertEqual(hashlib.sha256((dest / "vocab.txt").read_bytes()).hexdigest(), self.hashes["vocab.txt"])
+
+    def test_preexisting_good_file_is_not_redownloaded(self):
+        first = sm.fetch(self.store)
+        # Verified local files are reused: any network access now is a failure.
+        with mock.patch.object(sm.urllib.request, "urlopen", side_effect=AssertionError("re-downloaded")):
+            self.assertEqual(sm.fetch(self.store), first)
+
     def test_static_embedder_downloads_in_the_background_then_works(self):
         emb = embeddings.StaticEmbedder(self.store, auto_download=True)
         self.assertIn("downloading", emb.down_reason())
@@ -149,6 +165,21 @@ class FetchTest(unittest.TestCase):
     def test_no_auto_download_says_how_to_get_it(self):
         emb = embeddings.StaticEmbedder(self.store, auto_download=False)
         self.assertIn("fetch-model", emb.down_reason())
+        with self.assertRaises(embeddings.EmbeddingError):
+            emb.embed_query("tea")
+
+    def test_corrupt_model_is_down_not_a_crash(self):
+        # A truncated model.safetensors raises struct.error inside StaticModel.__init__;
+        # the embedder must report the model down, not let it escape (review finding).
+        dest = sm.download_dir(self.store)
+        dest.mkdir(parents=True)
+        (dest / "vocab.txt").write_text("[UNK]\ntea\n")
+        (dest / "model.safetensors").write_bytes(b"\x00\x01")  # truncated header
+        sm._cache.pop(str(dest.resolve()), None)
+        emb = embeddings.StaticEmbedder(self.store, auto_download=False)
+        reason = emb.down_reason()
+        self.assertIsNotNone(reason)
+        self.assertIn("unusable", reason or "")
         with self.assertRaises(embeddings.EmbeddingError):
             emb.embed_query("tea")
 

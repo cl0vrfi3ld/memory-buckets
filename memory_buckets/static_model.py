@@ -278,7 +278,16 @@ def fetch(store_root: Path, *, progress: Optional[Callable[[str], None]] = None,
     for name, sha in MODEL_FILES.items():
         target = dest / name
         if target.is_file():
-            continue
+            # A pre-existing file is only as good as its hash: a partial download that
+            # landed here, or a tampered .models dir, must not be accepted as complete.
+            digest = hashlib.sha256()
+            with open(target, "rb") as existing:
+                for block in iter(lambda: existing.read(1 << 20), b""):
+                    digest.update(block)
+            if digest.hexdigest() == sha:
+                continue
+            logger.warning("memory-buckets: %s fails its sha256 check; downloading it again", target)
+            target.unlink()
         url = f"{DOWNLOAD_BASE}/{MODEL_REPO}/resolve/{MODEL_REVISION}/{name}"
         tmp = dest / f".{name}.part.{os.getpid()}.{threading.get_ident()}"
         digest = hashlib.sha256()

@@ -220,13 +220,20 @@ class Store:
     def _atomic_write(self, target: Path, data: bytes) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.parent / f".{target.name}.tmp.{os.getpid()}.{threading.get_ident()}"
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
         try:
-            os.write(fd, data)
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(tmp, target)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+            try:
+                os.write(fd, data)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp, target)
+        except BaseException:
+            try:
+                os.unlink(tmp)  # don't leave a partial .tmp behind
+            except OSError:
+                pass
+            raise
         _fsync_dir(target.parent)
 
     def update(self, path: str, fn: Callable[[Optional[bytes]], bytes], if_version: Optional[str] = None) -> Dict[str, str]:

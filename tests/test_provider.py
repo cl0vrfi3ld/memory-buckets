@@ -131,6 +131,18 @@ class ProviderTest(StoreCase):
         self.assertEqual(p.system_prompt_block(), "")
         self.assertEqual(json.loads(p.handle_tool_call("memory_list", {}))["ok"], False)
 
+    def test_corrupt_index_is_rebuilt_not_a_crash(self):
+        # The index is a cache (ADR-0010): a broken SQLite file must be rebuilt and the
+        # tool call retried, not propagate sqlite3.Error to Hermes (review finding).
+        p = self.make()
+        self.assertTrue(self.call(p, "memory_list")["ok"])
+        assert p.index is not None
+        p.index.close()
+        (self.store.root / ".index" / "memory.sqlite").write_bytes(b"not a sqlite file")
+        result = self.call(p, "memory_list")
+        self.assertTrue(result["ok"], result)
+        self.assertIn("global/profile.md", [f["path"] for f in result["files"]])
+
     def test_trace_logs_hooks(self):
         p = self.make()
         with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": "1"}), self.assertLogs("memory_buckets", "INFO") as logs:
