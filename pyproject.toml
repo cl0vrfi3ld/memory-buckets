@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "memory-buckets"
+version = "0.0.1"
+description = "Claude-style memory provider for Hermes Agent: one Markdown file per subject, global and per-project buckets, hybrid search"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = []  # stdlib only, ever
+
+[project.entry-points."hermes_agent.memory_providers"]
+# Hermes's name for the provider (memory.provider: memory-buckets) -> module with register(ctx)
+memory-buckets = "memory_buckets"
+
+[dependency-groups]
+# pip + hatchling: tests/test_hermes.py pip-installs the package offline.
+dev = ["pytest", "pip", "hatchling>=1.26"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["memory_buckets"]
+# The embedding model goes in through the build hook, never as an ordinary file.
+exclude = ["memory_buckets/model"]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+# hatch_build.py: bundles the embedding model at memory_buckets/model/, fetching it if
+# needed. MEMORY_BUCKETS_BUNDLE_MODEL=0 skips it; editable installs never bundle it.
+
+[tool.hatch.build.targets.wheel.force-include]
+# The repo root is also the Hermes plugin directory, so these live beside the package.
+"skills" = "memory_buckets/skills"
+"plugin.yaml" = "memory_buckets/plugin.yaml"
+
+[tool.hatch.build.targets.sdist]
+include = ["memory_buckets", "skills", "tests", "plugin.yaml", "__init__.py", "cli.py", "hatch_build.py", "LICENSE", "README.md"]
+
+[tool.pytest.ini_options]
+# The repo root has an __init__.py (the plugin-directory shim), so import tests by path
+# rather than as members of a package named after the checkout.
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+testpaths = ["tests"]

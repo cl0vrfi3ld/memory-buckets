@@ -1,0 +1,11 @@
+.direnv/
+result
+result-*
+dist
+.venv/
+__pycache__/
+.ruff_cache
+memory_buckets/model/
+.pytest_cache/
+*.egg-info/
+build/
