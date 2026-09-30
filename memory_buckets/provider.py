@@ -254,7 +254,7 @@ class MemoryBucketsProvider(MemoryProvider):
     def _after_write(self, path: str) -> None:
         if self.index is None or self.index.embedder is None or self._shut:
             return
-        if self.index.embedder.down_reason():  # backed off, or the model isn't here yet
+        if self.index.embedder.down_reason():  # the model isn't here yet
             return
         with self._lock:
             if self._embed_running:
@@ -297,10 +297,4 @@ class MemoryBucketsProvider(MemoryProvider):
         except StoreError as err:
             logger.warning("memory-buckets: couldn't mirror a built-in memory write: %s", err.message)
 
-    # -- setup -----------------------------------------------------------------------
 
-    def get_config_schema(self) -> List[Dict[str, Any]]:
-        return copy.deepcopy(config_mod.SETUP_SCHEMA)
-
-    def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
-        config_mod.save(values)

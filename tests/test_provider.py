@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest import mock
 
-from .helpers import FakeEmbeddings, StoreCase, doc, fake_hermes
+from .helpers import FakeEmbedder, StoreCase, doc, fake_hermes
 from memory_buckets import provider as prov
 
 
@@ -15,8 +15,10 @@ class ProviderTest(StoreCase):
         # Embeddings off unless a test opts in (a bundled model would otherwise switch them on).
         self.env = {"MEMORY_BUCKETS_EMBEDDINGS_BACKEND": "off"}
 
-    def make(self, session="s1", **kw):
-        with mock.patch.dict(os.environ, self.env):
+    def make(self, session="s1", embedder=None, **kw):
+        # The built-in model stays off unless a test passes a stand-in for it.
+        make_embedder = (lambda *a, **k: embedder) if embedder is not None else prov.make_embedder
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(prov, "make_embedder", make_embedder):
             p = prov.MemoryBucketsProvider()
             p.initialize(session, hermes_home=str(self.home), platform=kw.pop("platform", "telegram"), **kw)
         self.addCleanup(p.shutdown)
@@ -95,10 +97,7 @@ class ProviderTest(StoreCase):
         self.assertIsNone(p.recall_status())
 
     def test_prefetch_hints_with_embeddings(self):
-        fake = FakeEmbeddings()
-        self.addCleanup(fake.close)
-        self.env = {"MEMORY_BUCKETS_EMBEDDINGS_BASE_URL": fake.url, "MEMORY_BUCKETS_EMBEDDINGS_MODEL": "fake"}
-        p = self.make()
+        p = self.make(embedder=FakeEmbedder())
         p.config.prefetch_min_similarity = 0.3
         p.system_prompt_block()  # profile is inlined, so never hinted
         p.queue_prefetch("x", session_id="s1")
@@ -109,12 +108,9 @@ class ProviderTest(StoreCase):
 
     def test_shutdown_waits_for_the_embedding_worker(self):
         # Regression: shutdown closed SQLite under a running worker thread and segfaulted.
-        fake = FakeEmbeddings()
-        self.addCleanup(fake.close)
-        fake.mode = "slow"  # each request takes 1 s; the client times out after 2 s
-        self.env = {"MEMORY_BUCKETS_EMBEDDINGS_BASE_URL": fake.url, "MEMORY_BUCKETS_EMBEDDINGS_MODEL": "fake"}
-        p = self.make()
-        p.index.embedder.timeout_s = 5
+        slow = FakeEmbedder()
+        slow.delay = 1.0
+        p = self.make(embedder=slow)
         self.call(p, "memory_append", path="global/people/sam.md", lines=["has a dog"])
         self.assertIsNotNone(p._embed_thread)
         p.shutdown()
@@ -129,9 +125,9 @@ class ProviderTest(StoreCase):
         self.assertIn("- [user add] Prefers tea\n- [memory replace] Uses NixOS (was: Uses Arch)\n", text)
         self.assertEqual(text.count("## mirrored from built-in memory"), 1)
 
-    def test_config_schema_and_uninitialised(self):
+    def test_nothing_to_set_up_and_uninitialised(self):
         p = prov.MemoryBucketsProvider()
-        self.assertEqual(p.get_config_schema()[0]["key"], "embeddings_base_url")
+        self.assertEqual(p.get_config_schema(), [])
         self.assertEqual(p.system_prompt_block(), "")
         self.assertEqual(json.loads(p.handle_tool_call("memory_list", {}))["ok"], False)
 

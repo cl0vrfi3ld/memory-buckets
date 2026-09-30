@@ -2,8 +2,8 @@ import os
 import time
 import unittest
 
-from .helpers import FakeEmbeddings, StoreCase, doc
-from memory_buckets import embeddings, index as idx
+from .helpers import FakeEmbedder, StoreCase, doc
+from memory_buckets import index as idx
 
 ALL = lambda path: True  # noqa: E731
 
@@ -79,31 +79,15 @@ class IndexTest(StoreCase):
 
 
 class EmbeddingIndexTest(IndexTest):
-    @classmethod
-    def setUpClass(cls):
-        cls.fake = FakeEmbeddings()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.fake.close()
-
-    def setUp(self):
-        super().setUp()
-        self.fake.mode = "ok"
-        self.fake.requests.clear()
-
-    def client(self, **kw):
-        return embeddings.EmbeddingClient(self.fake.url, kw.pop("model", "fake"), timeout_s=0.5, **kw)
-
     def test_hybrid_search_and_backlog(self):
-        index = self.make(self.client())
+        index = self.make(FakeEmbedder())
         found = index.search("Sam likes climbing", ALL)
         self.assertEqual(found["mode"], "hybrid")
         self.assertEqual(found["results"][0]["path"], "global/people/sam.md")
         self.assertEqual(index.stats()["backlog"], 0)  # small store: one batch embeds everything
 
     def test_hints_threshold_and_exclusion(self):
-        index = self.make(self.client())
+        index = self.make(FakeEmbedder())
         index.reconcile()
         index.embed_backlog(max_batches=None)
         hints = index.hints("Sam likes climbing", ALL, min_similarity=0.3)
@@ -113,59 +97,27 @@ class EmbeddingIndexTest(IndexTest):
         self.assertNotIn("global/people/sam.md", [h[0] for h in excluded])
         self.assertEqual(index.hints("quantum chromodynamics lecture", ALL, min_similarity=0.9), [])
 
-    def test_endpoint_down_falls_back_to_fts_and_backs_off(self):
-        self.fake.mode = "error"
-        index = self.make(self.client())
+    def test_model_unavailable_falls_back_to_fts(self):
+        embedder = FakeEmbedder()
+        embedder.down = "built-in embedding model not present"
+        index = self.make(embedder)
         found = index.search("colmena", ALL)
         self.assertEqual(found["mode"], "fts")
         self.assertIn("embeddings unavailable", found["note"])
         self.assertEqual(found["results"][0]["path"], "proj-1/topics/deploy.md")
-        calls = len(self.fake.requests)
-        self.fake.mode = "ok"
-        index.search("colmena", ALL)
-        self.assertEqual(len(self.fake.requests), calls, "backed off: no new requests for 60s")
         self.assertEqual(index.hints("colmena", ALL), [])
-
-    def test_timeout_backs_off(self):
-        self.fake.mode = "slow"
-        client = self.client()
-        with self.assertRaises(embeddings.EmbeddingError):
-            client.embed(["x"])
-        self.assertIsNotNone(client.down_reason())
-
-    def test_bad_replies_back_off(self):
-        for mode in ("garbage", "wrong_count"):
-            embeddings.reset_backoff()
-            self.fake.mode = mode
-            with self.assertRaises(embeddings.EmbeddingError, msg=mode):
-                self.client().embed(["a", "b"])
+        self.assertEqual(embedder.calls, [])
 
     def test_model_change_reembeds(self):
-        index = self.make(self.client())
+        index = self.make(FakeEmbedder())
         index.reconcile()
         index.embed_backlog(max_batches=None)
         index.close()
-        index2 = self.make(self.client(model="other"))
+        index2 = self.make(FakeEmbedder(name="other"))
         self.assertEqual(index2.stats()["embedded"], 0)
         index2.embed_backlog(max_batches=None)
         self.assertEqual(index2.stats()["backlog"], 0)
 
-    def test_prefixes(self):
-        client = self.client(query_prefix="search_query: ", document_prefix="search_document: ")
-        index = self.make(client)
-        index.search("climbing", ALL)
-        inputs = [i for r in self.fake.requests for i in r["body"]["input"]]
-        self.assertTrue(any(i.startswith("search_document: ") for i in inputs))
-        self.assertIn("search_query: climbing", inputs)
-        index.close()
-        index2 = self.make(self.client(query_prefix="search_query: ", document_prefix="other: "))
-        self.assertEqual(index2.stats()["embedded"], 0, "a new document prefix re-embeds")
-
-    def test_api_key_is_sent(self):
-        client = embeddings.EmbeddingClient(self.fake.url, "fake", api_key="sekrit")
-        client.embed(["x"])
-        self.assertEqual(self.fake.requests[-1]["auth"], "Bearer sekrit")
-        self.assertEqual(self.fake.requests[-1]["path"], "/v1/embeddings")
 
 
 if __name__ == "__main__":

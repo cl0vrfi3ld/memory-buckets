@@ -1,19 +1,17 @@
-"""Shared test fixtures: temp stores, memory files, and a fake embeddings server."""
+"""Shared test fixtures: temp stores, memory files, a fake embedder, a fake Hermes."""
 
 import argparse
 import hashlib
-import json
 import math
 import os
 import re
 import sys
 import tempfile
-import threading
 import time
 import types
 import unittest
+from array import array
 from contextlib import contextmanager
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from memory_buckets import embeddings, store
@@ -87,56 +85,49 @@ def run_hermes_cli(*argv) -> int:
     return 0
 
 
-class FakeEmbeddings:
-    """OpenAI-compatible /v1/embeddings on an ephemeral port. Knobs:
-    ``mode`` = ok | error | slow | garbage | wrong_count; ``dims``."""
+class FakeEmbedder:
+    """Stands in for the built-in model: the same interface, with hashed bag-of-words
+    vectors. Knobs: ``down`` (a reason, or None), ``delay`` (seconds per embed call),
+    ``name`` (part of ``identity``: changing it means re-embedding)."""
 
-    def __init__(self):
-        self.mode = "ok"
-        self.dims = DIMS
-        self.requests = []
-        outer = self
+    default_min_similarity = 0.27
+    batch = 32
 
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *args):
-                pass
+    def __init__(self, name="fake"):
+        self.name = name
+        self.down = None
+        self.delay = 0.0
+        self.calls = []
 
-            def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                outer.requests.append({"path": self.path, "body": body, "auth": self.headers.get("Authorization")})
-                if outer.mode == "error":
-                    self.send_response(500)
-                    self.end_headers()
-                    return
-                if outer.mode == "slow":
-                    time.sleep(1.0)
-                inputs = body["input"]
-                data = [{"index": i, "embedding": fake_vector(t, outer.dims)} for i, t in enumerate(inputs)]
-                if outer.mode == "wrong_count":
-                    data = data[:-1]
-                payload = b"not json" if outer.mode == "garbage" else json.dumps({"data": data}).encode()
-                try:
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    self.wfile.write(payload)
-                except (BrokenPipeError, ConnectionResetError):
-                    pass  # the client timed out first
+    @property
+    def identity(self):
+        return f"fake:{self.name}"
 
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_port}/v1"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+    def describe(self):
+        return f"fake model {self.name}"
 
-    def close(self):
-        self.server.shutdown()
-        self.server.server_close()
+    def down_reason(self):
+        return self.down
+
+    def embed(self, texts):
+        if self.down:
+            raise embeddings.EmbeddingError(self.down)
+        if self.delay:
+            time.sleep(self.delay)
+        self.calls.append(list(texts))
+        return [array("f", fake_vector(t)) for t in texts]
+
+    def embed_documents(self, texts):
+        return self.embed(texts)
+
+    def embed_query(self, text):
+        return self.embed([text])[0]
 
 
 class StoreCase(unittest.TestCase):
     """A fresh store per test. ``self.put(path, content)`` writes a file directly."""
 
     def setUp(self):
-        embeddings.reset_backoff()
         self._tmp = tempfile.TemporaryDirectory()
         self.home = Path(self._tmp.name)
         self.store = store.Store(self.home / "memory-buckets")
@@ -144,7 +135,6 @@ class StoreCase(unittest.TestCase):
 
     def tearDown(self):
         self._tmp.cleanup()
-        embeddings.reset_backoff()
 
     def put(self, path, content):
         target = self.store.memories / path

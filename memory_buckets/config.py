@@ -4,7 +4,6 @@ Inside Hermes, the config is ``plugins.memory-buckets`` in ``config.yaml``, read
 ``hermes_cli.config.load_config_readonly`` (imported lazily). Outside Hermes
 (tests) there's no YAML parser in stdlib, so
 the defaults apply, overridden by ``MEMORY_BUCKETS_*`` environment variables.
-The embeddings API key always comes from the environment (``api_key_env``).
 """
 
 from __future__ import annotations
@@ -12,41 +11,25 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("memory_buckets")
 
 CONFIG_KEY = "memory-buckets"
-DEFAULT_API_KEY_ENV = "MEMORY_BUCKETS_EMBEDDINGS_API_KEY"
 
 
 @dataclass
 class EmbeddingsConfig:
-    backend: str = "auto"  # auto (http if base_url is set, else built-in) | local | http | off
+    backend: str = "local"  # local (the built-in model) | off (keyword search only)
     auto_download: bool = True  # fetch the built-in model in the background if it isn't bundled
     local_model_dir: str = ""  # use a built-in model from here instead
-    base_url: str = ""  # an OpenAI-compatible endpoint, e.g. http://homelab:11434/v1
-    model: str = ""
-    api_key_env: str = DEFAULT_API_KEY_ENV
-    timeout_s: float = 2.0
-    batch: int = 32
-    query_prefix: str = ""  # e.g. "search_query: " for nomic-embed-text
-    document_prefix: str = ""  # e.g. "search_document: "; changing it re-embeds everything
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.base_url and self.model)
-
-    @property
-    def api_key(self) -> str:
-        return os.environ.get(self.api_key_env, "") if self.api_key_env else ""
 
 
 @dataclass
 class Config:
     embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
     store_path: str = ""  # default: $HERMES_HOME/memory-buckets
-    prefetch_min_similarity: float = -1.0  # < 0: the backend's measured default (0.27 built-in, 0.45 http)
+    prefetch_min_similarity: float = -1.0  # < 0: the built-in model's measured default, 0.27
     prefetch_max_hints: int = 4
     snapshot_max_chars: int = 12000  # the rules alone are ~4k; the rest is profile, preferences and the file list
     nudge_interval: int = 10  # user turns between filing reminders; 0 = off (ADR-0011)
@@ -94,8 +77,6 @@ def _assign(obj: Any, name: str, value: Any, type_name: Any) -> None:
 
 
 _ENV = {
-    "MEMORY_BUCKETS_EMBEDDINGS_BASE_URL": ("embeddings", "base_url"),
-    "MEMORY_BUCKETS_EMBEDDINGS_MODEL": ("embeddings", "model"),
     "MEMORY_BUCKETS_EMBEDDINGS_BACKEND": ("embeddings", "backend"),
     "MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD": ("embeddings", "auto_download"),
     "MEMORY_BUCKETS_MODEL_DIR": ("embeddings", "local_model_dir"),
@@ -124,24 +105,3 @@ def load(data: Optional[Dict[str, Any]] = None) -> Config:
         if os.environ.get(env):
             (raw[section] if section else raw)[key] = os.environ[env]
     return Config.from_dict(raw)
-
-
-# `hermes memory setup` / dashboard fields (MemoryProvider.get_config_schema).
-SETUP_SCHEMA: List[Dict[str, Any]] = [
-    {"key": "embeddings_base_url", "description": "OpenAI-compatible embeddings endpoint, e.g. http://homelab:11434/v1. Empty = keyword search only.", "required": False, "default": "", "type": "text"},
-    {"key": "embeddings_model", "description": "Embedding model name at that endpoint", "required": False, "default": "", "type": "text"},
-    {"key": "embeddings_api_key", "description": "API key for the endpoint, if it needs one", "secret": True, "required": False, "env_var": DEFAULT_API_KEY_ENV},
-]
-
-
-def save(values: Dict[str, Any]) -> None:
-    """Write non-secret setup values under ``plugins.memory-buckets`` (Hermes only)."""
-    from hermes_cli.config import save_config
-
-    embeddings = {}
-    if "embeddings_base_url" in values:
-        embeddings["base_url"] = values["embeddings_base_url"]
-    if "embeddings_model" in values:
-        embeddings["model"] = values["embeddings_model"]
-    if embeddings:
-        save_config({"plugins": {CONFIG_KEY: {"embeddings": embeddings}}}, merge_existing=True)

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # MEM-1 T3: live smoke test on a THROWAWAY Hermes profile. Manual, not part of `check`.
 #
-#   tests/smoke.sh TEST_CONFIG_YAML [TEST_ENV_FILE] [EMBEDDINGS_BASE_URL EMBEDDINGS_MODEL]
+#   tests/smoke.sh TEST_CONFIG_YAML [TEST_ENV_FILE]
 #
-# TEST_CONFIG_YAML (and optionally TEST_ENV_FILE with the model's API key) must be
+# TEST_CONFIG_YAML (and optionally TEST_ENV_FILE with the chat model's API key) must be
 # files you prepared for testing. The script refuses anything under ~/.hermes and
 # never reads or writes a real Hermes profile. It installs the plugin into a temp
 # profile, turns built-in memory off there, and runs two one-shot chats: "remember
@@ -11,10 +11,10 @@
 # for inspection (the hook trace is in its logs).
 set -euo pipefail
 
-usage="usage: smoke.sh TEST_CONFIG_YAML [TEST_ENV_FILE] [EMBEDDINGS_BASE_URL EMBEDDINGS_MODEL]"
+usage="usage: smoke.sh TEST_CONFIG_YAML [TEST_ENV_FILE]"
 config=$(realpath "${1:?$usage}")
 envfile=""
-if [ $# -ge 2 ] && [ -f "$2" ]; then envfile=$(realpath "$2"); shift; fi
+if [ $# -ge 2 ]; then envfile=$(realpath "$2"); fi
 real_home=$(realpath -m "$HOME/.hermes")
 for f in "$config" $envfile; do
   case "$f" in
@@ -36,13 +36,9 @@ export HERMES_HOME=$home MEMORY_BUCKETS_TRACE=1
 hermes config set memory.provider memory-buckets >/dev/null
 hermes config set memory.memory_enabled false >/dev/null
 hermes config set memory.user_profile_enabled false >/dev/null
-if [ $# -ge 3 ]; then
-  hermes config set plugins.memory-buckets.embeddings.base_url "$2" >/dev/null
-  hermes config set plugins.memory-buckets.embeddings.model "$3" >/dev/null
-fi
 
 echo "profile: $home"
-hermes memory-buckets status --offline || true
+hermes memory-buckets status || true
 
 fact="my favourite tea is lapsang souchong"
 hermes chat -q "Please remember this about me: $fact." --oneshot --format stream-json >"$tmp/run1.jsonl" 2>"$tmp/run1.err"

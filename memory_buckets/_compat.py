@@ -46,6 +46,12 @@ except ImportError:  # not running inside Hermes
         def shutdown(self) -> None:
             pass
 
+        def get_config_schema(self):
+            return []
+
+        def save_config(self, values, hermes_home: str) -> None:
+            pass
+
     def spawn_context_thread(  # type: ignore[no-redef]
         target: Callable[..., Any], *, name: str, daemon: bool = True,
         args: tuple = (), kwargs: Optional[Dict[str, Any]] = None,

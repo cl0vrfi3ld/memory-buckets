@@ -72,7 +72,7 @@ parser = argparse.ArgumentParser()
 sub = parser.add_subparsers()
 plugin_parser = sub.add_parser("memory-buckets")
 cmds[0]["setup_fn"](plugin_parser)
-args = parser.parse_args(["memory-buckets", "status", "--offline"])
+args = parser.parse_args(["memory-buckets", "status"])
 try:
     args.func(args)
     out["cli_exit"] = None

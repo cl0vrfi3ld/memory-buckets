@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest import mock
 
-from .helpers import StoreCase, doc, fake_hermes, run_hermes_cli
+from .helpers import FakeEmbedder, StoreCase, doc, fake_hermes, run_hermes_cli
 from memory_buckets import cli
 
 
@@ -80,7 +80,7 @@ class CliTest(StoreCase):
         self.put("proj-1/index.md", doc("index", "proj-1"))
         self.put("old-proj/index.md", doc("index", "old-proj"))
         with fake_hermes({"proj-1": "/src/proj-1", "fresh": "/src/fresh"}):
-            code, out = self.run_cli("status", "--offline")
+            code, out = self.run_cli("status")
         self.assertIn("2 Hermes project(s); 1 with a bucket (proj-1)", out)
         self.assertIn("no Hermes project (no session is scoped to them): old-proj", out)
         self.assertIn("--slug <bucket>", out)
@@ -119,15 +119,11 @@ class CliTest(StoreCase):
         self.assertIn("embeddings are off", out)
 
     def test_hints_shows_similarities_and_the_cut(self):
-        from .helpers import FakeEmbeddings
-        fake = FakeEmbeddings()
-        self.addCleanup(fake.close)
         self.put("global/people/sam.md", doc("sam", "Who Sam is", "- Sam likes climbing\n"))
         self.put("global/topics/nix.md", doc("nix", "Nix", "- flakes pin inputs\n"))
         out = io.StringIO()
-        env = {"MEMORY_BUCKETS_EMBEDDINGS_BASE_URL": fake.url, "MEMORY_BUCKETS_EMBEDDINGS_MODEL": "fake",
-               "HERMES_HOME": str(self.home)}
-        with mock.patch.dict(os.environ, env), contextlib.redirect_stdout(out):
+        with mock.patch.dict(os.environ, {"HERMES_HOME": str(self.home)}), contextlib.redirect_stdout(out), \
+                mock.patch.object(cli, "make_embedder", lambda *a, **k: FakeEmbedder()):
             code = run_hermes_cli("hints", "Sam likes climbing", "--threshold", "0.5")
         lines = out.getvalue().splitlines()
         self.assertEqual(code, 0)

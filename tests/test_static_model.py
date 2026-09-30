@@ -172,15 +172,14 @@ class FactoryTest(unittest.TestCase):
 
     def test_backend_selection(self):
         self.assertIsInstance(self.pick(), embeddings.StaticEmbedder)
-        self.assertIsInstance(self.pick(base_url="http://x/v1", model="m"), embeddings.EmbeddingClient)
-        self.assertIsInstance(self.pick(backend="local", base_url="http://x/v1", model="m"), embeddings.StaticEmbedder)
+        self.assertIsInstance(self.pick(backend="auto"), embeddings.StaticEmbedder)  # the old default
         self.assertIsNone(self.pick(backend="off"))
-        self.assertIsNone(self.pick(backend="http"))
+        with self.assertLogs("memory_buckets", "WARNING"):
+            self.assertIsInstance(self.pick(backend="http"), embeddings.StaticEmbedder)
 
     def test_thresholds(self):
         cfg = config.Config()
         self.assertEqual(embeddings.min_similarity(cfg, self.pick()), 0.27)
-        self.assertEqual(embeddings.min_similarity(cfg, self.pick(base_url="http://x/v1", model="m")), 0.45)
         cfg.prefetch_min_similarity = 0.6
         self.assertEqual(embeddings.min_similarity(cfg, self.pick()), 0.6)
 

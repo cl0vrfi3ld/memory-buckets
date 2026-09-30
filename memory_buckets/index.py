@@ -23,7 +23,7 @@ from collections import defaultdict
 from typing import Callable, Dict, List, Optional, Tuple
 
 from . import frontmatter
-from .embeddings import EmbeddingClient, EmbeddingError, dot
+from .embeddings import EmbeddingError, StaticEmbedder, dot
 from .store import Store, version
 
 logger = logging.getLogger("memory_buckets")
@@ -119,7 +119,7 @@ def chunk(path: str, description: str, aliases: List[str], body: str, limit: int
 # -- the index -----------------------------------------------------------------
 
 class Index:
-    def __init__(self, store: Store, embedder: Optional[EmbeddingClient] = None) -> None:
+    def __init__(self, store: Store, embedder: Optional[StaticEmbedder] = None) -> None:
         self.store = store
         self.embedder = embedder
         self.path = store.root / ".index" / "memory.sqlite"
@@ -266,7 +266,7 @@ class Index:
 
     def embed_backlog(self, max_batches: Optional[int] = 1) -> int:
         """Embed up to ``max_batches`` batches of un-embedded chunks (None = all).
-        Returns how many got vectors. Never raises for endpoint trouble."""
+        Returns how many got vectors. Never raises when the model isn't available."""
         if self.embedder is None or self.embedder.down_reason():
             return 0
         con, done, batches = self._conn(), 0, 0

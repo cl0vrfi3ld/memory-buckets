@@ -23,7 +23,7 @@ from . import frontmatter, inbox, pending, projects
 from . import config as config_mod
 from . import static_model
 from ._paths import SKILLS_DIR
-from .embeddings import EmbeddingError, StaticEmbedder, make_embedder, min_similarity
+from .embeddings import EmbeddingError, make_embedder, min_similarity
 from .index import Index
 from .store import GLOBAL, MAX_FILE_BYTES, Store, StoreError, stem, validate_path
 from .tools import TOOL_NAMES
@@ -56,7 +56,7 @@ def _open(args):
     cfg = config_mod.load()
     home = _hermes_home()
     root = Path(cfg.store_path or home / "memory-buckets").expanduser()
-    embedder = make_embedder(cfg, root, timeout_s=max(cfg.embeddings.timeout_s, 10.0))
+    embedder = make_embedder(cfg, root)
     store = Store(root)
     return cfg, home, store, Index(store, embedder)
 
@@ -85,8 +85,6 @@ def cmd_status(args) -> int:
         _out(f"index       {s['files']} files, {s['chunks']} chunks, {s['embedded']} embedded, {s['backlog']} waiting")
     if index.embedder is None:
         _out("embeddings  off (keyword search only)")
-    elif args.offline and not isinstance(index.embedder, StaticEmbedder):
-        _out(f"embeddings  {index.embedder.describe()} (not probed)")
     else:
         started = time.monotonic()
         try:
@@ -95,12 +93,8 @@ def cmd_status(args) -> int:
                  f"{(time.monotonic() - started) * 1000:.0f} ms; prefetch threshold "
                  f"{min_similarity(cfg, index.embedder):g}")
         except EmbeddingError as err:
-            if isinstance(index.embedder, StaticEmbedder):
-                # Not a fault: search is keyword-only until the model is here.
-                _out(f"embeddings  built-in {static_model.MODEL_NAME}: not ready ({err})")
-            else:
-                problems += 1
-                _out(f"embeddings  {index.embedder.describe()}: DOWN ({err})")
+            # Not a fault: search is keyword-only until the model is here.
+            _out(f"embeddings  built-in {static_model.MODEL_NAME}: not ready ({err})")
     problems += _status_hermes(home)
     _status_projects(store)
     if (store.memories / inbox.PATH).exists():
@@ -353,7 +347,7 @@ def cmd_reindex(args) -> int:
         else:
             done = index.embed_backlog(max_batches=None)
             left = index.backlog()
-            _out(f"embedded {done} chunk(s)" + (f"; {left} left (endpoint trouble?)" if left else ""))
+            _out(f"embedded {done} chunk(s)" + (f"; {left} left (is the model here yet?)" if left else ""))
     index.close()
     return 0
 
@@ -535,7 +529,6 @@ def cmd_reject(args) -> int:
 def _add_commands(parser: argparse.ArgumentParser) -> None:
     sub = parser.add_subparsers(dest="bm_command", metavar="<command>")
     p = sub.add_parser("status", help="Store, index, embeddings and Hermes config at a glance")
-    p.add_argument("--offline", action="store_true", help="Don't probe the embeddings endpoint")
     p.set_defaults(bm_func=cmd_status)
     p = sub.add_parser("diagnose", help="Why an agent would or wouldn't see the memory tools (inside Hermes)")
     p.add_argument("--platform", action="append", help="Platform to check (repeatable); default: cli, api_server and configured ones")
