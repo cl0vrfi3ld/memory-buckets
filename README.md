@@ -179,10 +179,10 @@ buckets that no Hermes project uses yet; no session is scoped to those.
 
   Every write is a compare-and-swap. On a conflict the tool returns the
   file's current content, so the agent can merge and retry.
-- **Notices** when the agent adds to the inbox or makes a proposal. The CLI,
-  TUI and desktop show them as status lines. Gateways (Telegram, Discord and
-  so on) have no status line, so there the tool result asks the agent to tell
-  you.
+- **Notices** when the agent adds to the inbox or makes a proposal. The CLI
+  and terminal TUI show them as status lines. The desktop app and gateways
+  (Telegram, Discord and so on) don't, so there the tool result asks the agent
+  to tell you.
 - **Prefetch hints** each turn. These are the paths of relevant files, never
   their content.
 - **A periodic reminder** to file durable facts.

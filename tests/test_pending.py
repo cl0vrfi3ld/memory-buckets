@@ -5,7 +5,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from .helpers import StoreCase, doc, run_hermes_cli
+from .helpers import StoreCase, doc, fake_hermes, run_hermes_cli
 from memory_buckets import config, index, pending, scopes, tools
 from memory_buckets.store import StoreError
 
@@ -86,7 +86,8 @@ class PendingTest(StoreCase):
                     inbox_lines=["- nixos-config: uses flake-parts"])
         got = tools.handle("memory_propose", args, ctx)
         self.assertTrue(got["ok"], got)
-        done = pending.apply(self.store, got["id"])
+        with fake_hermes({"nixos-config": "/etc/nixos"}):
+            done = pending.apply(self.store, got["id"])
         self.assertEqual(done["written"], ["nixos-config/topics/layout.md"])
         self.assertNotIn("flake-parts", self.store.read("global/inbox.md")["content"])
         # Without Hermes knowing the project, it's still refused.
@@ -94,6 +95,26 @@ class PendingTest(StoreCase):
         got = self.call("memory_propose", project="other", summary="x", inbox_lines=["- other: x"],
                         files=[{"path": "other/topics/x.md", "description": "x", "lines": ["x"]}])
         self.assertIn("there's no project other", got["error"]["message"])
+
+    def test_apply_rechecks_the_hermes_project(self):
+        # A proposal into a bucket-less Hermes project whose project was deleted (or a
+        # hand-edited proposal claiming one) must not create a bucket no session reads.
+        self.put("global/inbox.md", INBOX + "- gone: a fact\n")
+        c = config.Config()
+        ctx = tools.Context(self.store, self.index, scopes.resolve(c, None), c, source="cli",
+                            hermes_buckets=["gone"])
+        got = tools.handle("memory_propose", dict(
+            project="gone", summary="A fact for gone.", inbox_lines=["- gone: a fact"],
+            files=[{"path": "gone/topics/x.md", "description": "x", "lines": ["a fact"]}]), ctx)
+        self.assertTrue(got["ok"], got)
+        with fake_hermes({}), self.assertRaises(StoreError) as caught:
+            pending.apply(self.store, got["id"])
+        self.assertEqual(caught.exception.code, "conflict")
+        self.assertIn("Hermes has no project gone any more", caught.exception.message)
+        self.assertFalse((self.store.memories / "gone").exists())
+        self.assertIn("- gone: a fact", self.store.read("global/inbox.md")["content"])
+        # Outside Hermes there's nothing to check against: the flag stands.
+        self.assertEqual(pending.apply(self.store, got["id"])["written"], ["gone/topics/x.md"])
 
     def test_apply_commits_one_proposal_and_clears_its_inbox_lines(self):
         a, b = self.propose_existing(), self.propose_new()

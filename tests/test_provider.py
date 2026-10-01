@@ -96,12 +96,12 @@ class ProviderTest(StoreCase):
         gateway = self.make(session="g1", platform="telegram")
         self.assertIn("Tell the user", self.call(gateway, "memory_append", path="global/inbox.md", lines=["x"])["next"])
 
-    def fake_tui(self, provider, status_callback):
+    def fake_tui(self, provider, status_callback, **agent_flags):
         """``tui_gateway.server._sessions`` as the TUI keeps it: an agent whose memory manager holds ``provider``."""
         import sys
         import types
         agent = types.SimpleNamespace(status_callback=status_callback,
-                                      _memory_manager=types.SimpleNamespace(providers=[provider]))
+                                      _memory_manager=types.SimpleNamespace(providers=[provider]), **agent_flags)
         server = types.ModuleType("tui_gateway.server")
         setattr(server, "_sessions", {"sid-1": {"agent": agent}, "other": {"agent": None}})
         return mock.patch.dict(sys.modules, {"tui_gateway.server": server})
@@ -115,7 +115,7 @@ class ProviderTest(StoreCase):
         self.assertNotIn("next", result)
 
     def test_tui_falls_back_to_the_agent(self):
-        p = self.make(session="t1", platform="desktop")
+        p = self.make(session="t1", platform="tui")
         # Outside the TUI process, or another provider's agent: nothing to show it on.
         self.assertIn("next", self.call(p, "memory_append", path="global/inbox.md", lines=["a"]))
         with self.fake_tui(object(), lambda kind, text=None: None):
@@ -125,9 +125,43 @@ class ProviderTest(StoreCase):
             result = self.call(p, "memory_append", path="global/inbox.md", lines=["c"])
         self.assertTrue(result["ok"], result)
         self.assertIn("next", result)
-        # The telegram session never looks for the TUI.
-        with self.fake_tui(p, lambda kind, text=None: self.fail("not a TUI session")):
-            self.call(self.make(session="g2", platform="telegram"), "memory_append", path="global/inbox.md", lines=["d"])
+        # Desktop ignores "lifecycle" status updates, and gateways have no status
+        # line: neither looks for the TUI, even when it owns the provider.
+        for platform in ("desktop", "telegram"):
+            other = self.make(session=f"x-{platform}", platform=platform)
+            with self.fake_tui(other, lambda kind, text=None: self.fail(f"{platform} isn't the TUI")):
+                result = self.call(other, "memory_append", path="global/inbox.md", lines=["d"])
+            self.assertIn("next", result)
+
+    def test_quiet_and_muted_sessions_fall_back_to_the_agent(self):
+        # `hermes chat -q`, one-shot runs and muted turns print nothing, so a notice
+        # there isn't "shown": the agent has to say it.
+        class Agent:
+            suppress_status_output = False
+            _mute_notification_reply = False
+
+            def __init__(self):
+                self.printed = []
+
+            def _emit_status(self, message):
+                self.printed.append(message)
+
+        for flag in ("suppress_status_output", "_mute_notification_reply"):
+            with self.subTest(flag):
+                agent = Agent()
+                p = self.make(session=f"q-{flag}", platform="cli", status_callback=agent._emit_status)
+                setattr(agent, flag, True)
+                result = self.call(p, "memory_append", path="global/inbox.md", lines=["x"])
+                self.assertEqual(agent.printed, [])
+                self.assertIn("next", result)
+                setattr(agent, flag, False)  # read live: a muted turn ends, notices resume
+                self.assertNotIn("next", self.call(p, "memory_append", path="global/inbox.md", lines=["y"]))
+                self.assertEqual(len(agent.printed), 1)
+        # The TUI agent's flags count too.
+        p = self.make(session="q-tui", platform="tui")
+        with self.fake_tui(p, lambda kind, text=None: self.fail("a muted turn showed a notice"),
+                           _mute_notification_reply=True):
+            self.assertIn("next", self.call(p, "memory_append", path="global/inbox.md", lines=["z"]))
 
     def test_cron_is_read_only(self):
         p = self.make(agent_context="cron", platform="cron")

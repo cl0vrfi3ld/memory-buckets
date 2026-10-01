@@ -28,7 +28,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import config as config_mod
 from . import inbox, migrate, projects, scopes, snapshot, tools
-from ._compat import TUI_PLATFORMS, MemoryProvider, RecallStatus, spawn_context_thread, tui_status_callback
+from ._compat import (TUI_PLATFORMS, MemoryProvider, RecallStatus, spawn_context_thread, status_muted,
+                      tui_status_callback)
 from .embeddings import make_embedder, min_similarity
 from .index import Index
 from .store import GLOBAL, Store, StoreError
@@ -296,12 +297,19 @@ class MemoryBucketsProvider(MemoryProvider):
 
     def _notifier(self, state: SessionState) -> Optional[Callable[[str], bool]]:
         """Show the user a line on Hermes's status line, where there is one:
-        the classic CLI hands it to ``initialize``; the TUI and desktop have one
-        on the agent, found at call time (the agent registers after ``initialize``).
-        Gateways have none: None, and the tool result asks the agent instead."""
+        the classic CLI hands it to ``initialize``; the terminal TUI has one on
+        the agent, found at call time (the agent registers after ``initialize``).
+        Desktop ignores this kind of status update and gateways have no status
+        line: None, and the tool result asks the agent instead."""
         status = state.status
         if status is not None:
+            # agent._emit_status: its __self__ is the agent, whose flags say
+            # whether the line would actually print.
+            agent = getattr(status, "__self__", None)
+
             def notify(message: str) -> bool:
+                if status_muted(agent):
+                    return False
                 status(message)  # agent._emit_status(message): prints in the classic CLI
                 return True
             return notify

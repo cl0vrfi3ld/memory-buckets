@@ -63,6 +63,15 @@ except ImportError:  # not running inside Hermes
 TUI_PLATFORMS = ("tui",)
 
 
+def status_muted(agent: Any) -> bool:
+    """Whether Hermes would drop a status line from ``agent`` right now: quiet
+    and one-shot runs (``suppress_status_output``) and muted notification turns
+    (``_mute_notification_reply``). Both are read live: a muted turn sets them
+    only while it runs. Unknown agents (None) aren't muted."""
+    return bool(getattr(agent, "suppress_status_output", False)
+                or getattr(agent, "_mute_notification_reply", False))
+
+
 def tui_status_callback(provider: Any) -> Optional[Callable[[str], None]]:
     """The TUI's status line for the agent that owns ``provider``, or None.
 
@@ -72,7 +81,8 @@ def tui_status_callback(provider: Any) -> Optional[Callable[[str], None]]:
     emits ``status.update`` to the UI. The agent lives in ``tui_gateway.server._sessions``
     (``{sid: {"agent": AIAgent, ...}}``); its ``_memory_manager.providers`` holds this
     provider. Never imports the TUI: outside its process the module isn't loaded.
-    Any surprise in that private structure means None, so callers fall back.
+    Any surprise in that private structure means None, so callers fall back, and
+    so does a muted agent (the TUI drops status updates on muted turns).
     """
     server = sys.modules.get("tui_gateway.server")
     sessions = getattr(server, "_sessions", None)
@@ -85,7 +95,7 @@ def tui_status_callback(provider: Any) -> Optional[Callable[[str], None]]:
             if manager is None or not any(p is provider for p in getattr(manager, "providers", None) or []):
                 continue
             callback = getattr(agent, "status_callback", None)
-            if callable(callback):
+            if callable(callback) and not status_muted(agent):
                 def show(message: str) -> None:
                     callback("lifecycle", message)
                 return show

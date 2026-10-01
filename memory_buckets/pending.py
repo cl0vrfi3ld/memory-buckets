@@ -245,12 +245,25 @@ def apply(store: Store, pid: str) -> Dict[str, Any]:
     if not isinstance(project, str) or not is_project_id(project):
         raise StoreError("invalid_args", f"proposal {pid} names no valid project; reject it")
     files = _check_files(project, p.get("files"))
+    # A proposal into a Hermes project with no bucket yet: Hermes must still have
+    # the project, or applying creates a bucket no session is scoped to. Checked
+    # outside the lock (it reads Hermes's database). Outside Hermes there's
+    # nothing to check against, so the flag stands.
+    hermes_ok = False
+    if p.get("hermes_project") and not p.get("new_project"):
+        known = hermes_projects.list_projects()
+        hermes_ok = known is None or any(h.bucket == project for h in known)
     with store.lock():
-        exists = (store.memories / project).is_dir() or bool(p.get("hermes_project"))
+        on_disk = (store.memories / project).is_dir()
+        exists = on_disk or hermes_ok
         if p.get("new_project") and exists:
             raise StoreError("conflict", f"project {project} was created since this was proposed; reject it and ask "
                                          "the agent to propose into the existing project")
         if not p.get("new_project") and not exists:
+            if p.get("hermes_project"):
+                raise StoreError("conflict", f"Hermes has no project {project} any more, so no session would read "
+                                             "this; reject the proposal (or retry if Hermes's project list "
+                                             "couldn't be read)")
             raise StoreError("conflict", f"project {project} no longer exists; reject this proposal")
         writes: List[Tuple[str, bytes]] = []
         for f in files:

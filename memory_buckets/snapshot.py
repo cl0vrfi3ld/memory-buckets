@@ -6,7 +6,7 @@ here from the Hermes project (name, description, folders) and the bucket's own
 ``profile.md`` and ``preferences.md`` in full. No file holds it. Then a path +
 description listing of the other files the session reads by default (project
 files first). Capped at ``snapshot_max_chars``. When over the cap, drop listing
-lines first, then whole files in ``DROP_ORDER``. The global profile and the
+lines first, then whole files, in ``drop_order()``'s order. The global profile and the
 project header are never dropped. The provider freezes the result per session
 id for prefix caching.
 """
@@ -265,9 +265,9 @@ def drop_order(project: Optional[str]) -> List[str]:
     block under the cap. The global profile is never dropped."""
     if not project:
         return [PREFERENCES]
-    # TODO(ivy): decide the order. In a project session, which matters more: the
-    # global preferences or the project's own files?
-    return [f"{project}/preferences.md", PREFERENCES, f"{project}/profile.md"]
+    # The project's own files matter more here: drop the global preferences
+    # first, its profile last.
+    return [PREFERENCES, f"{project}/preferences.md", f"{project}/profile.md"]
 
 
 def build(
@@ -362,9 +362,14 @@ def build(
         return "\n\n".join(parts)
 
     def fit(shown, dropped):
-        """The most listing lines that fit under the cap (binary search: the length
-        grows with every line kept), and the text with them."""
-        lo, hi = 0, len(listing)
+        """The text with as many listing lines as fit under the cap. The whole listing
+        is tried first: keeping every line also drops the "… and N more" line, so it
+        can be shorter than keeping all but one. Below that the length grows with
+        every line kept, so binary search finds the most that fit."""
+        whole = render(shown, len(listing), dropped)
+        if len(whole) <= cap:
+            return whole
+        lo, hi = 0, len(listing) - 1
         while lo < hi:
             mid = (lo + hi + 1) // 2
             if len(render(shown, mid, dropped)) <= cap:
@@ -373,15 +378,21 @@ def build(
                 hi = mid - 1
         return render(shown, lo, dropped)
 
+    def floor(shown, dropped):
+        """The text's length with no listing lines: what dropping a file must shrink."""
+        return len(render(shown, 0, dropped))
+
     shown, dropped = dict(files), []
     text = fit(shown, dropped)
-    for path in drop_order(
-        scope.project
-    ):  # the listing alone didn't fit: drop whole files
+    for path in drop_order(scope.project):  # the listing alone didn't fit: drop whole files
         if len(text) <= cap:
             break
-        if path in shown:
-            del shown[path]
-            dropped.append(path)
+        if path not in shown:
+            continue
+        trial_shown = {k: v for k, v in shown.items() if k != path}
+        trial_dropped = [*dropped, path]
+        # A short file can cost less than the notice naming it: drop only what shrinks the text.
+        if floor(trial_shown, trial_dropped) < floor(shown, dropped):
+            shown, dropped = trial_shown, trial_dropped
             text = fit(shown, dropped)
     return Snapshot(text=text, paths=set(shown) | ({PROFILE} if profile else set()))

@@ -189,14 +189,50 @@ class SnapshotTest(StoreCase):
         self.assertLessEqual(len(snap.text), 12000)
         self.assertGreater(len(snap.text), 12000 - 200, "the listing should fill the space up to the cap")
 
-    def test_project_files_drop_before_the_header(self):
-        self.put("proj-1/preferences.md", doc("preferences", "How to work on proj-1", "- x\n" * 1500))
+    def test_a_cap_the_full_text_meets_drops_nothing(self):
+        # Regression: the search skipped "keep every line" (which also drops the
+        # "… and N more" line), then dropped files and still ended up over the cap.
+        for i in range(2):
+            self.put(f"global/topics/t-{i}.md", doc(f"t-{i}", f"topic {i}"))
+        self.index.reconcile()
+        full = self.build(snapshot_max_chars=100_000).text
+        for cap in (len(full), len(full) + 1):
+            with self.subTest(cap=cap):
+                snap = self.build(snapshot_max_chars=cap)
+                self.assertEqual(snap.text, full)
+                self.assertIn("global/preferences.md", snap.paths)
+
+    def test_a_drop_that_grows_the_text_is_skipped(self):
+        # A file shorter than the notice that would name it isn't worth dropping.
+        self.put("global/preferences.md", doc("preferences", "How to behave", "- x\n"))
+        for i in range(300):
+            self.put(f"global/topics/t-{i}.md", doc(f"t-{i}", f"what the user thinks about topic {i}"))
+        self.index.reconcile()
+        snap = self.build(snapshot_max_chars=4000)
+        self.assertIn("global/preferences.md", snap.paths)
+        self.assertNotIn("too long to show", snap.text)
+        self.assertLessEqual(len(snap.text), 4000)
+
+    def test_global_preferences_drop_before_the_projects_own(self):
+        # The settled order (drop_order): the global preferences first, the
+        # project's own preferences next, its profile last, the global profile never.
+        self.put("global/preferences.md", doc("preferences", "How to behave", "- y\n" * 1500))
+        self.put("proj-1/preferences.md", doc("preferences", "How to work on proj-1", "- run the linter first\n"))
         self.index.reconcile()
         snap = self.build(project="proj-1", snapshot_max_chars=9000)
         self.assertLessEqual(len(snap.text), 9000)
         self.assertIn("### Project: proj-1", snap.text)
-        self.assertIn("memory_read when they are relevant: proj-1/preferences.md", snap.text)
-        self.assertNotIn("proj-1/preferences.md", snap.paths)
+        self.assertIn("memory_read when they are relevant: global/preferences.md\n", snap.text)
+        self.assertNotIn("global/preferences.md", snap.paths)
+        self.assertIn("proj-1/preferences.md", snap.paths, "the project's own preferences outlast the global ones")
+        self.assertIn("### proj-1/profile.md", snap.text)
+        # Both too big: both go, the profile still stays.
+        self.put("proj-1/preferences.md", doc("preferences", "How to work on proj-1", "- x\n" * 1500))
+        self.index.reconcile()
+        snap = self.build(project="proj-1", snapshot_max_chars=9000)
+        self.assertLessEqual(len(snap.text), 9000)
+        self.assertIn("relevant: global/preferences.md, proj-1/preferences.md", snap.text)
+        self.assertIn("### proj-1/profile.md", snap.text, "the profile is kept the longest")
 
     def test_inbox_note_names_the_skill(self):
         self.assertNotIn("skill_view", self.build().text)
