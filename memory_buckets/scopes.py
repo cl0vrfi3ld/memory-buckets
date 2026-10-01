@@ -8,7 +8,8 @@ Reads: explicit paths anywhere are allowed ("project subtrees on request").
 Default reads (listing, search, snapshot) are ``global/`` plus the session's
 project. Writes: unscoped ⇒ ``global/``. Project-scoped ⇒ the project plus all
 of ``global/`` (``write_policy: shared``; the prompt keeps project-specific facts
-in the project), or only the project (``confined``). cron/subagent/flush contexts, or ``readonly``, write nothing.
+in the project), or only the project plus appends to ``global/inbox.md``
+(``confined``). cron/subagent/flush contexts, or ``readonly``, write nothing.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from .config import Config
 from .store import GLOBAL, StoreError, is_project_id
 
 READ_ONLY_CONTEXTS = {"cron", "subagent", "flush"}
+INBOX = f"{GLOBAL}/inbox.md"
 
 
 @dataclass
@@ -29,6 +31,7 @@ class Scope:
     read_only: bool = False
     read_only_reason: str = ""
     write_prefixes: List[str] = field(default_factory=list)
+    append_paths: List[str] = field(default_factory=list)  # files this session may only append to
 
     @property
     def read_prefixes(self) -> List[str]:
@@ -40,16 +43,20 @@ class Scope:
     def can_write(self, path: str) -> bool:
         return any(path == p or (p.endswith("/") and path.startswith(p)) for p in self.write_prefixes)
 
-    def check_write(self, path: str) -> None:
+    def check_write(self, path: str, *, append: bool = False) -> None:
         if self.read_only:
             raise StoreError("read_only", f"memory is read-only in this session ({self.read_only_reason})")
-        if not self.can_write(path):
-            where = f"project '{self.project}'" if self.project else "an unscoped session"
-            raise StoreError(
-                "out_of_scope",
-                f"{path} is outside what {where} may write",
-                allowed_prefixes=list(self.write_prefixes),
-            )
+        if self.can_write(path) or (append and path in self.append_paths):
+            return
+        where = f"project '{self.project}'" if self.project else "an unscoped session"
+        if path in self.append_paths:
+            raise StoreError("out_of_scope", f"{where} may only append to {path}, with memory_append",
+                             allowed_prefixes=list(self.write_prefixes))
+        raise StoreError(
+            "out_of_scope",
+            f"{path} is outside what {where} may write",
+            allowed_prefixes=list(self.write_prefixes),
+        )
 
     def describe(self) -> dict:
         return {
@@ -69,7 +76,9 @@ def resolve(config: Config, project: Optional[str] = None, agent_context: str = 
     if project is None:
         scope.write_prefixes = [f"{GLOBAL}/"]
     elif config.write_policy == "confined":
+        # The inbox is append-only here: unsure facts and facts for other projects go there.
         scope.write_prefixes = [f"{project}/"]
+        scope.append_paths = [INBOX]
     else:
         scope.write_prefixes = [f"{project}/", f"{GLOBAL}/"]
 

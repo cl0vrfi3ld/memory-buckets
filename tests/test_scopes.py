@@ -14,7 +14,7 @@ class ScopeTest(StoreCase):
         self.assertIsNone(scope.project)
         self.assertEqual(scope.write_prefixes, ["global/"])
         self.assertTrue(scope.reads_by_default("global/topics/nix.md"))
-        self.assertFalse(scope.reads_by_default("proj-1/index.md"))
+        self.assertFalse(scope.reads_by_default("proj-1/profile.md"))
         with self.assertRaises(StoreError) as caught:
             scope.check_write("proj-1/topics/x.md")
         self.assertEqual(caught.exception.code, "out_of_scope")
@@ -32,11 +32,11 @@ class ScopeTest(StoreCase):
         for ok in ("proj-1/topics/a.md", "global/profile.md", "global/people/sam.md", "global/topics/nix.md",
                    "global/areas/work.md", "global/inbox.md"):
             shared.check_write(ok)
-        for bad in ("clogpt/index.md", "clogpt/topics/x.md"):
+        for bad in ("clogpt/profile.md", "clogpt/topics/x.md"):
             self.assertFalse(shared.can_write(bad), bad)
         confined = self.resolve("proj-1", write_policy="confined")
         self.assertFalse(confined.can_write("global/profile.md"))
-        self.assertTrue(confined.can_write("proj-1/index.md"))
+        self.assertTrue(confined.can_write("proj-1/profile.md"))
 
     def test_read_only_contexts(self):
         for context in ("cron", "subagent", "flush"):

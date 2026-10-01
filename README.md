@@ -115,8 +115,9 @@ real-model tests.
 $HERMES_HOME/memory-buckets/
   memories/                        every memory file
     global/     profile.md preferences.md inbox.md  topics/ areas/ people/
-    <project>/  index.md profile.md preferences.md   topics/ areas/ people/
+    <project>/  profile.md preferences.md            topics/ areas/ people/
   _pending/<id>.json               staged project facts, waiting for you to apply
+  _backup/<version>/               originals a migration changed or removed
   .index/memory.sqlite             search cache; safe to delete
   .models/                         the embedding model, if it was downloaded rather than bundled
 ```
@@ -154,24 +155,34 @@ hermes project create "Home server" ~/src/home-server --slug home-server
 ```
 
 A project session reads `global/` and its own bucket by default. It writes to
-both of them (`write_policy: shared`), or only to its own bucket (`confined`).
+both of them (`write_policy: shared`), or only to its own bucket plus appends
+to `global/inbox.md` (`confined`).
 It reads other buckets only when asked. `hermes memory-buckets status` lists
 buckets that no Hermes project uses yet; no session is scoped to those.
 
 ### What the agent gets
 
 - **A prompt block, frozen per session.** It holds the usage rules,
-  `global/profile.md` and `global/preferences.md` in full, the project's
-  `index.md`, and a listing of every other file. It's capped at 12,000
-  characters.
+  `global/profile.md` and `global/preferences.md` in full, and, in a project
+  session, the project index, then a listing of every other file. It's capped
+  at 12,000 characters.
+- **The project index** is built when the session starts, never stored. It
+  shows the Hermes project's folders, plus its name and description when
+  they add something. Then come the bucket's `profile.md` and
+  `preferences.md` in full. A bucket with no profile yet gets a line telling
+  the agent to create one.
 - **Eight tools:**
   - `memory_list`, `memory_read` and `memory_search`
   - `memory_write`, `memory_str_replace`, `memory_append` and `memory_delete`
-  - `memory_propose`, which stages project facts during
-    [inbox sorting](#sorting-the-inbox)
+  - `memory_propose`, which stages facts for a project the session can't
+    write, for you to apply (see [The inbox and proposals](#the-inbox-and-proposals))
 
   Every write is a compare-and-swap. On a conflict the tool returns the
   file's current content, so the agent can merge and retry.
+- **Notices** when the agent adds to the inbox or makes a proposal. The CLI,
+  TUI and desktop show them as status lines. Gateways (Telegram, Discord and
+  so on) have no status line, so there the tool result asks the agent to tell
+  you.
 - **Prefetch hints** each turn. These are the paths of relevant files, never
   their content.
 - **A periodic reminder** to file durable facts.
@@ -206,20 +217,32 @@ scored a median of 0.37, and unrelated ones stayed under 0.15 for 95% of
 cases. `hermes memory-buckets hints "<query>"` shows the real scores for your
 store.
 
-## Sorting the inbox
+## The inbox and proposals
 
-`global/inbox.md` collects memory that's waiting to be sorted:
+`global/inbox.md` holds memory that's waiting to be sorted. It stays when it's
+empty, and you can edit it by hand: an append fills in missing frontmatter. It
+collects:
 
 - entries from `hermes memory-buckets import`;
 - built-in memory writes, mirrored there while built-in memory is still on;
-- project facts parked by chats outside a project.
+- facts the agent couldn't place;
+- facts for a project the session can't write.
 
-**To start**, run `/sort-inbox` or ask the agent to sort your memory inbox.
+For that last kind the agent also **proposes** the fact with `memory_propose`,
+straight away. You see the proposal's one-line summary and its id. Nothing
+under `memories/` changes until you apply it. If you reject it, the line stays
+in the inbox for a later sort. The agent can propose into any project with a
+bucket, and into any Hermes project, including ones with no memory yet. Under
+`write_policy: confined`, a project session can still append to the inbox, and
+it can't write anything else in `global/`.
+
+**To sort the rest**, run `/sort-inbox` or ask the agent to sort your memory
+inbox.
 
 - The agent files **general** facts into `global/` itself.
 - It **proposes** project facts with `memory_propose`, one proposal per
   project. When no existing project fits, it proposes a new one: a
-  `<id>/profile.md` plus the facts. Nothing under `memories/` changes yet.
+  `<id>/profile.md` plus the facts.
 
 **You apply each proposal yourself:**
 
@@ -265,6 +288,7 @@ the plugin's instructions change.
 status                       store, index, embeddings, Hermes config, buckets without a project
 diagnose [--platform P]      why an agent would or wouldn't see the memory tools
 lint                         bad paths, frontmatter, duplicate names, broken [[links]]
+migrate [--dry-run]          update a store written by an older version (also runs on startup)
 reindex [--embed]            rebuild the search cache
 search QUERY [--prefix P]    search the whole store (--limit N, --json)
 hints QUERY [--threshold T]  raw similarities, to tune prefetch_min_similarity
@@ -283,7 +307,7 @@ Every key is optional, and all of them go under `plugins.memory-buckets` in
 
 | Key | Default | Effect |
 |---|---|---|
-| `write_policy` | `shared` | `confined`: project sessions write only their own bucket |
+| `write_policy` | `shared` | `confined`: project sessions write only their own bucket, plus appends to `global/inbox.md` |
 | `readonly` | `false` | no session writes memory |
 | `cron_writes` | `false` | let cron jobs write (cron, subagent and flush contexts are otherwise read-only) |
 | `nudge_interval` | `10` | user turns between reminders to file durable facts; `0` turns them off |
@@ -322,6 +346,25 @@ status` should report 8 memory tools.
 
 ## Migrating
 
+### From an older version
+
+The plugin updates the store itself when a session starts. Read-only
+sessions (cron, subagents, flushes, and every session under `readonly: true`)
+leave it for the next writable one; with `readonly: true`, run `migrate`
+yourself. Before it changes or removes a file, it keeps the original under
+`_backup/<version>/`. `hermes memory-buckets migrate --dry-run` shows what it
+would do, `migrate` runs it, and `status` reports anything still waiting. A
+file it can't read or parse is left alone and reported; the rest still migrate.
+
+- **0.1.0:** `<project>/index.md` is gone, because the project index is now
+  generated. A leftover `index.md` becomes the project's `profile.md`. If the
+  project already has one, the body of `index.md` is appended to it as it is,
+  under `## Moved from index.md`, so check for repeated lines afterwards. If
+  either file can't be parsed, or the profile would go over the size cap, the
+  migration leaves both files alone and says so. The plugin owns the inbox's
+  description, so any other description becomes the current one (the original
+  is kept in the backup).
+
 ### From built-in memory
 
 1. Install the plugin and set `memory.provider: memory-buckets`, but leave
@@ -330,8 +373,8 @@ status` should report 8 memory tools.
    another instance's memory. It prints a backup command and the sorting
    prompt; `sort-prompt` prints them again.
 3. Back up the store. Then, in a new chat outside any project,
-   [sort the inbox](#sorting-the-inbox) and apply or reject each proposal.
-4. Review with `diff -ru <backup> <store>`, then delete `global/inbox.md`.
+   [sort the inbox](#the-inbox-and-proposals) and apply or reject each proposal.
+4. Review with `diff -ru <backup> <store>`.
 5. Turn built-in memory off (`memory.memory_enabled: false`,
    `memory.user_profile_enabled: false`).
 

@@ -26,7 +26,7 @@ IGNORE = shutil.ignore_patterns("tests", "__pycache__", "build", "dist", "*.egg-
 @unittest.skipUnless(HERMES_PYTHON, "set HERMES_PYTHON to Hermes's interpreter to run")
 class HermesIntegrationTest(unittest.TestCase):
     def probe(self, tmp, home, pythonpath=None, skills_dir="plugins/memory-buckets/skills"):
-        # skills.external_dirs is how /sort-inbox becomes a slash command (README: Sorting the inbox).
+        # skills.external_dirs is how /sort-inbox becomes a slash command (README: The inbox and proposals).
         (home / "config.yaml").write_text(
             "memory:\n  provider: memory-buckets\n  memory_enabled: false\n  user_profile_enabled: false\n"
             f"skills:\n  external_dirs:\n    - {skills_dir}\n")

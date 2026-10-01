@@ -71,6 +71,64 @@ class ProviderTest(StoreCase):
     def test_without_hermes_nothing_is_scoped(self):
         self.assertIsNone(self.make(cwd="/src/proj-1")._scope().project)
 
+    def test_project_index_header_comes_from_hermes(self):
+        with fake_hermes({"proj-1": "/src/proj-1"}):
+            block = self.make(cwd="/src/proj-1/app").system_prompt_block()
+        self.assertIn("### Project: proj-1\nHermes project name: Proj-1\nFolders: /src/proj-1\n"
+                      "This project has no memory yet.", block)
+
+    def test_hermes_projects_are_proposable(self):
+        with fake_hermes({"proj-1": "/src/proj-1", "nixos-config": "/etc/nixos"}):
+            block = self.make(cwd="/src/proj-1").system_prompt_block()
+        self.assertIn("Projects: nixos-config.", block)
+
+    def test_status_callback_shows_inbox_alerts(self):
+        shown = []
+        p = self.make(platform="cli", status_callback=shown.append)
+        result = self.call(p, "memory_append", path="global/inbox.md", lines=["unsure where this goes"])
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(shown, ["📥 Memory inbox: 1 new entry (global/inbox.md)"])
+        self.assertNotIn("next", result)
+        p.on_session_switch("s2", reset=True)  # /new keeps the channel
+        self.call(p, "memory_append", path="global/inbox.md", lines=["another"])
+        self.assertEqual(len(shown), 2)
+        # A gateway session has no status channel: the agent is asked to say it.
+        gateway = self.make(session="g1", platform="telegram")
+        self.assertIn("Tell the user", self.call(gateway, "memory_append", path="global/inbox.md", lines=["x"])["next"])
+
+    def fake_tui(self, provider, status_callback):
+        """``tui_gateway.server._sessions`` as the TUI keeps it: an agent whose memory manager holds ``provider``."""
+        import sys
+        import types
+        agent = types.SimpleNamespace(status_callback=status_callback,
+                                      _memory_manager=types.SimpleNamespace(providers=[provider]))
+        server = types.ModuleType("tui_gateway.server")
+        setattr(server, "_sessions", {"sid-1": {"agent": agent}, "other": {"agent": None}})
+        return mock.patch.dict(sys.modules, {"tui_gateway.server": server})
+
+    def test_tui_status_line(self):
+        shown = []
+        p = self.make(platform="tui")
+        with self.fake_tui(p, lambda kind, text=None: shown.append((kind, text))):
+            result = self.call(p, "memory_append", path="global/inbox.md", lines=["unsure where this goes"])
+        self.assertEqual(shown, [("lifecycle", "📥 Memory inbox: 1 new entry (global/inbox.md)")])
+        self.assertNotIn("next", result)
+
+    def test_tui_falls_back_to_the_agent(self):
+        p = self.make(session="t1", platform="desktop")
+        # Outside the TUI process, or another provider's agent: nothing to show it on.
+        self.assertIn("next", self.call(p, "memory_append", path="global/inbox.md", lines=["a"]))
+        with self.fake_tui(object(), lambda kind, text=None: None):
+            self.assertIn("next", self.call(p, "memory_append", path="global/inbox.md", lines=["b"]))
+        # A callback that raises never fails the write.
+        with self.fake_tui(p, lambda kind, text=None: 1 / 0):
+            result = self.call(p, "memory_append", path="global/inbox.md", lines=["c"])
+        self.assertTrue(result["ok"], result)
+        self.assertIn("next", result)
+        # The telegram session never looks for the TUI.
+        with self.fake_tui(p, lambda kind, text=None: self.fail("not a TUI session")):
+            self.call(self.make(session="g2", platform="telegram"), "memory_append", path="global/inbox.md", lines=["d"])
+
     def test_cron_is_read_only(self):
         p = self.make(agent_context="cron", platform="cron")
         result = self.call(p, "memory_append", path="global/people/sam.md", lines=["x"])

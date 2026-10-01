@@ -46,7 +46,7 @@ _PATH_RES = tuple(
     for p in (
         rf"^{GLOBAL}/(?:profile|preferences|inbox)\.md$",
         rf"^{GLOBAL}/(?:topics|areas|people)/{_SEG}\.md$",
-        rf"^{_PROJECT}/(?:index|profile|preferences)\.md$",
+        rf"^{_PROJECT}/(?:profile|preferences)\.md$",
         rf"^{_PROJECT}/(?:topics|areas|people)/{_SEG}\.md$",
     )
 )
@@ -84,7 +84,7 @@ def validate_path(path: str) -> str:
         raise StoreError(
             "invalid_path",
             f"{path!r}: not an allowed memory path (global/{{profile,preferences,inbox}}.md, "
-            "global/{topics,areas,people}/<name>.md, <project>/{index,profile,preferences}.md, "
+            "global/{topics,areas,people}/<name>.md, <project>/{profile,preferences}.md, "
             "<project>/{topics,areas,people}/<name>.md; kebab-case .md)",
         )
     return path

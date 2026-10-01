@@ -1,3 +1,4 @@
+import types
 import unittest
 
 from .helpers import fake_hermes
@@ -27,6 +28,16 @@ class ProjectsTest(unittest.TestCase):
         with fake_hermes({"global": "/g", "ok": "/ok"}):
             self.assertIsNone(projects.project_for_path("/g/x"))
             self.assertEqual([p.bucket for p in projects.list_projects()], ["ok"])
+
+    def test_carries_folders_and_description(self):
+        row = types.SimpleNamespace(slug="proj_1", name="Proj", primary_path="/a", description="  A web app  ",
+                                    folders=[types.SimpleNamespace(path="/a"), types.SimpleNamespace(path="/b")])
+        p = projects._to_project(row)
+        assert p is not None
+        self.assertEqual((p.bucket, p.folders, p.description), ("proj-1", ("/a", "/b"), "A web app"))
+        bare = projects._to_project(types.SimpleNamespace(slug="x", name="x", primary_path="/x"))
+        assert bare is not None
+        self.assertEqual((bare.folders, bare.description), (("/x",), None))
 
     def test_outside_hermes(self):
         self.assertIsNone(projects.list_projects())

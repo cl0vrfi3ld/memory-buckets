@@ -1,4 +1,4 @@
-"""``hermes memory-buckets``: status, lint, reindex, search, import, proposals.
+"""``hermes memory-buckets``: status, lint, migrate, reindex, search, import, proposals.
 
 Hermes imports the plugin directory's ``cli.py`` (which re-exports ``register_cli``
 from here) only while memory-buckets is the active provider. It looks for
@@ -19,7 +19,7 @@ from datetime import date
 from pathlib import Path
 from typing import List
 
-from . import frontmatter, inbox, pending, projects
+from . import frontmatter, inbox, migrate, pending, projects
 from . import config as config_mod
 from . import static_model
 from ._paths import SKILLS_DIR
@@ -97,8 +97,14 @@ def cmd_status(args) -> int:
             _out(f"embeddings  built-in {static_model.MODEL_NAME}: not ready ({err})")
     problems += _status_hermes(home)
     _status_projects(store)
-    if (store.memories / inbox.PATH).exists():
-        _out(f"inbox       {inbox.PATH} is waiting to be sorted")
+    leftovers = migrate.leftover_indexes(store)
+    if leftovers:
+        _out(f"migration   index.md left over in: {', '.join(leftovers)}; run `hermes memory-buckets migrate`")
+    if migrate.inbox_needs_migrating(store):
+        _out(f"migration   {inbox.PATH} has an outdated description; run `hermes memory-buckets migrate`")
+    waiting = _inbox_entries(store)
+    if waiting:
+        _out(f"inbox       {inbox.PATH}: {_entries(waiting)} waiting to be sorted")
     index.close()
     return 1 if problems else 0
 
@@ -222,7 +228,7 @@ def cmd_diagnose(args) -> int:
 
 
 def _diagnose_skill(skills_dir: Path, say) -> None:
-    """The sort-inbox skill and its /sort-inbox command (README: Sorting the inbox)."""
+    """The sort-inbox skill and its /sort-inbox command (README: The inbox and proposals)."""
     skill_md = skills_dir / "sort-inbox" / "SKILL.md"
     say(skill_md.is_file(), f"skill file {skill_md}" if skill_md.is_file()
         else f"no sort-inbox/SKILL.md in {skills_dir}: this copy of the plugin is out of date")
@@ -269,6 +275,7 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
 def lint(store: Store) -> List[str]:
     """Problems in the store, as human-readable lines."""
     problems: List[str] = []
+    leftovers = set(migrate.leftover_indexes(store))
     names = defaultdict(list)  # (scope, name) -> paths
     stems = defaultdict(set)   # scope -> stems, for links
     texts = {}
@@ -291,7 +298,10 @@ def lint(store: Store) -> List[str]:
             try:
                 validate_path(rel)
             except StoreError as err:
-                problems.append(f"{rel}: not a memory path, ignored ({err.message.split(': ', 1)[-1]})")
+                if name == "index.md" and rel_dir in leftovers:
+                    problems.append(f"{rel}: left over from an older version; run `hermes memory-buckets migrate`")
+                else:
+                    problems.append(f"{rel}: not a memory path, ignored ({err.message.split(': ', 1)[-1]})")
                 continue
             data = Path(full).read_bytes()
             if len(data) > MAX_FILE_BYTES:
@@ -328,12 +338,45 @@ def lint(store: Store) -> List[str]:
 def cmd_lint(args) -> int:
     _, _, store, _ = _open(args)
     problems = lint(store)
+    if migrate.inbox_needs_migrating(store):
+        problems.append(f"{inbox.PATH}: outdated description; run `hermes memory-buckets migrate`")
     for line in problems:
         _out(line)
-    if (store.memories / inbox.PATH).exists():
-        _out(f"note: {inbox.PATH} still exists; sort it into files, then delete it")
+    waiting = _inbox_entries(store)
+    if waiting:
+        _out(f"note: {inbox.PATH} has {_entries(waiting)} waiting to be sorted")
     _out(f"{len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+def _entries(n: int) -> str:
+    return f"{n} entr{'y' if n == 1 else 'ies'}"
+
+
+def _inbox_entries(store: Store) -> int:
+    """Entries in the inbox; 0 when it's missing or unreadable (lint reports that)."""
+    try:
+        data = store.read_bytes(inbox.PATH)
+        return inbox.count_entries(frontmatter.parse(data.decode("utf-8", errors="replace"))[1]) if data else 0
+    except (OSError, StoreError, frontmatter.FrontmatterError):
+        return 0
+
+
+def cmd_migrate(args) -> int:
+    _, _, store, _ = _open(args)
+    try:
+        steps = migrate.run(store, dry_run=args.dry_run)
+    except StoreError as err:
+        _out(f"error: {err.message}")
+        return 1
+    if not steps:
+        _out("nothing to migrate")
+        return 0
+    for step in steps:
+        _out(("would: " if args.dry_run else "") + step.describe())
+    if not args.dry_run and any(s.action != "skip" for s in steps):
+        _out(f"originals kept in {migrate.backup_dir(store)}")
+    return 1 if any(s.action == "skip" for s in steps) else 0
 
 
 def cmd_reindex(args) -> int:
@@ -451,7 +494,7 @@ def _print_sort_prompt(store: Store) -> None:
     _out("     Apply each proposal yourself: /memory-pending, /memory-apply <id>, /memory-reject <id>")
     _out("     in chat, or hermes memory-buckets pending / apply / reject here.")
     _out(f"  4. Review with: diff -ru {store.root}.before-sort/memories {store.memories}")
-    _out(f"     then delete {inbox.PATH}. (Print this again with: hermes memory-buckets sort-prompt)")
+    _out("     (Print this again with: hermes memory-buckets sort-prompt)")
     _out()
     _out("----- prompt -----")
     _out(sort_prompt())
@@ -460,8 +503,8 @@ def _print_sort_prompt(store: Store) -> None:
 
 def cmd_sort_prompt(args) -> int:
     _, _, store, _ = _open(args)
-    if not (store.memories / inbox.PATH).exists():
-        _out(f"(no {inbox.PATH} in {store.root}: run import first)")
+    if not _inbox_entries(store):
+        _out(f"({inbox.PATH} in {store.root} has nothing to sort)")
         return 1
     _print_sort_prompt(store)
     return 0
@@ -535,6 +578,9 @@ def _add_commands(parser: argparse.ArgumentParser) -> None:
     p.set_defaults(bm_func=cmd_diagnose)
     p = sub.add_parser("lint", help="Check paths, frontmatter, duplicate names and [[links]]")
     p.set_defaults(bm_func=cmd_lint)
+    p = sub.add_parser("migrate", help="Update a store written by an older version (also runs on startup)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(bm_func=cmd_migrate)
     p = sub.add_parser("reindex", help="Delete and rebuild the search index")
     p.add_argument("--embed", action="store_true", help="Also embed everything now")
     p.set_defaults(bm_func=cmd_reindex)
@@ -559,7 +605,7 @@ def _add_commands(parser: argparse.ArgumentParser) -> None:
     p.set_defaults(bm_func=cmd_import)
     p = sub.add_parser("sort-prompt", help="Print the prompt that asks the agent to sort global/inbox.md")
     p.set_defaults(bm_func=cmd_sort_prompt)
-    p = sub.add_parser("pending", help="List proposals from inbox sorting, or show one")
+    p = sub.add_parser("pending", help="List pending proposals, or show one")
     p.add_argument("id", nargs="?")
     p.set_defaults(bm_func=cmd_pending)
     p = sub.add_parser("apply", help="Commit one proposal (asks for confirmation)")
@@ -573,7 +619,7 @@ def _add_commands(parser: argparse.ArgumentParser) -> None:
 def _dispatch(args) -> int:
     func = getattr(args, "bm_func", None)
     if func is None:
-        print("usage: pick a command: status, diagnose, lint, reindex, search, hints, fetch-model, import, sort-prompt, pending, apply, reject (--help for more)", file=sys.stderr)
+        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, sort-prompt, pending, apply, reject (--help for more)", file=sys.stderr)
         return 2
     return func(args)
 

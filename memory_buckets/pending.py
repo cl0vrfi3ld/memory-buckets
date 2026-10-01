@@ -1,11 +1,13 @@
-"""Staged project sorts from ``global/inbox.md``.
+"""Staged project facts, every one of which comes from a line in ``global/inbox.md``.
 
-The agent sorts general inbox entries straight into ``global/``, but anything
-bound for a project (including a new project) is only *proposed*: the
-``memory_propose`` tool writes ``<store>/_pending/<id>.json``, and nothing
+An agent proposes facts for a project it can't write in this session, and while
+sorting the inbox it proposes every project fact (including ones for a new project).
+General inbox entries go straight into ``global/``. The ``memory_propose`` tool
+writes ``<store>/_pending/<id>.json``, and nothing
 under ``memories/`` changes until the user runs ``/memory-apply <id>`` (or
 ``hermes memory-buckets apply <id>``) for that one proposal. ``_pending/`` sits outside
-``memories/``, so the other tools can't reach it.
+``memories/``, so the other tools can't reach it. A Hermes project with no bucket
+yet counts as existing (``hermes_project`` on the proposal): applying creates its bucket.
 
 A proposal is one project: files to create or append to under ``<project>/``,
 and the exact inbox lines it files, which are removed from the inbox when it's
@@ -105,8 +107,6 @@ def _check_files(project: str, files: Any) -> List[Dict[str, Any]]:
         if scope_of(path) != project:
             raise StoreError("invalid_args", f"{path} isn't under {project}/; general facts go straight to global/ "
                                              "with the normal tools")
-        if stem(path) == "index" and path.count("/") == 1:
-            raise StoreError("invalid_args", f"{path} is maintained for you; use {project}/profile.md")
         if path in seen:
             raise StoreError("invalid_args", f"{path} appears twice; merge its lines")
         seen.add(path)
@@ -124,16 +124,18 @@ def _check_files(project: str, files: Any) -> List[Dict[str, Any]]:
 
 
 def propose(store: Store, *, project: Any, new_project: Any, files: Any, inbox_lines: Any, summary: Any,
-            session: str = "") -> Dict[str, Any]:
-    """Validate and stage a proposal. Raises ``StoreError`` with an actionable message."""
+            session: str = "", known_projects: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Validate and stage a proposal. Raises ``StoreError`` with an actionable message.
+    ``known_projects`` are Hermes projects' buckets: they count as existing even before
+    they have a directory in the store, so proposing into them needs no new profile."""
     if not isinstance(project, str) or not is_project_id(project):
         raise StoreError("invalid_args", f"{project!r} isn't a valid project id (lower-case kebab-case, not 'global')")
     new_project = new_project is True
-    existing = projects(store)
+    existing = sorted(set(projects(store)) | set(known_projects or []))
     if new_project and project in existing:
         raise StoreError("invalid_args", f"project {project} already exists; propose into it with new_project false")
     if not new_project and project not in existing:
-        raise StoreError("invalid_args", f"there's no project {project}. Existing: {', '.join(existing) or 'none'}. "
+        raise StoreError("invalid_args", f"there's no project {project}. Projects: {', '.join(existing) or 'none'}. "
                                          "Pick one, or set new_project true to create it")
     clean = _check_files(project, files)
     if new_project and not any(f["path"] == f"{project}/profile.md" and f.get("description") for f in clean):
@@ -170,6 +172,8 @@ def propose(store: Store, *, project: Any, new_project: Any, files: Any, inbox_l
         "files": clean, "inbox_lines": wanted, "session": session,
         "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
+    if not new_project and project not in projects(store):  # a Hermes project with no memory yet
+        proposal["hermes_project"] = True
     with store.lock():
         store._atomic_write(folder / f"{pid}.json", json.dumps(proposal, indent=2, ensure_ascii=False).encode() + b"\n")
     return proposal
@@ -242,7 +246,7 @@ def apply(store: Store, pid: str) -> Dict[str, Any]:
         raise StoreError("invalid_args", f"proposal {pid} names no valid project; reject it")
     files = _check_files(project, p.get("files"))
     with store.lock():
-        exists = (store.memories / project).is_dir()
+        exists = (store.memories / project).is_dir() or bool(p.get("hermes_project"))
         if p.get("new_project") and exists:
             raise StoreError("conflict", f"project {project} was created since this was proposed; reject it and ask "
                                          "the agent to propose into the existing project")

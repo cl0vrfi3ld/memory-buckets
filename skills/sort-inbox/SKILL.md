@@ -8,10 +8,12 @@ description: Sort global/inbox.md into memory files. General facts are saved dir
 
 global/inbox.md holds memory that has not been sorted yet. It can contain:
 - entries imported from the old built-in memory. Entries under a USER.md heading are about the user. Entries under a MEMORY.md heading are notes you wrote earlier.
-- entries saved there later, often written as "<project>: <fact>".
+- entries added in conversation, under an "added in conversation" heading. These are facts an agent could not place, or facts for a project it could not write, written as "<project>: <fact>".
 - entries parked by an earlier sort, under a heading such as "## project facts (to sort later)", grouped under a sub-heading that names the project. For these, the heading tells you the project. They are project facts that still need sorting: stage them with memory_propose like any other project fact.
 
 Each bullet point is one entry. Your job is to move every entry into the right memory file, or to drop it if it is not worth keeping.
+
+Some entries may already be in a pending proposal from an earlier conversation. memory_propose tells you when that happens (step 4). Leave those entries alone: the user applies or rejects that proposal.
 
 ## The two kinds of entry
 
@@ -35,7 +37,7 @@ If an entry has a general part and a project part, split it. Save the general pa
 
 Follow these steps in order.
 
-1. **Read.** Call memory_read with ["global/inbox.md"]. Then call memory_list with include_projects set to true. Note which files exist and which project ids exist. A project id is the first part of a path, for example home-server in home-server/profile.md.
+1. **Read.** Call memory_read with ["global/inbox.md"]. Then call memory_list with include_projects set to true. Note which files exist and which project ids exist. A project id is the first part of a path, for example home-server in home-server/profile.md. Your memory instructions also list projects, under "Facts for another project": those exist too, even the ones with no files yet.
 
 2. **Label each entry.** For every entry, decide one of:
    - general fact
@@ -68,18 +70,18 @@ Follow these steps in order.
      - a person's role in the project: <project>/people/<name>.md
      - an ongoing part of the work: <project>/areas/<name>.md
      - anything else durable (a decision, a component, a procedure): <project>/topics/<subject>.md
-     - never <project>/index.md
    - A file that does not exist yet needs a description.
    - inbox_lines: copy the entries this proposal covers exactly as they appear in global/inbox.md. Copy only the bullet lines, not the headings above them.
    - Do not remove those lines from the inbox yourself. They are removed when the user applies the proposal.
    - summary: one sentence saying what the proposal saves and why it belongs to this project.
-   - If memory_propose returns an error, read the message, fix the call, and try again.
+   - If memory_propose says some lines are already in a pending proposal, drop those lines from your call and call it again. Do not label them "unsure"; list them under Proposals with the id it named.
+   - If memory_propose returns any other error, read the message, fix the call, and try again.
 
 5. **Drop entries.** Remove entries labelled "drop" from global/inbox.md with memory_str_replace. Drop an entry only if it is stale, already saved, or clearly not useful.
 
 6. **Leave the uncertain entries.** Do not change entries labelled "unsure". Leave them in global/inbox.md, and list them in your final reply with a one-line reason each. If two entries contradict each other, treat both as unsure and say what conflicts. Entries have no dates, so do not guess which one is newer.
 
-7. **Do not rewrite or delete global/inbox.md.** Only remove single lines with memory_str_replace, as described above. Never use memory_write or memory_delete on it: that could break the pending proposals. The user reviews the inbox and deletes it.
+7. **Do not rewrite or delete global/inbox.md.** Only remove single lines with memory_str_replace, as described above. Never use memory_write or memory_delete on it: that could break the pending proposals. The inbox stays when it is empty: it also collects facts from later conversations.
 
 ## Final reply
 

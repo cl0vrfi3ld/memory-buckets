@@ -1,124 +1,152 @@
 """The ``system_prompt_block`` snapshot.
 
 Contents, in order: usage rules, ``global/profile.md`` and ``global/preferences.md``
-in full, the project's ``index.md`` when the session has a project, then a path
-+ description listing of the other files the session reads by default (project
+in full, then, when the session has a project, the project index: generated
+here from the Hermes project (name, description, folders) and the bucket's own
+``profile.md`` and ``preferences.md`` in full. No file holds it. Then a path +
+description listing of the other files the session reads by default (project
 files first). Capped at ``snapshot_max_chars``. When over the cap, drop listing
-lines first, then the project index, then preferences. The profile is never
-dropped. The provider freezes the result per session id for prefix caching.
+lines first, then whole files in ``DROP_ORDER``. The global profile and the
+project header are never dropped. The provider freezes the result per session
+id for prefix caching.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import List, Optional, Set
 
 from . import frontmatter
 from .config import Config
 from .index import Index
+from .projects import Project
 from .scopes import Scope
-from .store import GLOBAL, Store, StoreError
+from .store import GLOBAL, Store, StoreError, stem
 
 PROFILE = f"{GLOBAL}/profile.md"
 PREFERENCES = f"{GLOBAL}/preferences.md"
 INBOX = f"{GLOBAL}/inbox.md"
-SORT_SKILL: Optional[str] = "memory-buckets:sort-inbox"  # None when Hermes can't serve it (pip installs)
+SORT_SKILL: Optional[str] = (
+    "memory-buckets:sort-inbox"  # None when Hermes can't serve it (pip installs)
+)
 INBOX_NOTE = (
     "### Inbox\n"
-    f"{INBOX} contains memory that has not been sorted yet. Sort it only when the user asks you to. "
-    "To sort it, first load the instructions with skill_view(\"{skill}\"), then follow them step by step.")
+    f"{INBOX} holds memory waiting to be sorted. Sort it only when the user asks. "
+    'To sort it, load skill_view("{skill}") and follow it step by step.'
+)
 INBOX_NOTE_NO_SKILL = (
     "### Inbox\n"
-    f"{INBOX} contains memory that has not been sorted yet. Sort it only when the user asks you to. "
-    "To sort it, you need the sorting instructions: ask the user to paste the output of "
-    "`hermes memory-buckets sort-prompt`, then follow those instructions step by step.")
+    f"{INBOX} holds memory waiting to be sorted. Sort it only when the user asks. "
+    "To sort it, ask the user to paste the output of `hermes memory-buckets sort-prompt`, "
+    "then follow it step by step."
+)
 
-RULES = """\
+# Prompt style: second person, one instruction per line, short sentences, no nested
+# colons. It has to survive small models.
+READING = """\
 ## Memory
-You have a persistent memory: a set of Markdown files that you read and write with the memory_* tools. Use it to remember facts about the user and their work from one conversation to the next.
+Your memory is a set of Markdown files that lasts between conversations. Use the memory_* tools to read and write it.
 
-### How memory is organised
-- Each file covers one subject. Each file has a one-line description that says when to read it.
-- Files are grouped into scopes. The first part of a path is its scope:
-  - global/ holds general facts: who the user is, how they want you to work, the people in their life, and anything else that is true outside a single project.
-  - <project>/ (for example home-server/) holds facts that only matter for that one project.
-- Paths are lower-case, use hyphens between words, and end in .md. Example: global/topics/coffee.md.
+### Reading
+- Check memory before answering anything that may depend on an earlier conversation.
+- Check memory before saying you don't know something about the user or their work.
+- Pick files from the lists below by their description and read them with memory_read. If none fits, use memory_search."""
 
-### When to read memory
-- Before you answer a question that could depend on an earlier conversation, check memory.
-- Before you tell the user you don't know something about them or their work, check memory.
-- How to check: find files in the list below whose descriptions match, and read them with memory_read. If no description matches, use memory_search.
+SAVING = """\
+### Saving
+Save a fact as soon as you learn it, without being asked, when it is:
+- durable: still true and useful in later conversations;
+- new: not saved yet;
+- about the user, their preferences, people in their life, their activities, or their projects.
+Do not save temporary plans or details of a one-off task.
 
-### When to save a fact
-Save a fact when all three are true:
-1. It is durable: it will still be true and useful in future conversations.
-2. It is not already saved.
-3. It is about the user, their preferences, the people in their life, their ongoing activities, or their projects.
-Do not save temporary plans, details of a one-off task, or anything that will soon be out of date.
-Save facts as soon as you learn them. You do not need to be asked.
+- Add to an existing file before you create a new one.
+- To add a fact, use memory_append. To change a fact, use memory_str_replace.
+- To create a file, use memory_write with if_version "new" and a description that says when to read it.
+- Write one short bullet per fact.
+- Do not mention reading or saving memory to the user, unless a tool result tells you to."""
 
-### How to save a fact
-- Before you create a file, check the list below for a file on the same subject. If one exists, add to it instead of creating a new one.
-- To add facts to an existing file, use memory_append.
-- To correct a fact, use memory_str_replace.
-- To create a file, use memory_write with if_version "new", and a description that says when to read the file.
-- Write facts as short bullet points, one fact per line.
-- If a write fails with a conflict, the result contains the file's current content and version. Merge your change into that content and retry with that version.
-- Do not tell the user that you are reading or saving memory.
+READ_ONLY = (
+    "Memory is read-only in this session ({reason}). Read it; do not try to save."
+)
 
-{scope}"""
+PROJECT_ROUTES = """\
+Project files:
+- {p}/profile.md: what the project is (purpose, technology, status, where things are).
+- {p}/preferences.md: how to work on the project (conventions, tools, things to do or avoid).
+- {p}/people/<name>.md: a person's role in the project.
+- {p}/areas/<name>.md: an ongoing part of the work.
+- {p}/topics/<subject>.md: anything else durable (a decision, a component, a procedure)."""
 
-GLOBAL_ROUTES = """\
-- global/profile.md: who the user is. Their identity, background, circumstances, and what they own and use.
-- global/preferences.md: how the user wants you to work. Tone, formatting, conventions, and things to do or avoid.
-- global/people/<name>.md: one person in the user's life. One file per person. Example: global/people/sam.md.
-- global/areas/<name>.md: an ongoing activity with no end date, such as a job, a course of study, or a hobby.
-- global/topics/<subject>.md: any other durable subject. One subject per file."""
+_GLOBAL_ROUTES = """\
+Global files:
+- global/profile.md: who the user is (identity, background, circumstances, what they own and use).
+- global/preferences.md: how the user wants you to work (tone, formatting, things to do or avoid).
+- global/people/<name>.md: one person in the user's life.{people}
+- global/areas/<name>.md: an ongoing activity with no end date (a job, a course, a hobby).
+- global/topics/<subject>.md: any other durable subject."""
+GLOBAL_ROUTES = _GLOBAL_ROUTES.format(people="")
+GLOBAL_ROUTES_IN_PROJECT = _GLOBAL_ROUTES.format(
+    people=" Their role in a project goes in that project's people/ file."
+)
 
-UNSCOPED = """\
-### Where to save in this session
-This session is not in a project. You can write files only under global/.
+INBOX_BULLET = f"- When you are not sure where a fact goes, append it to {INBOX}."
 
-Choose the file by what the fact is about:
-""" + GLOBAL_ROUTES + """
+UNSCOPED = (
+    """\
+### Where facts go
+This session is not in a project. You can write only under global/.
+- When a fact is about a project, follow "Facts for another project".
+- When a fact is partly about a project, save the general part here. Treat the project part as above.
+"""
+    + INBOX_BULLET
+    + "\n\n"
+    + GLOBAL_ROUTES
+)
 
-Facts that belong to one project:
-- You cannot write project files in this session.
-- If you are sorting global/inbox.md, follow the sort-inbox instructions: stage project facts with memory_propose. This works for existing projects and for new projects. memory_propose does not write any files, so it is allowed in this session. The user applies each proposal.
-- Otherwise, save the fact to global/inbox.md with memory_append, written as "<project>: <fact>". If global/inbox.md does not exist, create it with memory_write and if_version "new".
+SHARED = (
+    """\
+### Where facts go
+This session is in the project {p}. Save each fact once, in one place:
+- When a fact only matters to {p}, save it under {p}/.
+- When a fact is also true outside {p}, save it under global/ only. This session reads global/ too, so do not copy it.
+- When a fact is partly both, split it. "Prefers uv for Python; this project pins 3.10" becomes "prefers uv for Python" in global/preferences.md and "pins Python 3.10" in {p}/preferences.md.
+- When a fact is about another project, follow "Facts for another project".
+"""
+    + INBOX_BULLET
+    + "\n\n"
+    + PROJECT_ROUTES
+    + "\n\n"
+    + GLOBAL_ROUTES_IN_PROJECT
+)
 
-Project files are not in the list below. When the user asks about a project, call memory_list with include_projects set to true, then read the files you need with memory_read."""
+CONFINED = (
+    """\
+### Where facts go
+This session is in the project {p}. You can write only under {p}/, and append to """
+    + INBOX
+    + """.
+- When a fact only matters to {p}, save it under {p}/.
+- When a fact is also true outside {p}, do not save it. Tell the user in one sentence that a session outside the project can.
+- When a fact is partly both, save the project part. Treat the general part as above.
+- When a fact is about another project, follow "Facts for another project".
+"""
+    + INBOX_BULLET
+    + "\n\n"
+    + PROJECT_ROUTES
+)
 
-PROJECT = """\
-### Where to save in this session
-This session is in the project "{p}". For each fact, decide where it belongs:
-1. The fact would still be true and useful outside {p}: it is a general fact. Save it under global/.
-2. The fact only matters for {p}: it is a project fact. Save it under {p}/.
-3. The fact has a general part and a project part: split it. Save each part in its own place.
-
-Project facts, under {p}/:
-- {p}/profile.md: what the project is. Its purpose, technology, status, and where things are.
-- {p}/preferences.md: how the user wants you to work on this project. Its conventions, tools, and things to do or avoid.
-- {p}/people/<name>.md: a person's role in this project.
-- {p}/areas/<name>.md: an ongoing part of the work within this project.
-- {p}/topics/<subject>.md: any other durable project subject, such as a decision, a component, or a procedure. One subject per file.
-- Do not edit {p}/index.md. It is maintained automatically.
-
-{general}
-
-If you are sorting global/inbox.md, do not save project facts directly, not even facts for {p}. Follow the sort-inbox instructions and stage them with memory_propose.
-
-Other projects' files are read-only in this session and are not in the list below. Read them with memory_read only when the user asks about that project."""
-
-PROJECT_GENERAL_SHARED = """\
-General facts, under global/ (the same files as in every session):
-""" + GLOBAL_ROUTES + """
-- If a person already has a file under global/people/, keep their general facts there. Put only their role in {p} under {p}/people/."""
-
-PROJECT_GENERAL_CONFINED = """\
-General facts:
-- In this session you can write only under {p}/. You cannot write under global/.
-- If you learn a general fact, do not save it. Tell the user in one sentence that it can be saved from a conversation outside the project."""
+ELSEWHERE = (
+    """\
+### Facts for another project
+1. Append the fact to """
+    + INBOX
+    + """ as "<project>: <fact>".
+2. Call memory_propose for that project. Copy the inbox line exactly into inbox_lines. In summary, say what the fact is and why it belongs there.
+3. Do what the result tells you.
+Projects: {projects}."""
+)
 
 
 @dataclass
@@ -127,14 +155,20 @@ class Snapshot:
     paths: Set[str] = field(default_factory=set)  # files inlined in full
 
 
-def _scope_sentence(scope: Scope, config: Config) -> str:
+def rules(scope: Scope, config: Config, projects: List[str]) -> str:
+    """The fixed instructions. ``projects`` are the buckets this session can propose into."""
     if scope.read_only:
-        return f"Memory is read-only in this session ({scope.read_only_reason})."
+        return READING + "\n\n" + READ_ONLY.format(reason=scope.read_only_reason)
     if not scope.project:
-        return UNSCOPED
-    confined = config.write_policy == "confined"
-    general = (PROJECT_GENERAL_CONFINED if confined else PROJECT_GENERAL_SHARED).format(p=scope.project)
-    return PROJECT.format(p=scope.project, general=general)
+        where = UNSCOPED
+    elif config.write_policy == "confined":
+        where = CONFINED.format(p=scope.project)
+    else:
+        where = SHARED.format(p=scope.project)
+    elsewhere = ELSEWHERE.format(
+        projects=", ".join(projects) if projects else "none yet"
+    )
+    return "\n\n".join([READING, SAVING, where, elsewhere])
 
 
 def _body(store: Store, path: str) -> Optional[str]:
@@ -150,59 +184,204 @@ def _body(store: Store, path: str) -> Optional[str]:
     return body or None
 
 
-def build(store: Store, index: Index, scope: Scope, config: Config) -> Snapshot:
+def _profile_state(store: Store, path: str) -> str:
+    """missing | broken | empty | full: what the tools can do with a profile.
+    ``broken`` means the write path's own validation would refuse the file — no
+    frontmatter, frontmatter that won't parse, or a path that isn't a regular
+    file — so only the user can fix that."""
+    try:
+        data = store.read_bytes(path)
+    except StoreError:
+        return "broken"
+    if data is None:
+        return "missing"
+    try:
+        fm, body = frontmatter.parse(data.decode("utf-8", errors="replace"))
+        frontmatter.validate(fm, stem(path))
+    except frontmatter.FrontmatterError:
+        return "broken"
+    return "empty" if not body.strip() else "full"
+
+
+def _home_relative(path: str) -> str:
+    home = os.path.expanduser("~").rstrip(os.sep)
+    if home and (path == home or path.startswith(home + os.sep)):
+        return "~" + path[len(home) :]
+    return path
+
+
+def project_header(
+    bucket: str,
+    project: Optional[Project],
+    *,
+    profile: str,  # _profile_state: what the tools can do with <bucket>/profile.md
+    has_files: bool,
+    read_only: bool,
+) -> str:
+    """The generated head of the project index: what Hermes knows about the project,
+    plus a line about its profile — a nudge when there's nothing to read yet, or a
+    "tell the user" line when no memory tool can edit the file."""
+    lines = [f"### Project: {bucket}"]
+    if project is not None:
+        if project.name and project.name != bucket:
+            lines.append(f"Hermes project name: {project.name}")
+        if project.description:
+            lines.append(f"Hermes project description: {project.description}")
+        if project.folders:
+            shown = [_home_relative(f) for f in project.folders]
+            if len(shown) > 1:
+                shown[0] += " (primary)"
+            lines.append("Folders: " + ", ".join(shown))
+    if profile == "broken":
+        # The file exists, but memory_write would conflict and memory_append and
+        # memory_str_replace refuse ("fix it by hand"): an instruction only the
+        # user can carry out, so the agent must pass it on, not try anything.
+        lines.append(
+            f"{bucket}/profile.md exists, but its frontmatter is missing or can't be parsed: no memory "
+            "tool can edit it. Tell the user in one line to fix it (hermes memory-buckets lint names the problem)."
+        )
+    elif profile == "missing":
+        missing = (
+            "This project has no memory yet."
+            if not has_files
+            else f"{bucket}/profile.md does not exist yet."
+        )
+        if not read_only:
+            missing += (
+                f" When you learn what the project is, create {bucket}/profile.md with memory_write: "
+                "its purpose, technology, status, and where things are."
+            )
+        lines.append(missing)
+    elif profile == "empty" and not read_only:
+        lines.append(
+            f"{bucket}/profile.md is empty. When you learn what the project is, add to it with "
+            "memory_append: its purpose, technology, status, and where things are."
+        )
+    return "\n".join(lines)
+
+
+def drop_order(project: Optional[str]) -> List[str]:
+    """Whole files to drop, first to last, when the listing alone can't bring the
+    block under the cap. The global profile is never dropped."""
+    if not project:
+        return [PREFERENCES]
+    # TODO(ivy): decide the order. In a project session, which matters more: the
+    # global preferences or the project's own files?
+    return [f"{project}/preferences.md", PREFERENCES, f"{project}/profile.md"]
+
+
+def build(
+    store: Store,
+    index: Index,
+    scope: Scope,
+    config: Config,
+    project: Optional[Project] = None,
+    hermes_buckets: Optional[List[str]] = None,
+) -> Snapshot:
+    """``project`` is the Hermes project behind ``scope.project``, for the index header;
+    without it the header shows only the bucket name. ``hermes_buckets`` are the buckets of
+    every Hermes project, so the agent can propose into projects with no memory yet."""
     index.reconcile()
     listing_files = [(p, d) for p, _, d, _ in index.files()]
     cap = max(1000, config.snapshot_max_chars)
 
-    head = RULES.format(scope=_scope_sentence(scope, config))
+    others = sorted(
+        {p.split("/", 1)[0] for p, _ in listing_files if not scope.reads_by_default(p)}
+    )
+    proposable = sorted(
+        (set(others) | set(hermes_buckets or [])) - {GLOBAL, scope.project}
+    )
+    head = rules(scope, config, proposable)
     profile = _body(store, PROFILE)
-    preferences = _body(store, PREFERENCES)
-    project_index = _body(store, f"{scope.project}/index.md") if scope.project else None
 
-    sections = []  # (path, text) in priority order after the profile
-    if preferences:
-        sections.append((PREFERENCES, f"### {PREFERENCES}\n{preferences}"))
-    if project_index:
-        sections.append((f"{scope.project}/index.md", f"### {scope.project}/index.md\n{project_index}"))
+    # Files inlined in full, in render order. The project header sits between the
+    # global and the project files and is never dropped.
+    files = {PREFERENCES: _body(store, PREFERENCES)}
+    header = None
+    if scope.project:
+        p = scope.project
+        files[f"{p}/profile.md"] = _body(store, f"{p}/profile.md")
+        files[f"{p}/preferences.md"] = _body(store, f"{p}/preferences.md")
+        header = project_header(
+            p,
+            project,
+            profile=_profile_state(store, f"{p}/profile.md"),
+            has_files=any(path.startswith(f"{p}/") for path, _ in listing_files),
+            read_only=scope.read_only,
+        )
+    files = {path: body for path, body in files.items() if body}
 
-    inlined = {PROFILE} if profile else set()
-    inlined |= {p for p, _ in sections}
-    defaults = [(p, d) for p, d in listing_files if scope.reads_by_default(p) and p not in inlined]
+    inlined = set(files) | ({PROFILE} if profile else set())
+    defaults = [
+        (p, d)
+        for p, d in listing_files
+        if scope.reads_by_default(p) and p not in inlined
+    ]
     if scope.project:
         defaults.sort(key=lambda pd: (not pd[0].startswith(f"{scope.project}/"), pd[0]))
     listing = [f"- {p}: {d}" if d else f"- {p}" for p, d in defaults]
     has_inbox = any(p == INBOX for p, _ in listing_files)
-    others = sorted({p.split("/", 1)[0] for p, _ in listing_files if not scope.reads_by_default(p)})
 
-    def render(sections, listing, omitted, dropped=()):
+    def render(shown, kept, dropped):
         parts = [head]
         if profile:
             parts.append(f"### {PROFILE}\n{profile}")
-        parts.extend(text for _, text in sections)
+        if PREFERENCES in shown:
+            parts.append(f"### {PREFERENCES}\n{shown[PREFERENCES]}")
+        if header:
+            parts.append(header)
+        parts.extend(
+            f"### {path}\n{body}" for path, body in shown.items() if path != PREFERENCES
+        )
         if dropped:
-            parts.append("These files are too long to show here. Read them with memory_read when they are relevant: "
-                         + ", ".join(dropped))
-        if listing or omitted:
-            lines = ["### Other memory files", "Read a file when its description matches what you need.", *listing]
+            parts.append(
+                "These files are too long to show here. Read them with memory_read when they are relevant: "
+                + ", ".join(dropped)
+            )
+        omitted = len(listing) - kept
+        if kept or omitted:
+            lines = ["### Other files", *listing[:kept]]
             if omitted:
-                lines.append(f"- … and {omitted} more files. Call memory_list to see all of them.")
+                lines.append(
+                    f"- … and {omitted} more files. Call memory_list to see all of them."
+                )
             parts.append("\n".join(lines))
         if others:
-            parts.append("Other projects that have memory: " + ", ".join(others)
-                         + ". Their files are not listed here. Read them only when the user asks about that project.")
+            parts.append(
+                ("Other projects" if scope.project else "Projects")
+                + " with memory: "
+                + ", ".join(others)
+                + ". Read their files only when the user asks about that project. You cannot write them directly, you must propose edits to them."
+            )
         if has_inbox and not scope.read_only:
-            parts.append(INBOX_NOTE.format(skill=SORT_SKILL) if SORT_SKILL else INBOX_NOTE_NO_SKILL)
+            parts.append(
+                INBOX_NOTE.format(skill=SORT_SKILL)
+                if SORT_SKILL
+                else INBOX_NOTE_NO_SKILL
+            )
         return "\n\n".join(parts)
 
-    text = render(sections, listing, 0)
-    kept = len(listing)
-    while len(text) > cap and kept > 0:  # 1. trim the listing
-        kept = max(0, kept - max(1, (len(text) - cap) // 40))
-        text = render(sections, listing[:kept], len(listing) - kept)
-    dropped: List[str] = []
-    while len(text) > cap and sections:  # 2. project index, then preferences
-        dropped.insert(0, sections.pop()[0])
-        text = render(sections, [], len(listing), dropped)
-    inlined = {p for p, _ in sections} | ({PROFILE} if profile else set())
-    return Snapshot(text=text, paths=inlined)
+    def fit(shown, dropped):
+        """The most listing lines that fit under the cap (binary search: the length
+        grows with every line kept), and the text with them."""
+        lo, hi = 0, len(listing)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if len(render(shown, mid, dropped)) <= cap:
+                lo = mid
+            else:
+                hi = mid - 1
+        return render(shown, lo, dropped)
+
+    shown, dropped = dict(files), []
+    text = fit(shown, dropped)
+    for path in drop_order(
+        scope.project
+    ):  # the listing alone didn't fit: drop whole files
+        if len(text) <= cap:
+            break
+        if path in shown:
+            del shown[path]
+            dropped.append(path)
+            text = fit(shown, dropped)
+    return Snapshot(text=text, paths=set(shown) | ({PROFILE} if profile else set()))

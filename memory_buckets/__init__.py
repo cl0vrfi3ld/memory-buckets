@@ -29,7 +29,7 @@ def _register_extras(ctx) -> None:
         # Hermes namespaces the skill by the name it loaded us under. As a plugin directory
         # that's "memory-buckets"; a pip install loads from the package directory
         # ("memory_buckets"), and Hermes then prunes the skill as not belonging to the active
-        # provider, so it can't be loaded there (README: Sorting the inbox).
+        # provider, so it can't be loaded there (README: The inbox and proposals).
         namespace = getattr(ctx, "name", None)
         snapshot.SORT_SKILL = "memory-buckets:sort-inbox" if namespace in (None, "memory-buckets") else None
         # The documented bundle-skills layout: skills/<name>/SKILL.md, loaded with

@@ -19,7 +19,7 @@ class CliTest(StoreCase):
 
     def test_status_outside_hermes(self):
         self.put("global/profile.md", doc("profile", "Who"))
-        self.put("proj-1/index.md", doc("index", "proj-1"))
+        self.put("proj-1/profile.md", doc("profile", "proj-1"))
         code, out = self.run_cli("status")
         self.assertEqual(code, 0, out)
         self.assertIn("global 1, proj-1 1", out)
@@ -62,7 +62,7 @@ class CliTest(StoreCase):
     def test_sort_prompt_needs_an_inbox(self):
         code, out = self.run_cli("sort-prompt")
         self.assertEqual(code, 1)
-        self.assertIn("run import first", out)
+        self.assertIn("has nothing to sort", out)
 
     def test_sort_prompt_only_names_real_tools(self):
         import re
@@ -77,8 +77,8 @@ class CliTest(StoreCase):
         self.assertIn("nothing to import", out)
 
     def test_status_matches_buckets_to_hermes_projects(self):
-        self.put("proj-1/index.md", doc("index", "proj-1"))
-        self.put("old-proj/index.md", doc("index", "old-proj"))
+        self.put("proj-1/profile.md", doc("profile", "proj-1"))
+        self.put("old-proj/profile.md", doc("profile", "old-proj"))
         with fake_hermes({"proj-1": "/src/proj-1", "fresh": "/src/fresh"}):
             code, out = self.run_cli("status")
         self.assertIn("2 Hermes project(s); 1 with a bucket (proj-1)", out)
@@ -86,23 +86,70 @@ class CliTest(StoreCase):
         self.assertIn("--slug <bucket>", out)
 
     def test_lint(self):
-        self.put("global/topics/nix.md", doc("nix", "Nix", "- see [[sam]] and [[nope]] and [[proj-1/index]]\n"))
+        self.put("global/topics/nix.md", doc("nix", "Nix", "- see [[sam]] and [[nope]] and [[proj-1/profile]]\n"))
         self.put("global/people/sam.md", doc("sam", "Sam"))
         self.put("global/areas/sam.md", doc("sam", "Also sam"))
         self.put("global/topics/bad.md", "no frontmatter\n")
         self.put("global/Stray.md", "x")
-        self.put("proj-1/index.md", doc("index", "proj-1"))
+        self.put("proj-1/profile.md", doc("profile", "proj-1"))
         (self.store.memories / ".obsidian").mkdir()
         (self.store.memories / ".obsidian/app.json").write_text("{}")
+        self.put("proj-1/index.md", doc("index", "left over from an older version"))
         code, out = self.run_cli("lint")
         self.assertEqual(code, 1)
+        self.assertIn("proj-1/index.md: left over from an older version; run `hermes memory-buckets migrate`", out)
         self.assertIn("broken link [[nope]]", out)
         self.assertNotIn("[[sam]]\n", out.replace("is ambiguous", ""))
         self.assertIn("name 'sam' is used by", out)
         self.assertIn("global/topics/bad.md: bad frontmatter", out)
         self.assertIn("global/Stray.md: not a memory path", out)
         self.assertNotIn(".obsidian", out)
-        self.assertNotIn("[[proj-1/index]]", out)
+        self.assertNotIn("[[proj-1/profile]]", out)
+
+    def test_lint_only_sends_real_leftovers_to_migrate(self):
+        # migrate ignores global/ and directories that aren't project ids.
+        self.put("global/index.md", doc("index", "x"))
+        code, out = self.run_cli("lint")
+        self.assertIn("global/index.md: not a memory path", out)
+        self.assertNotIn("migrate", out)
+
+    def test_inbox_messages_count_entries(self):
+        self.put("global/inbox.md", doc("inbox", "Memory waiting to be sorted", "## imported\n"))
+        self.assertNotIn("inbox ", self.run_cli("status")[1])
+        self.assertNotIn("waiting to be sorted", self.run_cli("lint")[1])
+        code, out = self.run_cli("sort-prompt")
+        self.assertEqual(code, 1)
+        self.assertIn("has nothing to sort", out)
+        self.put("global/inbox.md", doc("inbox", "Memory waiting to be sorted",
+                                        "## imported\n- a\n- b\n```\n- not an entry\n```\n"))
+        self.assertIn("inbox       global/inbox.md: 2 entries waiting to be sorted", self.run_cli("status")[1])
+        self.assertIn("note: global/inbox.md has 2 entries waiting to be sorted", self.run_cli("lint")[1])
+        self.assertEqual(self.run_cli("sort-prompt")[0], 0)
+
+    def test_old_inbox_description_is_reported(self):
+        self.put("global/inbox.md", doc("inbox", "Imported memory; sort it, then delete it", "- a\n"))
+        self.assertIn("migration   global/inbox.md has an outdated description", self.run_cli("status")[1])
+        code, out = self.run_cli("lint")
+        self.assertEqual(code, 1)
+        self.assertIn("global/inbox.md: outdated description", out)
+        code, out = self.run_cli("migrate")
+        self.assertEqual(code, 0, out)
+        self.assertIn("global/inbox.md: description set to the current one", out)
+        self.assertEqual(self.run_cli("lint")[0], 0)
+
+    def test_migrate_command(self):
+        self.put("proj-1/index.md", doc("index", "proj-1 overview", "- a web app\n"))
+        code, out = self.run_cli("status")
+        self.assertIn("migration   index.md left over in: proj-1", out)
+        code, out = self.run_cli("migrate", "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("would: proj-1/index.md becomes proj-1/profile.md", out)
+        self.assertTrue((self.store.memories / "proj-1/index.md").exists())
+        code, out = self.run_cli("migrate")
+        self.assertEqual(code, 0, out)
+        self.assertIn("originals kept in", out)
+        self.assertFalse((self.store.memories / "proj-1/index.md").exists())
+        self.assertEqual(self.run_cli("migrate")[1].strip(), "nothing to migrate")
 
     def test_reindex_and_search(self):
         self.put("global/topics/nix.md", doc("nix", "Nix", "- flakes pin inputs\n"))

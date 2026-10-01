@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from . import frontmatter, pending
+from . import frontmatter, inbox, pending
 from .config import Config
 from .index import Index
 from .scopes import Scope
@@ -26,7 +26,7 @@ MAX_SEARCH_LIMIT = 20
 _PATH_HELP = ("Path relative to the memory root: lower-case, hyphens between words, ending in .md. Allowed forms: "
               "global/profile.md, global/preferences.md, global/inbox.md, global/topics/<name>.md, "
               "global/areas/<name>.md, global/people/<name>.md, <project>/profile.md, <project>/preferences.md, "
-              "<project>/index.md, <project>/topics/<name>.md, <project>/areas/<name>.md, <project>/people/<name>.md.")
+              "<project>/topics/<name>.md, <project>/areas/<name>.md, <project>/people/<name>.md.")
 
 
 def _fn(name: str, description: str, properties: Dict[str, Any], required: List[str]) -> Dict[str, Any]:
@@ -72,7 +72,7 @@ SCHEMAS: List[Dict[str, Any]] = [
         ["path", "old", "new"]),
     _fn("memory_append",
         "Add facts to the end of an existing memory file, one bullet point per fact. The file must already "
-        "exist; to create a file, use memory_write.",
+        "exist; to create a file, use memory_write. global/inbox.md is the exception: it is created if missing.",
         {"path": {"type": "string", "description": _PATH_HELP},
          "lines": {"type": "array", "items": {"type": "string"}, "minItems": 1,
                    "description": "One fact per item. '- ' is added to the start if it is missing."},
@@ -84,30 +84,21 @@ SCHEMAS: List[Dict[str, Any]] = [
          "if_version": {"type": "string", "description": "The file's current version."}},
         ["path", "if_version"]),
     _fn("memory_propose",
-        "Stage facts for one project so the user can review them. Use it only while sorting global/inbox.md, as "
-        "the sort-inbox instructions describe. This tool does not write any memory files: it saves a proposal and "
-        "returns its id and a preview. The user saves the facts by running /memory-apply <id>. You cannot apply "
-        "a proposal yourself.\n"
-        "It is allowed in every session, including sessions where you can only write under global/. It works for "
-        "existing projects and for new projects.\n"
-        "Rules:\n"
-        "- Make one call per project.\n"
-        "- To create a new project, set new_project to true, and include <project>/profile.md with a description "
-        "of what the project is.\n"
-        "- Copy inbox_lines exactly from global/inbox.md. Those lines are removed from the inbox when the user "
-        "applies the proposal.\n"
-        "- Do not use it for general facts. Save general facts under global/ with memory_write or memory_append.",
+        "Stage facts for a project you cannot write in this session, or for any project while sorting "
+        "global/inbox.md. It writes no memory files: the user applies the proposal with /memory-apply <id>. "
+        "Make one call per project. The facts must already be lines in global/inbox.md; those lines are removed "
+        "from the inbox when the proposal is applied.",
         {"project": {"type": "string", "description": "The project id: lower-case, hyphens between words, for example "
-                                                      "'home-server'. It can be an existing project or a new one."},
+                                                      "'home-server'."},
          "new_project": {"type": "boolean",
-                         "description": "Set to true if the project does not exist yet. Then files must include "
-                                        "<project>/profile.md with a description."},
+                         "description": "Set to true only for a project that is not in your list of projects. Then "
+                                        "files must include <project>/profile.md with a description."},
          "files": {"type": "array", "minItems": 1, "maxItems": pending.MAX_FILES,
                    "items": {"type": "object", "additionalProperties": False, "required": ["path", "lines"],
                              "properties": {
                                  "path": {"type": "string", "description": "<project>/profile.md, <project>/preferences.md, "
                                           "or <project>/topics/<name>.md, <project>/areas/<name>.md, "
-                                          "<project>/people/<name>.md. Never <project>/index.md."},
+                                          "<project>/people/<name>.md."},
                                  "description": {"type": "string",
                                                  "description": "Required when the file does not exist yet: one line "
                                                                 "that says when to read it."},
@@ -116,8 +107,8 @@ SCHEMAS: List[Dict[str, Any]] = [
                    "description": "The files to create, or to add to if they already exist."},
          "inbox_lines": {"type": "array", "items": {"type": "string"}, "minItems": 1,
                          "description": "The lines from global/inbox.md that this proposal covers, copied exactly."},
-         "summary": {"type": "string", "description": "One sentence for the user: what this proposal saves and why "
-                                                      "it belongs to this project."}},
+         "summary": {"type": "string", "description": "One sentence for the user: what the facts are and why they "
+                                                      "belong to this project. The user sees it."}},
         ["project", "files", "inbox_lines", "summary"]),
 ]
 TOOL_NAMES = [s["name"] for s in SCHEMAS]
@@ -131,6 +122,17 @@ class Context:
     config: Config
     source: str  # platform name, recorded in `sources`
     on_write: Optional[Callable[[str], None]] = None
+    # Shows the user a one-line notice; returns True if it was shown. None: no way to
+    # reach the user directly (gateways; see provider._notifier), so the result asks
+    # the agent to say it.
+    notify: Optional[Callable[[str], bool]] = None
+    hermes_buckets: Optional[List[str]] = None  # buckets of every Hermes project; None outside Hermes
+
+    def tell_user(self, message: str) -> bool:
+        try:
+            return bool(self.notify and self.notify(message))
+        except Exception:  # a broken UI callback must never fail the write
+            return False
 
 
 class ArgError(Exception):
@@ -258,9 +260,9 @@ def _body_text(body: str) -> str:
 
 
 def _mutate(ctx: Context, path: str, if_version: Optional[str],
-            edit: Callable[[Optional[bytes]], str]) -> Dict[str, Any]:
+            edit: Callable[[Optional[bytes]], str], *, append: bool = False) -> Dict[str, Any]:
     validate_path(path)
-    ctx.scope.check_write(path)
+    ctx.scope.check_write(path, append=append)
     result = ctx.store.update(path, lambda current: check_content(path, edit(current)), if_version)
     if ctx.on_write:
         ctx.on_write(path)
@@ -319,6 +321,8 @@ def _append(args, ctx: Context):
     if not lines or not all(line.strip() for line in lines):
         raise ArgError("'lines' needs at least one non-empty line")
     if_version = _str(args, "if_version", required=False)
+    if path == inbox.PATH:
+        return _append_inbox(ctx, lines, if_version)
 
     def edit(current):
         if current is None:
@@ -334,6 +338,24 @@ def _append(args, ctx: Context):
         return frontmatter.render(fm, body)
 
     return _mutate(ctx, path, if_version, edit)
+
+
+def _append_inbox(ctx: Context, lines: List[str], if_version: Optional[str]) -> Dict[str, Any]:
+    """Appends to the inbox: create it if needed, go under a dated heading and tell the user."""
+    entries = inbox.bullets(" ".join(line.split("\n")) for line in lines)
+    heading = inbox.conversation_heading(ctx.source)
+
+    def edit(current):
+        if current is not None:
+            _existing(inbox.PATH, current)  # refuse to rewrite an inbox we can't parse
+        return inbox.with_entries(current, heading, entries, ctx.source)
+
+    out = _mutate(ctx, inbox.PATH, if_version, edit, append=True)
+    n = len(entries)
+    if not ctx.tell_user(f"📥 Memory inbox: {n} new entr{'y' if n == 1 else 'ies'} ({inbox.PATH})"):
+        out["next"] = ("Tell the user in one line that you added this to their memory inbox, "
+                       "unless you propose it next.")
+    return out
 
 
 def _delete(args, ctx: Context):
@@ -353,10 +375,17 @@ def _propose(args, ctx: Context):
     if ctx.scope.read_only:
         raise StoreError("read_only", f"memory is read-only in this session ({ctx.scope.read_only_reason})")
     p = pending.propose(ctx.store, project=args.get("project"), new_project=args.get("new_project"),
-                        files=args.get("files"), inbox_lines=args.get("inbox_lines"), summary=args.get("summary"))
-    return {"ok": True, "id": p["id"], "preview": pending.render(p, ctx.store),
-            "next": (f"Nothing has been saved yet. Show the user the preview. Tell them to run /memory-apply {p['id']} "
-                     f"to save it, or /memory-reject {p['id']} to discard it. Do not try to apply it yourself.")}
+                        files=args.get("files"), inbox_lines=args.get("inbox_lines"), summary=args.get("summary"),
+                        known_projects=ctx.hermes_buckets)
+    pid, commands = p["id"], f"/memory-apply {p['id']} saves it, /memory-reject {p['id']} discards it."
+    shown = ctx.tell_user(f"📥 Memory proposal {pid} for {p['project']}: {p['summary']} {commands}")
+    out = {"ok": True, "id": pid, "preview": pending.render(p, ctx.store)}
+    if shown:
+        out["next"] = "The user has been shown the proposal. Nothing is saved until they apply it."
+    else:
+        out["next"] = (f"Nothing is saved yet. Tell the user: {p['summary']} Then tell them: {commands} "
+                       "Do not try to apply it yourself.")
+    return out
 
 
 _HANDLERS = {

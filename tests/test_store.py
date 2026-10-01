@@ -74,6 +74,14 @@ class StoreTest(StoreCase):
         self.put("global/random.txt", "x")
         self.assertEqual(list(self.store.iter_paths()), ["global/topics/nix.md"])
 
+    def test_project_index_is_not_a_memory_path(self):
+        # The project index is generated into the prompt; no file holds it.
+        with self.assertRaises(st.StoreError) as caught:
+            self.store.write("proj-1/index.md", doc("index", "proj-1"), "new")
+        self.assertEqual(caught.exception.code, "invalid_path")
+        self.put("proj-1/index.md", doc("index", "left over from an older version"))
+        self.assertEqual(list(self.store.iter_paths()), [])
+
     def test_project_id_rules(self):
         self.assertTrue(st.is_project_id("proj-1"))
         self.assertFalse(st.is_project_id("global"))

@@ -24,11 +24,11 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import config as config_mod
-from . import inbox, projects, scopes, snapshot, tools
-from ._compat import MemoryProvider, RecallStatus, spawn_context_thread
+from . import inbox, migrate, projects, scopes, snapshot, tools
+from ._compat import TUI_PLATFORMS, MemoryProvider, RecallStatus, spawn_context_thread, tui_status_callback
 from .embeddings import make_embedder, min_similarity
 from .index import Index
 from .store import GLOBAL, Store, StoreError
@@ -72,6 +72,7 @@ class SessionState:
     turns: int = 0
     nudge_due: bool = False
     snapshot: Optional[snapshot.Snapshot] = None
+    status: Optional[Callable[..., Any]] = None  # status_callback from initialize: only the classic CLI gets one
 
 
 class MemoryBucketsProvider(MemoryProvider):
@@ -116,6 +117,7 @@ class MemoryBucketsProvider(MemoryProvider):
                         kwargs.get("platform") or "cli", kwargs.get("agent_context") or "primary")
         except OSError as err:
             logger.warning("memory-buckets: can't create the store at %s: %s", root, err)
+        self._migrate(kwargs.get("agent_context") or "primary")
         embedder = make_embedder(self.config, root, spawn=spawn_context_thread)
         self.index = Index(self.store, embedder)
         self._current = session_id
@@ -123,7 +125,20 @@ class MemoryBucketsProvider(MemoryProvider):
             platform=kwargs.get("platform") or "cli",
             agent_context=kwargs.get("agent_context") or "primary",
             cwd=kwargs.get("cwd") or "",
+            status=kwargs.get("status_callback") if callable(kwargs.get("status_callback")) else None,
         ))
+
+    def _migrate(self, agent_context: str) -> None:
+        """Bring an older store up to date. Read-only sessions leave it for a writable one."""
+        if self.store is None or scopes.resolve(self.config, None, agent_context).read_only:
+            return
+        try:
+            for step in migrate.run(self.store):
+                level = logging.WARNING if step.action == "skip" else logging.INFO
+                logger.log(level, "memory-buckets: migration: %s", step.describe())
+        except (StoreError, OSError) as err:  # never fail startup; the next session tries again
+            logger.warning("memory-buckets: migration didn't run (%s); `hermes memory-buckets migrate` retries it",
+                           getattr(err, "message", err))
 
     @_traced
     def shutdown(self) -> None:
@@ -158,10 +173,14 @@ class MemoryBucketsProvider(MemoryProvider):
         return state
 
     def _scope(self, session_id: str = "") -> scopes.Scope:
+        return self._scope_and_project(session_id)[0]
+
+    def _scope_and_project(self, session_id: str = "") -> "tuple[scopes.Scope, Optional[projects.Project]]":
         sid = session_id or self._current
         state = self._state(sid)
         project = projects.session_project(state.cwd)
-        return scopes.resolve(self.config, project.bucket if project else None, state.agent_context)
+        scope = scopes.resolve(self.config, project.bucket if project else None, state.agent_context)
+        return scope, (project if scope.project else None)
 
     @_traced
     def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "", reset: bool = False,
@@ -172,6 +191,7 @@ class MemoryBucketsProvider(MemoryProvider):
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
         self._remember(new_session_id, SessionState(
             platform=previous.platform, agent_context=previous.agent_context, cwd=previous.cwd,
+            status=previous.status,
         ))
         self._current = new_session_id
 
@@ -184,7 +204,9 @@ class MemoryBucketsProvider(MemoryProvider):
         state = self._state()
         if state.snapshot is None:
             try:
-                state.snapshot = snapshot.build(self.store, self.index, self._scope(), self.config)
+                scope, project = self._scope_and_project()
+                state.snapshot = snapshot.build(self.store, self.index, scope, self.config, project,
+                                                hermes_buckets=self._hermes_buckets())
             except Exception:  # never break the prompt build
                 logger.warning("memory-buckets: snapshot failed", exc_info=True)
                 return ""
@@ -248,7 +270,8 @@ class MemoryBucketsProvider(MemoryProvider):
             return json.dumps({"ok": False, "error": {"code": "unavailable", "message": "memory-buckets isn't initialised"}})
         state = self._state()
         ctx = tools.Context(store=self.store, index=self.index, scope=self._scope(), config=self.config,
-                            source=state.platform, on_write=self._after_write)
+                            source=state.platform, on_write=self._after_write, notify=self._notifier(state),
+                            hermes_buckets=self._hermes_buckets())
         try:
             return json.dumps(tools.handle(tool_name, args or {}, ctx), ensure_ascii=False)
         except sqlite3.Error as err:
@@ -265,6 +288,32 @@ class MemoryBucketsProvider(MemoryProvider):
                 return json.dumps({"ok": False, "error": {"code": "index_error",
                                                           "message": f"the search index is broken and couldn't be rebuilt: {err2}"}},
                                   ensure_ascii=False)
+
+    @staticmethod
+    def _hermes_buckets() -> Optional[List[str]]:
+        found = projects.list_projects()
+        return None if found is None else [p.bucket for p in found]
+
+    def _notifier(self, state: SessionState) -> Optional[Callable[[str], bool]]:
+        """Show the user a line on Hermes's status line, where there is one:
+        the classic CLI hands it to ``initialize``; the TUI and desktop have one
+        on the agent, found at call time (the agent registers after ``initialize``).
+        Gateways have none: None, and the tool result asks the agent instead."""
+        status = state.status
+        if status is not None:
+            def notify(message: str) -> bool:
+                status(message)  # agent._emit_status(message): prints in the classic CLI
+                return True
+            return notify
+        if state.platform in TUI_PLATFORMS:
+            def notify_tui(message: str) -> bool:
+                show = tui_status_callback(self)
+                if show is None:
+                    return False
+                show(message)
+                return True
+            return notify_tui
+        return None
 
     def _after_write(self, path: str) -> None:
         if self.index is None or self.index.embedder is None or self._shut:

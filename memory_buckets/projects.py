@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from .store import is_project_id
 
@@ -36,6 +36,8 @@ class Project:
     slug: str
     name: str
     primary_path: Optional[str] = None
+    description: Optional[str] = None
+    folders: Tuple[str, ...] = ()  # primary first, as Hermes orders them
 
 
 def bucket_for_slug(slug: str) -> Optional[str]:
@@ -50,7 +52,14 @@ def _to_project(proj) -> Optional[Project]:
         logger.warning("memory-buckets: Hermes project %r has slug %r, which can't name a bucket; "
                        "treating it as no project", proj.name, proj.slug)
         return None
-    return Project(bucket=bucket, slug=proj.slug, name=proj.name, primary_path=getattr(proj, "primary_path", None))
+    primary = getattr(proj, "primary_path", None)
+    folders = tuple(f.path for f in (getattr(proj, "folders", None) or []) if getattr(f, "path", None))
+    if not folders and primary:
+        folders = (primary,)
+    description = getattr(proj, "description", None)
+    return Project(bucket=bucket, slug=proj.slug, name=proj.name, primary_path=primary,
+                   description=description.strip() if isinstance(description, str) and description.strip() else None,
+                   folders=folders)
 
 
 def session_cwd(init_cwd: str = "") -> str:

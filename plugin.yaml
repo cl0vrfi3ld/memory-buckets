@@ -1,5 +1,5 @@
 name: memory-buckets
-version: 0.0.1
+version: 0.1.0
 license: MIT
 description: "Claude-style memory: one Markdown file per subject, global and project scopes, hybrid search. Store is a plain directory under $HERMES_HOME/memory-buckets."
 # No `kind`: Hermes detects memory providers from __init__.py and treats them

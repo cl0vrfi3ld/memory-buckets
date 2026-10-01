@@ -1,4 +1,4 @@
-"""The only place that imports Hermes's provider ABC.
+"""The only place that imports Hermes's provider ABC, or reaches into Hermes internals.
 
 Inside Hermes we subclass the real ``MemoryProvider``. Outside it (unit tests,
 a bare Python) we fall back to a shim with the same abstract surface, so
@@ -8,6 +8,7 @@ overrides against the real ABC when ``HERMES_PYTHON`` is set.
 
 from __future__ import annotations
 
+import sys
 import threading
 from typing import Any, Callable, Dict, Optional
 
@@ -57,3 +58,37 @@ except ImportError:  # not running inside Hermes
         args: tuple = (), kwargs: Optional[Dict[str, Any]] = None,
     ) -> threading.Thread:
         return threading.Thread(target=target, args=args, kwargs=kwargs, name=name, daemon=daemon)
+
+
+TUI_PLATFORMS = ("tui",)
+
+
+def tui_status_callback(provider: Any) -> Optional[Callable[[str], None]]:
+    """The TUI's status line for the agent that owns ``provider``, or None.
+
+    Hermes passes ``status_callback`` to memory providers only on the classic CLI
+    (``agent_init._memory_provider_init_kwargs``). A TUI agent has one too:
+    ``tui_gateway`` builds each agent with ``status_callback=(kind, text)``, which
+    emits ``status.update`` to the UI. The agent lives in ``tui_gateway.server._sessions``
+    (``{sid: {"agent": AIAgent, ...}}``); its ``_memory_manager.providers`` holds this
+    provider. Never imports the TUI: outside its process the module isn't loaded.
+    Any surprise in that private structure means None, so callers fall back.
+    """
+    server = sys.modules.get("tui_gateway.server")
+    sessions = getattr(server, "_sessions", None)
+    if not isinstance(sessions, dict):
+        return None
+    try:
+        for session in list(sessions.values()):
+            agent = session.get("agent") if isinstance(session, dict) else None
+            manager = getattr(agent, "_memory_manager", None)
+            if manager is None or not any(p is provider for p in getattr(manager, "providers", None) or []):
+                continue
+            callback = getattr(agent, "status_callback", None)
+            if callable(callback):
+                def show(message: str) -> None:
+                    callback("lifecycle", message)
+                return show
+    except Exception:  # a changed private structure must never break a tool call
+        return None
+    return None

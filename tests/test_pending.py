@@ -56,9 +56,44 @@ class PendingTest(StoreCase):
         self.assertTrue(got["ok"], got)
         self.assertRegex(got["id"], r"^[0-9a-f]{6}$")
         self.assertIn("/memory-apply " + got["id"], got["next"])
+        self.assertIn("proj-1's deploy tool", got["next"], "the agent passes the summary on to the user")
         self.assertIn("proj-1/topics/deploy.md (append)", got["preview"])
         self.assertEqual({p: self.store.read(p)["version"] for p in self.store.iter_paths()}, before)
         self.assertTrue((self.store.root / "_pending" / f"{got['id']}.json").is_file())
+
+    def test_propose_tells_the_user_directly_when_it_can(self):
+        seen = []
+        c = config.Config()
+        ctx = tools.Context(self.store, self.index, scopes.resolve(c, None), c, source="cli",
+                            notify=lambda m: seen.append(m) or True)
+        got = tools.handle("memory_propose", dict(
+            project="proj-1", files=[{"path": "proj-1/topics/deploy.md", "lines": ["deploys with colmena"]}],
+            inbox_lines=["- proj-1 deploys with colmena"], summary="proj-1's deploy tool."), ctx)
+        self.assertTrue(got["ok"], got)
+        self.assertEqual(seen, [f"📥 Memory proposal {got['id']} for proj-1: proj-1's deploy tool. "
+                                f"/memory-apply {got['id']} saves it, /memory-reject {got['id']} discards it."])
+        self.assertEqual(got["next"], "The user has been shown the proposal. Nothing is saved until they apply it.")
+
+    def test_propose_into_a_hermes_project_with_no_memory_yet(self):
+        # nixos-config has a Hermes project but no bucket: no new_project flag, no profile needed.
+        self.put("global/inbox.md", INBOX + "- nixos-config: uses flake-parts\n")
+        c = config.Config()
+        ctx = tools.Context(self.store, self.index, scopes.resolve(c, None), c, source="cli",
+                            hermes_buckets=["proj-1", "nixos-config"])
+        args = dict(project="nixos-config", summary="How nixos-config is structured.",
+                    files=[{"path": "nixos-config/topics/layout.md", "description": "How the flake is laid out",
+                            "lines": ["uses flake-parts"]}],
+                    inbox_lines=["- nixos-config: uses flake-parts"])
+        got = tools.handle("memory_propose", args, ctx)
+        self.assertTrue(got["ok"], got)
+        done = pending.apply(self.store, got["id"])
+        self.assertEqual(done["written"], ["nixos-config/topics/layout.md"])
+        self.assertNotIn("flake-parts", self.store.read("global/inbox.md")["content"])
+        # Without Hermes knowing the project, it's still refused.
+        self.put("global/inbox.md", INBOX + "- other: x\n")
+        got = self.call("memory_propose", project="other", summary="x", inbox_lines=["- other: x"],
+                        files=[{"path": "other/topics/x.md", "description": "x", "lines": ["x"]}])
+        self.assertIn("there's no project other", got["error"]["message"])
 
     def test_apply_commits_one_proposal_and_clears_its_inbox_lines(self):
         a, b = self.propose_existing(), self.propose_new()
@@ -103,7 +138,7 @@ class PendingTest(StoreCase):
         code, msg = code_and_msg(self.propose_existing(files=[{"path": "global/topics/x.md", "description": "x", "lines": ["x"]}]))
         self.assertIn("isn't under proj-1/", msg)
         code, msg = code_and_msg(self.propose_existing(files=[{"path": "proj-1/index.md", "lines": ["x"]}]))
-        self.assertIn("maintained for you", msg)
+        self.assertEqual(code, "invalid_path")
         code, msg = code_and_msg(self.propose_existing(files=[{"path": "proj-1/topics/new.md", "lines": ["x"]}]))
         self.assertIn("needs a description", msg)
         code, msg = code_and_msg(self.propose_existing(inbox_lines=["proj-1 deploys with nixops"]))

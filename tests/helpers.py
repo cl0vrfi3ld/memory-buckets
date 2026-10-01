@@ -37,7 +37,8 @@ def fake_vector(text, dims=DIMS):
 def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere"):
     """Stand-ins for Hermes's ``projects_db`` and ``runtime_cwd``, as ``memory_buckets.projects``
     uses them. ``projects`` maps a slug to its folder; ``pinned`` is the per-turn session cwd."""
-    rows = [types.SimpleNamespace(slug=slug, name=slug.title(), primary_path=folder)
+    rows = [types.SimpleNamespace(slug=slug, name=slug.title(), primary_path=folder, description=None,
+                                  folders=[types.SimpleNamespace(path=folder)])
             for slug, folder in (projects or {}).items()]
 
     @contextmanager
