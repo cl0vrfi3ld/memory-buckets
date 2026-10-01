@@ -93,5 +93,5 @@ will do.
 
 Initial release.
 
-[0.1.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/9f3d931...improvements-0.1.0
-[0.0.1]: https://git.cl0vr.co/cl0vr/memory-buckets/src/commit/9f3d931
+[0.1.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.0.1...v0.1.0
+[0.0.1]: https://git.cl0vr.co/cl0vr/memory-buckets/src/tag/v0.0.1
