@@ -17,6 +17,19 @@ logger = logging.getLogger("memory_buckets")
 
 CONFIG_KEY = "memory-buckets"
 
+_confined_warned = False
+
+
+def _warn_confined_once() -> None:
+    """`write_policy: confined` was removed in 0.2.0; warn once per process."""
+    global _confined_warned
+    if not _confined_warned:
+        _confined_warned = True
+        logger.warning(
+            "memory-buckets: write_policy was removed in 0.2.0; 'confined' is ignored "
+            "(project sessions now write global/ too)"
+        )
+
 
 @dataclass
 class EmbeddingsConfig:
@@ -33,7 +46,6 @@ class Config:
     prefetch_max_hints: int = 4
     snapshot_max_chars: int = 12000  # the rules alone are ~3k; the rest is profile, preferences and the file list
     nudge_interval: int = 10  # user turns between filing reminders; 0 = off
-    write_policy: str = "shared"  # or "confined": project sessions can't write global files, only append to the inbox
     cron_writes: bool = False
     readonly: bool = False
     project_boost: float = 1.3
@@ -53,9 +65,8 @@ class Config:
             for f in fields(EmbeddingsConfig):
                 if f.name in emb:
                     _assign(cfg.embeddings, f.name, emb[f.name], f.type)
-        if cfg.write_policy not in ("shared", "confined"):
-            logger.warning("memory-buckets: unknown write_policy %r, using 'shared'", cfg.write_policy)
-            cfg.write_policy = "shared"
+        if "write_policy" in data and str(data["write_policy"]).strip().lower() == "confined":
+            _warn_confined_once()
         return cfg
 
 
