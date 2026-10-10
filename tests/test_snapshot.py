@@ -78,12 +78,6 @@ class SnapshotTest(StoreCase):
         self.assertIn("When a fact only matters to proj-1, save it under proj-1/.", where)
         self.assertIn("When a fact is also true outside proj-1, save it under global/ only.", where)
         self.assertIn("in proj-1/preferences.md.", where)  # the split example names the project
-        confined = self.build(project="proj-1", write_policy="confined").text
-        where = self.section(confined, "Where facts go")
-        self.assertIn("You can write only under proj-1/, and append to global/inbox.md.", where)
-        self.assertIn("When a fact is also true outside proj-1, do not save it.", where)
-        self.assertNotIn("global/profile.md:", where)
-        self.assertNotIn("{p}", confined)
 
     def test_read_only_sessions_get_no_save_rules(self):
         text = self.build(project="proj-1", context="cron").text
@@ -93,7 +87,7 @@ class SnapshotTest(StoreCase):
 
     def test_prompt_style(self):
         # Short lines for small models: no instruction line over 40 words, in any session type.
-        for kw in ({}, {"project": "proj-1"}, {"project": "proj-1", "write_policy": "confined"}):
+        for kw in ({}, {"project": "proj-1"}):
             rules = self.build(**kw).text.split("### global/profile.md", 1)[0]
             longest = max(rules.splitlines(), key=lambda line: len(line.split()))
             self.assertLessEqual(len(longest.split()), 40, longest)

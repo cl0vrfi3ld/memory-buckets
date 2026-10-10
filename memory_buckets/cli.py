@@ -147,7 +147,7 @@ def _status_projects(store: Store) -> None:
     known = projects.list_projects()
     if known is None:
         return
-    buckets = set(pending.projects(store)) if store.memories.is_dir() else set()
+    buckets = set(store.projects())
     linked = sorted(p.bucket for p in known if p.bucket in buckets)
     _out(f"projects    {len(known)} Hermes project(s); {len(linked)} with a bucket"
          + (f" ({', '.join(linked)})" if linked else ""))

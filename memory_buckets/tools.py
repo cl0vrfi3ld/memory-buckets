@@ -7,6 +7,13 @@ Every result carries ``ok``. Errors are ``{"ok": false, "error": {"code", "messa
 
 The contract codes come from ``store.py``. The tool layer adds ``out_of_scope``,
 ``read_only`` and ``invalid_args``.
+
+Write rights (ADR-0015): a session writes fully inside ``scope.write_prefixes``.
+Into another known bucket it may only append to existing files
+(``memory_append``) and create new ones (``memory_write`` with ``if_version``
+"new"); edits and deletes there are refused with an error pointing at
+``memory_append``. Cross-project writes record ``<platform>@<session project or
+"*">`` in ``sources`` and show the user a status line where one exists.
 """
 
 from __future__ import annotations
@@ -134,6 +141,13 @@ class Context:
         except Exception:  # a broken UI callback must never fail the write
             return False
 
+    def provenance(self, path: str) -> str:
+        """The ``sources`` entry for a write to ``path``: ``<platform>@<project>``
+        for a cross-project write (D4), the bare platform for the session's own."""
+        if self.scope.cross_project_write(path):
+            return f"{self.source}@{self.scope.project or '*'}"
+        return self.source
+
 
 class ArgError(Exception):
     pass
@@ -260,12 +274,15 @@ def _body_text(body: str) -> str:
 
 
 def _mutate(ctx: Context, path: str, if_version: Optional[str],
-            edit: Callable[[Optional[bytes]], str], *, append: bool = False) -> Dict[str, Any]:
+            edit: Callable[[Optional[bytes]], str], *, append: bool = False,
+            create: bool = False) -> Dict[str, Any]:
     validate_path(path)
-    ctx.scope.check_write(path, append=append)
+    ctx.scope.check_write(path, append=append, create=create)
     result = ctx.store.update(path, lambda current: check_content(path, edit(current)), if_version)
     if ctx.on_write:
         ctx.on_write(path)
+    if ctx.scope.cross_project_write(path):
+        ctx.tell_user(f"📝 Saved to {path}")
     return {"ok": True, "path": path, "version": result["version"]}
 
 
@@ -275,6 +292,7 @@ def _write(args, ctx: Context):
     body = _str(args, "body", allow_empty=True)
     if_version = _str(args, "if_version")
     aliases = _str_list(args, "aliases", required=False)
+    source = ctx.provenance(path)
 
     def edit(current):
         if current is None:
@@ -286,11 +304,11 @@ def _write(args, ctx: Context):
         fm.set("description", description)
         if aliases is not None:
             fm.set("aliases", aliases)
-        _add_source(fm, ctx.source)
+        _add_source(fm, source)
         stamp(fm)
         return frontmatter.render(fm, _body_text(body))
 
-    return _mutate(ctx, path, if_version, edit)
+    return _mutate(ctx, path, if_version, edit, create=(if_version == NEW))
 
 
 def _str_replace(args, ctx: Context):
@@ -308,7 +326,7 @@ def _str_replace(args, ctx: Context):
             raise StoreError("no_match", f"the text to replace isn't in {path}'s body; memory_read it for the exact text")
         if count > 1:
             raise StoreError("ambiguous_match", f"the text occurs {count} times in {path}; include more context so it's unique")
-        _add_source(fm, ctx.source)
+        _add_source(fm, ctx.provenance(path))
         stamp(fm)
         return frontmatter.render(fm, body.replace(old, new, 1))
 
@@ -333,11 +351,11 @@ def _append(args, ctx: Context):
         for line in lines:
             line = " ".join(line.strip().split("\n"))
             body += (line if line.startswith(("- ", "* ")) else f"- {line}") + "\n"
-        _add_source(fm, ctx.source)
+        _add_source(fm, ctx.provenance(path))
         stamp(fm)
         return frontmatter.render(fm, body)
 
-    return _mutate(ctx, path, if_version, edit)
+    return _mutate(ctx, path, if_version, edit, append=True)
 
 
 def _append_inbox(ctx: Context, lines: List[str], if_version: Optional[str]) -> Dict[str, Any]:

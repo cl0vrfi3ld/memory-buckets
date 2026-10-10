@@ -4,47 +4,76 @@ from .helpers import StoreCase
 from memory_buckets import config, scopes
 from memory_buckets.store import StoreError
 
+BUCKETS = ["clogpt", "proj-1"]
+
 
 class ScopeTest(StoreCase):
     def resolve(self, project=None, context="primary", **cfg):
-        return scopes.resolve(config.Config.from_dict(cfg), project, context)
+        return scopes.resolve(config.Config.from_dict(cfg), project, context, buckets=BUCKETS)
 
     def test_unscoped(self):
         scope = self.resolve()
         self.assertIsNone(scope.project)
         self.assertEqual(scope.write_prefixes, ["global/"])
+        self.assertEqual(scope.other_buckets, BUCKETS)
         self.assertTrue(scope.reads_by_default("global/topics/nix.md"))
         self.assertFalse(scope.reads_by_default("proj-1/profile.md"))
-        with self.assertRaises(StoreError) as caught:
-            scope.check_write("proj-1/topics/x.md")
-        self.assertEqual(caught.exception.code, "out_of_scope")
-        self.assertEqual(caught.exception.fields["allowed_prefixes"], ["global/"])
 
     def test_project_scopes_the_session(self):
         scope = self.resolve("proj-1")
         self.assertEqual((scope.project, scope.source), ("proj-1", "hermes-project"))
         self.assertEqual(scope.read_prefixes, ["global/", "proj-1/"])
+        self.assertEqual(scope.other_buckets, ["clogpt"], "the session's own bucket is not 'other'")
         self.assertIsNone(self.resolve("global").project, "global is never a project")
         self.assertIsNone(self.resolve("../etc").project)
 
-    def test_shared_and_confined_writes(self):
-        shared = self.resolve("proj-1")
-        for ok in ("proj-1/topics/a.md", "global/profile.md", "global/people/sam.md", "global/topics/nix.md",
-                   "global/areas/work.md", "global/inbox.md"):
-            shared.check_write(ok)
-        for bad in ("clogpt/profile.md", "clogpt/topics/x.md"):
-            self.assertFalse(shared.can_write(bad), bad)
-        confined = self.resolve("proj-1", write_policy="confined")
-        self.assertFalse(confined.can_write("global/profile.md"))
-        self.assertTrue(confined.can_write("proj-1/profile.md"))
+    def test_write_rights_table(self):
+        # Unscoped: full in global/, append+create in other buckets.
+        unscoped = self.resolve()
+        unscoped.check_write("global/topics/nix.md")
+        with self.assertRaises(StoreError):
+            unscoped.check_write("proj-1/profile.md")
+        unscoped.check_write("proj-1/topics/deploy.md", append=True)
+        unscoped.check_write("proj-1/topics/new.md", create=True)
+        with self.assertRaises(StoreError):
+            unscoped.check_write("proj-1/topics/deploy.md")
+        with self.assertRaises(StoreError):
+            unscoped.check_write("unknown-bucket/topics/x.md", append=True)
+        # Project: full in its own bucket and global/, append+create elsewhere.
+        scoped = self.resolve("proj-1")
+        for path in ("proj-1/topics/deploy.md", "global/inbox.md"):
+            scoped.check_write(path)
+        scoped.check_write("clogpt/topics/deploy.md", append=True)
+        with self.assertRaises(StoreError):
+            scoped.check_write("clogpt/topics/deploy.md")
+        scoped.check_write("clogpt/profile.md", create=True)
+        with self.assertRaises(StoreError):
+            scoped.check_write("clogpt/profile.md")
+
+    def test_refused_edit_names_memory_append(self):
+        scoped = self.resolve("proj-1")
+        for check in ({"append": False}, {}):
+            with self.assertRaises(StoreError) as caught:
+                scoped.check_write("clogpt/topics/deploy.md", **check)
+            self.assertEqual(caught.exception.code, "out_of_scope")
+            self.assertIn("memory_append", caught.exception.message)
 
     def test_read_only_contexts(self):
         for context in ("cron", "subagent", "flush"):
             with self.assertRaises(StoreError) as caught:
                 self.resolve(context=context).check_write("global/profile.md")
             self.assertEqual(caught.exception.code, "read_only")
+            with self.assertRaises(StoreError):
+                self.resolve(context=context).check_write("clogpt/topics/deploy.md", append=True)
         self.resolve(context="cron", cron_writes=True).check_write("global/profile.md")
         self.assertTrue(self.resolve(readonly=True).read_only)
+
+
+class KnownBucketsTest(unittest.TestCase):
+    def test_union_is_sorted_and_validated(self):
+        self.assertEqual(scopes.known_buckets(["proj-b", "proj-a"], ["proj-c", "global", "bad_slug"]),
+                         ["proj-a", "proj-b", "proj-c"])
+        self.assertEqual(scopes.known_buckets([], None), [])
 
 
 if __name__ == "__main__":

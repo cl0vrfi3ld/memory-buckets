@@ -74,6 +74,15 @@ class StoreTest(StoreCase):
         self.put("global/random.txt", "x")
         self.assertEqual(list(self.store.iter_paths()), ["global/topics/nix.md"])
 
+    def test_projects_lists_buckets_on_disk(self):
+        self.assertEqual(self.store.projects(), [])
+        self.put("proj-2/topics/x.md", doc("x", "X"))
+        self.put("proj-1/profile.md", doc("profile", "P"))
+        self.put("global/topics/nix.md", doc("nix", "Nix"))
+        (self.store.memories / "not-a-bucket.txt").write_text("x")
+        (self.store.memories / "Bad_Slug").mkdir()
+        self.assertEqual(self.store.projects(), ["proj-1", "proj-2"])
+
     def test_project_index_is_not_a_memory_path(self):
         # The project index is generated into the prompt; no file holds it.
         with self.assertRaises(st.StoreError) as caught:

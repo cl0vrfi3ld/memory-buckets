@@ -180,8 +180,14 @@ class MemoryBucketsProvider(MemoryProvider):
         sid = session_id or self._current
         state = self._state(sid)
         project = projects.session_project(state.cwd)
-        scope = scopes.resolve(self.config, project.bucket if project else None, state.agent_context)
+        scope = scopes.resolve(self.config, project.bucket if project else None, state.agent_context,
+                               buckets=self._known_buckets())
         return scope, (project if scope.project else None)
+
+    def _known_buckets(self) -> List[str]:
+        """Every bucket a cross-project write could land in: on-disk ∪ Hermes's."""
+        on_disk = self.store.projects() if self.store else []
+        return scopes.known_buckets(on_disk, self._hermes_buckets())
 
     @_traced
     def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "", reset: bool = False,

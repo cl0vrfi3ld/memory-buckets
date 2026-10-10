@@ -184,6 +184,12 @@ class Store:
                 found.append(rel)
         yield from sorted(found)
 
+    def projects(self) -> List[str]:
+        """The project buckets that exist on disk, sorted."""
+        if not self.memories.is_dir():
+            return []
+        return sorted(p.name for p in self.memories.iterdir() if p.is_dir() and is_project_id(p.name))
+
     def list(self, prefix: str = "") -> List[Dict[str, object]]:
         out = []
         for rel in self.iter_paths():

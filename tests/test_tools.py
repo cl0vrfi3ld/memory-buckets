@@ -2,7 +2,7 @@ import json
 import unittest
 
 from .helpers import StoreCase, doc
-from memory_buckets import config, inbox, index, scopes, tools
+from memory_buckets import config, frontmatter, inbox, index, scopes, tools
 from memory_buckets.store import StoreError, version
 
 
@@ -17,7 +17,8 @@ class ToolsTest(StoreCase):
 
     def call(self, name, project=None, context="primary", **args):
         c = config.Config()
-        ctx = tools.Context(self.store, self.index, scopes.resolve(c, project, context), c,
+        ctx = tools.Context(self.store, self.index,
+                            scopes.resolve(c, project, context, buckets=["clogpt", "proj-1"]), c,
                             source="telegram", on_write=self.written.append)
         result = tools.handle(name, args, ctx)
         json.dumps(result)  # always serialisable
@@ -71,19 +72,80 @@ class ToolsTest(StoreCase):
         self.assertEqual(result["current"]["version"], version(self.content("global/topics/nix.md").encode()))
 
     def test_out_of_scope_and_read_only(self):
-        result = self.call("memory_write", path="proj-1/topics/x.md", description="x", body="y", if_version="new")
+        result = self.call("memory_write", path="unknown-bucket/topics/x.md", description="x", body="y", if_version="new")
         self.assertEqual(result["error"]["code"], "out_of_scope")
         self.assertEqual(result["allowed_prefixes"], ["global/"])
         cron = self.call("memory_append", context="cron", path="global/topics/nix.md", lines=["x"])
         self.assertEqual(cron["error"]["code"], "read_only")
 
+    def test_unscoped_session_writes_into_another_bucket(self):
+        # Append to an existing file: allowed, provenance records the cross-project write.
+        got = self.call("memory_append", path="proj-1/topics/deploy.md", lines=["also on fly.io"])
+        self.assertTrue(got["ok"], got)
+        text = self.content("proj-1/topics/deploy.md")
+        self.assertIn("- also on fly.io\n", text)
+        self.assertIn("sources:\n  - telegram@*\n", text)
+        # Create a new file: allowed.
+        made = self.call("memory_write", path="proj-1/topics/notes.md", description="Notes",
+                         body="- x", if_version="new")
+        self.assertTrue(made["ok"], made)
+        self.assertIn("sources:\n  - telegram@*\n", self.content("proj-1/topics/notes.md"))
+        # Edit and delete: refused, and the error points at memory_append.
+        got = self.call("memory_str_replace", path="proj-1/topics/deploy.md", old="- colmena", new="- x")
+        self.assertEqual(got["error"]["code"], "out_of_scope")
+        self.assertIn("memory_append", got["error"]["message"])
+        got = self.call("memory_write", path="proj-1/topics/deploy.md", description="x", body="- y",
+                        if_version=version(self.content("proj-1/topics/deploy.md").encode()))
+        self.assertEqual(got["error"]["code"], "out_of_scope")
+        self.assertIn("memory_append", got["error"]["message"])
+        v = version(self.content("proj-1/topics/deploy.md").encode())
+        got = self.call("memory_delete", path="proj-1/topics/deploy.md", if_version=v)
+        self.assertEqual(got["error"]["code"], "out_of_scope")
+
     def test_project_session_writes(self):
-        self.assertTrue(self.call("memory_append", project="proj-1", path="proj-1/topics/deploy.md", lines=["uses flakes"])["ok"])
+        self.assertTrue(self.call("memory_append", project="proj-1", path="proj-1/topics/deploy.md",
+                                  lines=["uses flakes"])["ok"])
         self.assertTrue(self.call("memory_write", project="proj-1", path="global/people/sam.md", description="Sam",
                                   body="- x", if_version="new")["ok"])
         self.assertTrue(self.call("memory_append", project="proj-1", path="global/topics/nix.md", lines=["x"])["ok"])
-        self.assertEqual(self.call("memory_append", project="proj-1", path="clogpt/topics/x.md", lines=["x"])["error"]["code"],
-                         "out_of_scope")
+        self.assertEqual(self.call("memory_append", project="proj-1", path="clogpt/topics/x.md",
+                                   lines=["x"])["error"]["code"],
+                         "not_found", "clogpt is not a bucket in this store")
+
+    def test_cross_project_write_from_a_project_session(self):
+        self.put("clogpt/topics/x.md", doc("x", "X", "- a\n"))
+        self.index.reconcile()
+        got, seen = self.call_notified("memory_append", True, project="proj-1",
+                                       path="clogpt/topics/x.md", lines=["b"])
+        self.assertTrue(got["ok"], got)
+        self.assertEqual(seen, ["📝 Saved to clogpt/topics/x.md"])
+        self.assertIn("sources:\n  - cli@proj-1\n", self.content("clogpt/topics/x.md"))
+        # A write inside the session's own scope stays quiet and unadorned.
+        got, seen = self.call_notified("memory_append", True, project="proj-1",
+                                       path="proj-1/topics/deploy.md", lines=["x"])
+        self.assertTrue(got["ok"], got)
+        self.assertEqual(seen, [])
+        self.assertIn("  - cli\n", self.content("proj-1/topics/deploy.md"))
+
+    def test_cross_project_status_line_without_a_channel_adds_no_next(self):
+        # D5: the status line is best-effort; unlike the inbox notice it never
+        # falls back to asking the agent to relay it.
+        self.put("clogpt/topics/x.md", doc("x", "X", "- a\n"))
+        self.index.reconcile()
+        for notify in (None, False):
+            got, _ = self.call_notified("memory_append", notify, project="proj-1",
+                                        path="clogpt/topics/x.md", lines=["x"])
+            self.assertTrue(got["ok"], got)
+            self.assertNotIn("next", got)
+
+    def test_at_star_source_round_trips_through_frontmatter(self):
+        # `tui@*` (a cross-project write from an unscoped session) must survive a
+        # write/read cycle: written as YAML, parsed back to the same string.
+        got = self.call("memory_write", path="proj-1/topics/fresh.md", description="Fresh",
+                        body="- x", if_version="new")
+        self.assertTrue(got["ok"], got)
+        fm, body = frontmatter.parse(self.content("proj-1/topics/fresh.md"))
+        self.assertEqual(fm.get("sources"), ["telegram@*"])
 
     def test_every_edit_stamps_edited_at(self):
         import re
@@ -123,7 +185,8 @@ class ToolsTest(StoreCase):
         """Call with a ``notify`` that records messages and returns ``shown``."""
         c = config.Config.from_dict(args.pop("cfg", {}))
         seen = []
-        ctx = tools.Context(self.store, self.index, scopes.resolve(c, project), c, source="cli",
+        ctx = tools.Context(self.store, self.index,
+                            scopes.resolve(c, project, buckets=["clogpt", "proj-1"]), c, source="cli",
                             notify=(lambda m: seen.append(m) or shown) if shown is not None else None)
         return tools.handle(name, args, ctx), seen
 
@@ -198,19 +261,6 @@ class ToolsTest(StoreCase):
         got = tools.handle("memory_append", {"path": "global/inbox.md", "lines": ["x"]}, ctx)
         self.assertTrue(got["ok"], got)
         self.assertIn("next", got)
-
-    def test_confined_sessions_may_only_append_to_the_inbox(self):
-        cfg = {"write_policy": "confined"}
-        got, _ = self.call_notified("memory_append", True, project="proj-1", cfg=cfg,
-                                    path="global/inbox.md", lines=["unsure"])
-        self.assertTrue(got["ok"], got)
-        got, _ = self.call_notified("memory_write", True, project="proj-1", cfg=cfg, path="global/inbox.md",
-                                    description="x", body="- gone", if_version=version(self.content("global/inbox.md").encode()))
-        self.assertEqual(got["error"]["code"], "out_of_scope")
-        self.assertIn("may only append to global/inbox.md", got["error"]["message"])
-        got, _ = self.call_notified("memory_append", True, project="proj-1", cfg=cfg,
-                                    path="global/topics/nix.md", lines=["x"])
-        self.assertEqual(got["error"]["code"], "out_of_scope")
 
     def test_delete(self):
         v = version(self.content("global/topics/nix.md").encode())

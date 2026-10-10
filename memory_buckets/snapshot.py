@@ -121,22 +121,6 @@ This session is in the project {p}. Save each fact once, in one place:
     + GLOBAL_ROUTES_IN_PROJECT
 )
 
-CONFINED = (
-    """\
-### Where facts go
-This session is in the project {p}. You can write only under {p}/, and append to """
-    + INBOX
-    + """.
-- When a fact only matters to {p}, save it under {p}/.
-- When a fact is also true outside {p}, do not save it. Tell the user in one sentence that a session outside the project can.
-- When a fact is partly both, save the project part. Treat the general part as above.
-- When a fact is about another project, follow "Facts for another project".
-"""
-    + INBOX_BULLET
-    + "\n\n"
-    + PROJECT_ROUTES
-)
-
 ELSEWHERE = (
     """\
 ### Facts for another project
@@ -161,8 +145,6 @@ def rules(scope: Scope, config: Config, projects: List[str]) -> str:
         return READING + "\n\n" + READ_ONLY.format(reason=scope.read_only_reason)
     if not scope.project:
         where = UNSCOPED
-    elif config.write_policy == "confined":
-        where = CONFINED.format(p=scope.project)
     else:
         where = SHARED.format(p=scope.project)
     elsewhere = ELSEWHERE.format(

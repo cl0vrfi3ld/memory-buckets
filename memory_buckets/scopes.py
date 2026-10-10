@@ -6,10 +6,13 @@ mid-chat applies straight away. The project comes from Hermes's own Projects
 
 Reads: explicit paths anywhere are allowed ("project subtrees on request").
 Default reads (listing, search, snapshot) are ``global/`` plus the session's
-project. Writes: unscoped ⇒ ``global/``. Project-scoped ⇒ the project plus all
-of ``global/`` (``write_policy: shared``; the prompt keeps project-specific facts
-in the project), or only the project plus appends to ``global/inbox.md``
-(``confined``). cron/subagent/flush contexts, or ``readonly``, write nothing.
+project.
+
+Writes (ADR-0015): unscoped ⇒ ``global/``. Project-scoped ⇒ the project plus
+all of ``global/``. Any writable session may also append to existing files and
+create new ones in another project's bucket; overwriting, ``str_replace`` and
+deletes there stay with that project's own sessions. cron/subagent/flush
+contexts, or ``readonly``, write nothing.
 """
 
 from __future__ import annotations
@@ -21,7 +24,6 @@ from .config import Config
 from .store import GLOBAL, StoreError, is_project_id
 
 READ_ONLY_CONTEXTS = {"cron", "subagent", "flush"}
-INBOX = f"{GLOBAL}/inbox.md"
 
 
 @dataclass
@@ -31,7 +33,9 @@ class Scope:
     read_only: bool = False
     read_only_reason: str = ""
     write_prefixes: List[str] = field(default_factory=list)
-    append_paths: List[str] = field(default_factory=list)  # files this session may only append to
+    # Buckets this session may append to or create files in, but not edit or
+    # delete: every known bucket except the session's own.
+    other_buckets: List[str] = field(default_factory=list)
 
     @property
     def read_prefixes(self) -> List[str]:
@@ -43,15 +47,30 @@ class Scope:
     def can_write(self, path: str) -> bool:
         return any(path == p or (p.endswith("/") and path.startswith(p)) for p in self.write_prefixes)
 
-    def check_write(self, path: str, *, append: bool = False) -> None:
+    @staticmethod
+    def _bucket_of(path: str) -> str:
+        return path.split("/", 1)[0]
+
+    def cross_project_write(self, path: str) -> bool:
+        """True for an add into another known bucket (provenance, status line)."""
+        return not self.can_write(path) and self._bucket_of(path) in self.other_buckets
+
+    def check_write(self, path: str, *, append: bool = False, create: bool = False) -> None:
+        """``append``/``create`` name what the caller is doing; without them the
+        write may edit. In another bucket only append and create pass."""
         if self.read_only:
             raise StoreError("read_only", f"memory is read-only in this session ({self.read_only_reason})")
-        if self.can_write(path) or (append and path in self.append_paths):
+        if self.can_write(path):
             return
+        if self.cross_project_write(path):
+            if append or create:
+                return
+            raise StoreError(
+                "out_of_scope",
+                f"you may only add to {self._bucket_of(path)}/ with memory_append (no edits or deletes there)",
+                allowed_prefixes=list(self.write_prefixes),
+            )
         where = f"project '{self.project}'" if self.project else "an unscoped session"
-        if path in self.append_paths:
-            raise StoreError("out_of_scope", f"{where} may only append to {path}, with memory_append",
-                             allowed_prefixes=list(self.write_prefixes))
         raise StoreError(
             "out_of_scope",
             f"{path} is outside what {where} may write",
@@ -68,19 +87,24 @@ class Scope:
         }
 
 
-def resolve(config: Config, project: Optional[str] = None, agent_context: str = "primary") -> Scope:
-    """``project`` is the session's bucket (a Hermes project slug), or None."""
+def known_buckets(on_disk: List[str], hermes: Optional[List[str]]) -> List[str]:
+    """Buckets the session could write into across projects: on-disk ∪ Hermes's, sorted."""
+    return sorted({b for b in [*on_disk, *(hermes or [])] if is_project_id(b)})
+
+
+def resolve(config: Config, project: Optional[str] = None, agent_context: str = "primary",
+            buckets: Optional[List[str]] = None) -> Scope:
+    """``project`` is the session's bucket (a Hermes project slug), or None.
+    ``buckets`` are the known buckets (on-disk ∪ Hermes); anything in them but
+    not the session's own may be appended to or created in."""
     if project is not None and not is_project_id(project):
         project = None
     scope = Scope(project=project, source="hermes-project" if project else "unscoped")
     if project is None:
         scope.write_prefixes = [f"{GLOBAL}/"]
-    elif config.write_policy == "confined":
-        # The inbox is append-only here: unsure facts and facts for other projects go there.
-        scope.write_prefixes = [f"{project}/"]
-        scope.append_paths = [INBOX]
     else:
         scope.write_prefixes = [f"{project}/", f"{GLOBAL}/"]
+    scope.other_buckets = [b for b in (buckets or []) if b != project]
 
     if config.readonly:
         scope.read_only, scope.read_only_reason = True, "readonly is set in config"
