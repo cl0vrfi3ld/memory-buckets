@@ -137,7 +137,7 @@ def _inbox_plan(store: Store) -> Tuple[Optional[Step], Optional[bytes]]:
     """Give the inbox the current description. None: nothing to do.
 
     The plugin owns the inbox's description, as it owns its name: the prompt's inbox
-    note and the sort-inbox skill depend on what it says, and older versions (and
+    note and the sort-imports skill depend on what it says, and older versions (and
     older skills) wrote descriptions that contradict them. An edited one is replaced
     too; the original is kept in the backup."""
     try:

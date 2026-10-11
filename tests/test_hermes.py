@@ -26,7 +26,7 @@ IGNORE = shutil.ignore_patterns("tests", "__pycache__", "build", "dist", "*.egg-
 @unittest.skipUnless(HERMES_PYTHON, "set HERMES_PYTHON to Hermes's interpreter to run")
 class HermesIntegrationTest(unittest.TestCase):
     def probe(self, tmp, home, pythonpath=None, skills_dir="plugins/memory-buckets/skills"):
-        # skills.external_dirs is how /sort-inbox becomes a slash command (README: Importing built-in memory).
+        # skills.external_dirs is how /sort-imports becomes a slash command (README: Importing built-in memory).
         (home / "config.yaml").write_text(
             "memory:\n  provider: memory-buckets\n  memory_enabled: false\n  user_profile_enabled: false\n"
             f"skills:\n  external_dirs:\n    - {skills_dir}\n")
@@ -47,7 +47,7 @@ class HermesIntegrationTest(unittest.TestCase):
             shutil.copytree(PLUGIN_DIR, home / "plugins/memory-buckets", ignore=IGNORE)
             out = self.probe(tmp, home)
             self.check(out)
-            self.assertTrue(out["skill_ok"], "skill_view('memory-buckets:sort-inbox')")
+            self.assertTrue(out["skill_ok"], "skill_view('memory-buckets:sort-imports')")
             self.assertEqual(out["skill_name"], "memory-buckets:sort-imports")
 
     @unittest.skipUnless(CAN_PIP, "needs pip and hatchling (uv sync installs them)")
@@ -89,7 +89,7 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertEqual(out["diagnose_exit"], 0)
         self.assertFalse(out["pm_member"], "plugin.yaml needs python_runtime: external")
         self.assertEqual(out["slash"], [], "the plugin registers no slash commands")
-        self.assertTrue(out["slash_skill"], "/sort-inbox via skills.external_dirs")
+        self.assertTrue(out["slash_skill"], "/sort-imports via skills.external_dirs")
         self.assertEqual(out["project_scope"]["project"], "proj-1")
         self.assertEqual(out["project_scope"]["source"], "hermes-project")
         self.assertEqual(out["project_scope"]["writes"], ["proj-1/", "global/"])

@@ -1,6 +1,6 @@
 ---
-name: sort-inbox
-description: Sort the imported memory in global/inbox.md. File each fact where it belongs (global/ or a project's bucket), then remove its line from the inbox.
+name: sort-imports
+description: Sort the imported memory in global/inbox.md. File each fact where it belongs (global/ or a project bucket), then remove its line from the inbox.
 ---
 # Sort the imported memory
 

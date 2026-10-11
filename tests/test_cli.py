@@ -56,19 +56,58 @@ class CliTest(StoreCase):
         self.assertIn("----- prompt -----", out)
         self.assertIn("global/inbox.md", out.split("----- prompt -----")[1])
         self.assertIn("cp -a", out)
-        code, again = self.run_cli("sort-prompt")
+        code, again = self.run_cli("import-prompt")
         self.assertEqual(code, 0)
         self.assertEqual(again, out[out.index("\nNext:"):])
 
-    def test_sort_prompt_needs_an_inbox(self):
-        code, out = self.run_cli("sort-prompt")
+    def test_import_prompt_needs_an_inbox(self):
+        code, out = self.run_cli("import-prompt")
         self.assertEqual(code, 1)
         self.assertIn("has nothing to sort", out)
 
-    def test_sort_prompt_only_names_real_tools(self):
+    def test_import_prompt_prints_the_skill_body(self):
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported\n- a\n"))
+        code, out = self.run_cli("import-prompt")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(cli.SKILL_FILE.parent.name, "sort-imports")
+        self.assertIn(cli.import_prompt(), out)
+        self.assertIn("hermes memory-buckets import-prompt", out, "tells the user how to print it again")
+        self.assertTrue(cli.import_prompt().startswith("# Sort the imported memory"))
+
+    def test_removed_commands_have_no_alias(self):
+        # D9: sort-prompt became import-prompt; proposals are gone with their commands.
+        for command in ("sort-prompt", "pending", "apply", "reject"):
+            with self.subTest(command), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as caught:
+                    run_hermes_cli(command)
+                self.assertEqual(caught.exception.code, 2)
+
+    def test_the_skill_has_no_proposal_instructions(self):
+        text = cli.SKILL_FILE.read_text().lower()
+        self.assertIn("name: sort-imports\n", text)
+        for gone in ("propos", "/memory-apply", "/memory-pending", "/memory-reject", "sort-inbox"):
+            self.assertNotIn(gone, text)
+
+    def test_diagnose_checks_sort_imports(self):
+        import tempfile
+        from pathlib import Path
+        lines = []
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as out:
+            cli._diagnose_skill(Path(tmp), lambda ok, msg: lines.append((ok, msg)))
+            self.assertEqual(len(lines), 1)
+            self.assertFalse(lines[0][0])
+            self.assertIn(f"no sort-imports/SKILL.md in {tmp}", lines[0][1])
+            (Path(tmp) / "sort-imports").mkdir()
+            (Path(tmp) / "sort-imports/SKILL.md").write_text("---\nname: sort-imports\n---\nx\n")
+            lines.clear()
+            cli._diagnose_skill(Path(tmp), lambda ok, msg: lines.append((ok, msg)))
+            self.assertEqual(lines, [(True, f"skill file {Path(tmp) / 'sort-imports/SKILL.md'}")])
+        self.assertIn("/sort-imports", out.getvalue(), "outside Hermes it says what it can't check")
+
+    def test_import_prompt_only_names_real_tools(self):
         import re
         from memory_buckets import tools
-        named = set(re.findall(r"memory_[a-z_]+", cli.sort_prompt()))
+        named = set(re.findall(r"memory_[a-z_]+", cli.import_prompt()))
         self.assertTrue(named)
         self.assertLessEqual(named, set(tools.TOOL_NAMES))
 
@@ -118,14 +157,14 @@ class CliTest(StoreCase):
         self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported\n"))
         self.assertNotIn("inbox ", self.run_cli("status")[1])
         self.assertNotIn("waiting to be sorted", self.run_cli("lint")[1])
-        code, out = self.run_cli("sort-prompt")
+        code, out = self.run_cli("import-prompt")
         self.assertEqual(code, 1)
         self.assertIn("has nothing to sort", out)
         self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION,
                                         "## imported\n- a\n- b\n```\n- not an entry\n```\n"))
         self.assertIn("inbox       global/inbox.md: 2 entries waiting to be sorted", self.run_cli("status")[1])
         self.assertIn("note: global/inbox.md has 2 entries waiting to be sorted", self.run_cli("lint")[1])
-        self.assertEqual(self.run_cli("sort-prompt")[0], 0)
+        self.assertEqual(self.run_cli("import-prompt")[0], 0)
 
     def test_old_inbox_description_is_reported(self):
         self.put("global/inbox.md", doc("inbox", "Imported memory; sort it, then delete it", "- a\n"))

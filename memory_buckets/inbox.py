@@ -2,7 +2,7 @@
 
 It holds entries from ``hermes memory-buckets import`` and built-in memory writes
 mirrored by the provider's ``on_memory_write`` bridge. The agent never appends to
-it (``memory_append`` refuses the path); the sort-inbox skill removes filed lines
+it (``memory_append`` refuses the path); the sort-imports skill removes filed lines
 with ``memory_str_replace``. It's a standing file: sorting empties it, but nothing
 needs to delete it.
 

@@ -30,11 +30,11 @@ from .tools import TOOL_NAMES
 
 ENTRY_DELIMITER = "\n§\n"  # Hermes tools/memory_tool_store.py
 
-SKILL_FILE = SKILLS_DIR / "sort-inbox" / "SKILL.md"
+SKILL_FILE = SKILLS_DIR / "sort-imports" / "SKILL.md"
 
 
-def sort_prompt() -> str:
-    """The sort-inbox skill's body: the same instructions, pasted as a prompt."""
+def import_prompt() -> str:
+    """The sort-imports skill's body: the same instructions, pasted as a prompt."""
     text = SKILL_FILE.read_text()
     return frontmatter.parse(text)[1].strip() if text.startswith("---") else text.strip()
 
@@ -228,34 +228,34 @@ def cmd_diagnose(args) -> int:
 
 
 def _diagnose_skill(skills_dir: Path, say) -> None:
-    """The sort-inbox skill and its /sort-inbox command (README: The inbox and proposals)."""
-    skill_md = skills_dir / "sort-inbox" / "SKILL.md"
+    """The sort-imports skill and its /sort-imports command (README: Importing built-in memory)."""
+    skill_md = skills_dir / "sort-imports" / "SKILL.md"
     say(skill_md.is_file(), f"skill file {skill_md}" if skill_md.is_file()
-        else f"no sort-inbox/SKILL.md in {skills_dir}: this copy of the plugin is out of date")
+        else f"no sort-imports/SKILL.md in {skills_dir}: this copy of the plugin is out of date")
     if not skill_md.is_file():
         return
     try:
         from agent.skill_commands import scan_skill_commands
         from agent.skill_utils import get_external_skills_dirs, get_skills_dir
     except ImportError:
-        _out("      (this Hermes has no agent.skill_commands: can't check /sort-inbox)")
+        _out("      (this Hermes has no agent.skill_commands: can't check /sort-imports)")
         return
     skills_dir = skills_dir.resolve()
     external = [d.resolve() for d in get_external_skills_dirs()]
     if skills_dir in external:
         _out(f"ok    skills.external_dirs includes {skills_dir}")
     else:
-        _out("note  /sort-inbox is off: skills.external_dirs doesn't include this plugin's skills.")
-        _out("      Asking the agent to sort the inbox still works. To get /sort-inbox, add to config.yaml:")
+        _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
+        _out("      Asking the agent to sort your imported memory still works. To get /sort-imports, add to config.yaml:")
         _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
-    entry = scan_skill_commands().get("/sort-inbox")
+    entry = scan_skill_commands().get("/sort-imports")
     if entry is None:
         if skills_dir in external:
-            say(False, "/sort-inbox isn't registered, although the directory is configured (see Hermes's log)")
+            say(False, "/sort-imports isn't registered, although the directory is configured (see Hermes's log)")
     else:
         ours = Path(entry["skill_md_path"]).resolve() == skill_md.resolve()
-        say(ours, "/sort-inbox → this plugin's skill" if ours
-            else f"/sort-inbox is claimed by another skill: {entry['skill_md_path']}")
+        say(ours, "/sort-imports → this plugin's skill" if ours
+            else f"/sort-imports is claimed by another skill: {entry['skill_md_path']}")
         _out("      A running chat or gateway keeps its old skill list: run /reload-skills, or restart the gateway.")
     # Copies of an older sort prompt saved as local skills shadow the real one.
     local = get_skills_dir()
@@ -480,31 +480,31 @@ def cmd_import(args) -> int:
         inbox.append(store, heading, entries, source="cli:import")
         _out(f"imported {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} from {path} into {inbox.PATH}")
     if not args.dry_run:
-        _print_sort_prompt(store)
+        _print_import_prompt(store)
     return 0
 
 
-def _print_sort_prompt(store: Store) -> None:
+def _print_import_prompt(store: Store) -> None:
     _out()
     _out("Next:")
     _out(f"  1. Back up the store first: cp -a {store.root} {store.root}.before-sort")
-    _out("  2. In a new chat that isn't in a project, ask the agent to sort your memory inbox")
-    _out("     (it uses memory-buckets's sort-inbox skill), or paste the prompt below.")
+    _out("  2. In a new chat, ask the agent to sort your imported memory")
+    _out("     (it uses memory-buckets's sort-imports skill), or paste the prompt below.")
     _out("  3. It files every fact itself, and removes each line from the inbox as it goes.")
     _out(f"  4. Review with: diff -ru {store.root}.before-sort/memories {store.memories}")
-    _out("     (Print this again with: hermes memory-buckets sort-prompt)")
+    _out("     (Print this again with: hermes memory-buckets import-prompt)")
     _out()
     _out("----- prompt -----")
-    _out(sort_prompt())
+    _out(import_prompt())
     _out("------------------")
 
 
-def cmd_sort_prompt(args) -> int:
+def cmd_import_prompt(args) -> int:
     _, _, store, _ = _open(args)
     if not _inbox_entries(store):
         _out(f"({inbox.PATH} in {store.root} has nothing to sort)")
         return 1
-    _print_sort_prompt(store)
+    _print_import_prompt(store)
     return 0
 
 
@@ -544,14 +544,14 @@ def _add_commands(parser: argparse.ArgumentParser) -> None:
                    help="Import another instance's built-in memory (its HERMES_HOME); default: this one")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(bm_func=cmd_import)
-    p = sub.add_parser("sort-prompt", help="Print the prompt that asks the agent to sort global/inbox.md")
-    p.set_defaults(bm_func=cmd_sort_prompt)
+    p = sub.add_parser("import-prompt", help="Print the prompt that asks the agent to sort the imported memory in global/inbox.md")
+    p.set_defaults(bm_func=cmd_import_prompt)
 
 
 def _dispatch(args) -> int:
     func = getattr(args, "bm_func", None)
     if func is None:
-        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, sort-prompt (--help for more)", file=sys.stderr)
+        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, import-prompt (--help for more)", file=sys.stderr)
         return 2
     return func(args)
 

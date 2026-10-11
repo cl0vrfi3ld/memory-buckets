@@ -48,7 +48,7 @@ class RegisterTest(unittest.TestCase):
         ctx.register_command = lambda name, handler, description="", args_hint="": ctx.commands.__setitem__(name, handler)
         memory_buckets.register(ctx)
         [(name, path)] = ctx.skills
-        self.assertEqual(name, "sort-inbox")
+        self.assertEqual(name, "sort-imports")
         self.assertTrue(path.is_file())
         self.assertEqual(ctx.commands, {}, "the skill is the only slash command; the plugin registers none")
 

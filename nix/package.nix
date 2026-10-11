@@ -68,7 +68,7 @@ buildPythonPackage {
 
   passthru = {
     inherit model;
-    # For skills.external_dirs, which turns the bundled sort-inbox skill into /sort-inbox.
+    # For skills.external_dirs, which turns the bundled sort-imports skill into /sort-imports.
     skillsPath = "${python.sitePackages}/memory_buckets/skills";
   };
 

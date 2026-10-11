@@ -86,7 +86,7 @@ try:
 except SystemExit as exc:
     out["diagnose_exit"] = exc.code
 
-# The sort-inbox skill (the plugin registers no slash commands of its own).
+# The sort-imports skill (the plugin registers no slash commands of its own).
 from hermes_cli.plugins import get_plugin_command_handler  # noqa: E402
 from tools.skills_tool import skill_view  # noqa: E402
 
@@ -94,12 +94,12 @@ from tools.skills_tool import skill_view  # noqa: E402
 skill = sys.modules[type(p1).__module__.rsplit(".", 1)[0] + ".snapshot"].SORT_SKILL
 out["skill_name"] = skill
 # The canonical name, whatever the prompt says: tracks whether Hermes still can't serve pip installs' skills.
-viewed = json.loads(skill_view("memory-buckets:sort-inbox"))
+viewed = json.loads(skill_view("memory-buckets:sort-imports"))
 out["skill_ok"] = bool(viewed.get("success")) and "global/inbox.md" in json.dumps(viewed)
 from agent.skill_commands import build_skill_invocation_message, scan_skill_commands  # noqa: E402
 
-out["slash_skill"] = ("/sort-inbox" in scan_skill_commands()
-                      and "global/inbox.md" in (build_skill_invocation_message("/sort-inbox", "") or ""))
+out["slash_skill"] = ("/sort-imports" in scan_skill_commands()
+                      and "global/inbox.md" in (build_skill_invocation_message("/sort-imports", "") or ""))
 out["slash"] = sorted(n for n in ("memory-pending", "memory-apply", "memory-reject") if get_plugin_command_handler(n))
 
 # Scoping follows Hermes's own Projects: the project owning the session's cwd names the bucket.
