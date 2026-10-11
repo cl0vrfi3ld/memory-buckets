@@ -43,6 +43,7 @@ logger = logging.getLogger("memory_buckets")
 
 BACKUP_DIR = "_backup"
 INDEX_MIGRATION = "0.1.0"
+INBOX_MIGRATION = "0.2.0"  # the description change lands with the _pending/ removal
 PENDING_MIGRATION = "0.2.0"
 PENDING_DIR = "_pending"  # 0.1.0's pending.py PENDING_DIR: <store>/_pending/<id>.json
 SOURCE = "migration"
@@ -322,7 +323,7 @@ def run(store: Store, *, dry_run: bool = False) -> List[Step]:
         step, data = _inbox_plan(store)
         if step is not None and data is not None:
             try:
-                _keep(store, GLOBAL, "inbox.md", store.read_bytes(inbox.PATH))
+                _keep(store, GLOBAL, "inbox.md", store.read_bytes(inbox.PATH), INBOX_MIGRATION)
                 store._atomic_write(store.resolve(inbox.PATH), data)
             except (OSError, StoreError) as err:
                 step = Step(GLOBAL, "skip", _reason(err))

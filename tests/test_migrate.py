@@ -18,6 +18,9 @@ class IndexMigrationTest(StoreCase):
     def kept(self, project, name):
         return (migrate.backup_dir(self.store) / project / name).read_text()
 
+    def kept_020(self, project, name):
+        return (migrate.backup_dir(self.store, migrate.INBOX_MIGRATION) / project / name).read_text()
+
     def test_index_becomes_the_profile(self):
         original = doc("index", "proj-1 overview", "- a web app\n- deploys with colmena\n")
         self.put("proj-1/index.md", original)
@@ -163,8 +166,17 @@ class IndexMigrationTest(StoreCase):
         text = self.store.read("global/inbox.md")["content"]
         self.assertIn(f"description: {inbox.DESCRIPTION}\n", text)
         self.assertTrue(text.endswith("## imported USER.md\n- Ivy\n"))
-        self.assertEqual(self.kept("global", "inbox.md"), old)
+        self.assertEqual(self.kept_020("global", "inbox.md"), old)
         self.assertEqual(migrate.run(self.store), [])
+
+    def test_the_inbox_backup_lands_in_the_current_migration_folder(self):
+        # 0.2.0 changed the description, so its backup belongs in _backup/0.2.0/,
+        # not _backup/0.1.0/ (where the index-migration keeps its copies).
+        old = doc("inbox", OLD_INBOX_DESCRIPTION, "- x\n")
+        self.put("global/inbox.md", old)
+        migrate.run(self.store)
+        self.assertEqual(self.kept_020("global", "inbox.md"), old)
+        self.assertFalse((migrate.backup_dir(self.store) / "global/inbox.md").exists())
 
     def test_any_other_inbox_description_is_replaced(self):
         # e.g. one an older skill wrote, which contradicts the prompt's inbox note.
@@ -174,7 +186,7 @@ class IndexMigrationTest(StoreCase):
         self.assertEqual([s.action for s in steps], ["inbox"])
         self.assertIn("was: 'Staging area for project facts", steps[0].describe())
         self.assertIn(f"description: {inbox.DESCRIPTION}\n", self.store.read("global/inbox.md")["content"])
-        self.assertEqual(self.kept("global", "inbox.md"), old)
+        self.assertEqual(self.kept_020("global", "inbox.md"), old)
 
     def test_current_inbox_description_is_left_alone(self):
         self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "- x\n"))
