@@ -87,6 +87,18 @@ class StoreTest(StoreCase):
         self.assertFalse(st.is_project_id("global"))
         self.assertFalse(st.is_project_id("Proj"))
 
+    def test_trailing_newline_is_rejected(self):
+        # $ also matches before a final newline in Python, so a plain .match
+        # with $ accepted "global/topics/x.md\n" and created a file named
+        # "x.md\n" on disk; anchors must be absolute.
+        self.assertFalse(st.is_project_id("proj-1\n"))
+        for path in ("global/topics/x.md\n", "global/inbox.md\n", "proj-1/topics/x.md\n"):
+            with self.assertRaises(st.StoreError) as caught:
+                st.validate_path(path)
+            self.assertEqual(caught.exception.code, "invalid_path")
+            with self.assertRaises(st.StoreError):
+                self.store.write(path, doc("x", "x"), "new")
+
 
 if __name__ == "__main__":
     unittest.main()

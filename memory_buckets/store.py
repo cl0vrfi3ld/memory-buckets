@@ -39,15 +39,17 @@ GLOBAL = "global"
 MEMORIES_DIR = "memories"
 
 _SEG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
-SEGMENT_RE = re.compile(rf"^{_SEG}$")
+# Anchors are \Z, not $: $ also matches before a trailing newline, which
+# accepted paths like "global/topics/x.md\n" and created files named "x.md\n".
+SEGMENT_RE = re.compile(rf"^{_SEG}\Z")
 _PROJECT = rf"(?!{GLOBAL}/){_SEG}"
 _PATH_RES = tuple(
     re.compile(p)
     for p in (
-        rf"^{GLOBAL}/(?:profile|preferences|inbox)\.md$",
-        rf"^{GLOBAL}/(?:topics|areas|people)/{_SEG}\.md$",
-        rf"^{_PROJECT}/(?:profile|preferences)\.md$",
-        rf"^{_PROJECT}/(?:topics|areas|people)/{_SEG}\.md$",
+        rf"^{GLOBAL}/(?:profile|preferences|inbox)\.md\Z",
+        rf"^{GLOBAL}/(?:topics|areas|people)/{_SEG}\.md\Z",
+        rf"^{_PROJECT}/(?:profile|preferences)\.md\Z",
+        rf"^{_PROJECT}/(?:topics|areas|people)/{_SEG}\.md\Z",
     )
 )
 
