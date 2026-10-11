@@ -62,6 +62,15 @@ class TokenizerTest(unittest.TestCase):
         self.assertEqual(self.wp.tokens("tea\x00 coffee\tmorning"), ["tea", "coffee", "morning"])
         self.assertEqual(self.wp.tokens("tea\u200bs"), ["tea", "##s"], "zero-width space is deleted, joining the words")
 
+    def test_lowercasing_is_per_character_so_capital_sigma_never_becomes_final_sigma(self):
+        # str.lower() applies the final-sigma rule: "ΑΣ" -> "ας". tokenizers lowercases one char
+        # at a time, so Σ is always σ ("ασ"). An already-lowercase ς is left alone.
+        self.assertEqual(sm.normalise("ΑΣ"), "ασ")
+        self.assertEqual(sm.normalise("[λΠΣ]"), "[λπσ]")
+        self.assertEqual(sm.normalise("ΣΑΣ ΑΣ."), "σασ ασ.")
+        self.assertEqual(sm.normalise("ας"), "ας")
+        self.assertEqual(sm.normalise("İ"), "i", "accents are stripped before lowercasing")
+
 
 class StaticModelTest(unittest.TestCase):
     def setUp(self):
@@ -272,7 +281,8 @@ class RealModelTest(unittest.TestCase):
         corpus += list(self.DOCS.values()) + list(self.QUERIES) + [
             "Café naïve résumé Ångström", "日本語のテキストと中文", "emoji 🎉🚀 ok", "ﬁ ligature ＦＵＬＬＷＩＤＴＨ",
             "tab\there\u00a0nbsp\u200bzwsp", "x" * 150, "don't-stop... (really?!) [[wiki|links]] `code_ident`",
-            "İstanbul ß straße", "control\x07char\x00null", "Ⅻ ² ½ № ™"]
+            "İstanbul ß straße", "control\x07char\x00null", "Ⅻ ² ½ № ™",
+            "ΟΔΟΣ ΑΣ. ΣΑΣ (?![λΠΣ])[α-ωΑ-Ω]"]  # capital sigma stays σ, never final-sigma ς
         mismatches = [t for t in corpus if ref.encode(t, add_special_tokens=False).tokens != self.model.tokenizer.tokens(t)]
         self.assertEqual(mismatches[:5], [], f"{len(mismatches)}/{len(corpus)} lines tokenise differently")
 

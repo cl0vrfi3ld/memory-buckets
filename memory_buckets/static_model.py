@@ -99,7 +99,9 @@ def normalise(text: str) -> str:
         else:
             out.append(ch)
     text = unicodedata.normalize("NFD", "".join(out))
-    return "".join(c for c in text if unicodedata.category(c) != "Mn").lower()
+    # Lowercase one character at a time, as tokenizers does. str.lower() on the whole string applies
+    # the final-sigma rule (a word-final Σ becomes ς), which tokenizers doesn't: Σ is always σ.
+    return "".join(c.lower() for c in text if unicodedata.category(c) != "Mn")
 
 
 def pretokenise(text: str) -> List[str]:
