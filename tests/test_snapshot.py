@@ -64,8 +64,7 @@ class SnapshotTest(StoreCase):
                 text = self.build(**kw).text
                 rules = text.split("### global/profile.md", 1)[0]
                 self.assertNotIn("inbox", rules.lower())
-                self.assertNotIn("memory_propose", text)
-                self.assertNotIn("propose", text.split("### Inbox", 1)[0].lower())
+                self.assertNotIn("propos", text.lower(), "proposals are gone")
 
     def test_facts_for_another_project(self):
         # D1: add to another bucket, never edit it. D2: no bucket and no Hermes project, a global topic.

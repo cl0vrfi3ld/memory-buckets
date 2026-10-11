@@ -1,4 +1,4 @@
-"""``hermes memory-buckets``: status, lint, migrate, reindex, search, import, proposals.
+"""``hermes memory-buckets``: status, lint, migrate, reindex, search, import.
 
 Hermes imports the plugin directory's ``cli.py`` (which re-exports ``register_cli``
 from here) only while memory-buckets is the active provider. It looks for
@@ -19,7 +19,7 @@ from datetime import date
 from pathlib import Path
 from typing import List
 
-from . import frontmatter, inbox, migrate, pending, projects
+from . import frontmatter, inbox, migrate, projects
 from . import config as config_mod
 from . import static_model
 from ._paths import SKILLS_DIR
@@ -490,9 +490,7 @@ def _print_sort_prompt(store: Store) -> None:
     _out(f"  1. Back up the store first: cp -a {store.root} {store.root}.before-sort")
     _out("  2. In a new chat that isn't in a project, ask the agent to sort your memory inbox")
     _out("     (it uses memory-buckets's sort-inbox skill), or paste the prompt below.")
-    _out("  3. It files general facts itself and proposes project facts (and new projects).")
-    _out("     Apply each proposal yourself: /memory-pending, /memory-apply <id>, /memory-reject <id>")
-    _out("     in chat, or hermes memory-buckets pending / apply / reject here.")
+    _out("  3. It files every fact itself, and removes each line from the inbox as it goes.")
     _out(f"  4. Review with: diff -ru {store.root}.before-sort/memories {store.memories}")
     _out("     (Print this again with: hermes memory-buckets sort-prompt)")
     _out()
@@ -507,63 +505,6 @@ def cmd_sort_prompt(args) -> int:
         _out(f"({inbox.PATH} in {store.root} has nothing to sort)")
         return 1
     _print_sort_prompt(store)
-    return 0
-
-
-def cmd_pending(args) -> int:
-    _, _, store, _ = _open(args)
-    if not args.id:
-        _out(pending.summary_text(store).replace("/memory-pending <id>", "hermes memory-buckets pending <id>")
-             .replace("/memory-apply <id>, /memory-reject <id>",
-                      "hermes memory-buckets apply <id>, hermes memory-buckets reject <id>"))
-        return 0
-    try:
-        _out(pending.render(pending.load(store, args.id), store))
-    except StoreError as err:
-        _out(f"error: {err.message}")
-        return 1
-    return 0
-
-
-def cmd_apply(args) -> int:
-    _, _, store, _ = _open(args)
-    try:
-        proposal = pending.load(store, args.id)
-    except StoreError as err:
-        _out(f"error: {err.message}")
-        return 1
-    # Applying is the user's decision: insist on a person at a terminal.
-    if not sys.stdin.isatty():
-        _out("error: apply asks for confirmation, so it needs an interactive terminal")
-        return 2
-    _out(pending.render(proposal, store))
-    try:
-        answer = input(f"Apply {proposal['id']}? [y/N] ")
-    except EOFError:
-        answer = ""
-    if answer.strip().lower() not in ("y", "yes"):
-        _out("not applied")
-        return 1
-    try:
-        done = pending.apply(store, proposal["id"])
-    except StoreError as err:
-        _out(f"not applied: {err.message}")
-        return 1
-    _out(f"applied {done['id']} to {done['project']}: " + ", ".join(done["written"]))
-    note = projects.unlinked_note(done["project"])
-    if note:
-        _out(note)
-    return 0
-
-
-def cmd_reject(args) -> int:
-    _, _, store, _ = _open(args)
-    try:
-        p = pending.reject(store, args.id)
-    except StoreError as err:
-        _out(f"error: {err.message}")
-        return 1
-    _out(f"rejected {p['id']} ({p['project']}); its lines stay in {inbox.PATH}")
     return 0
 
 
@@ -605,21 +546,12 @@ def _add_commands(parser: argparse.ArgumentParser) -> None:
     p.set_defaults(bm_func=cmd_import)
     p = sub.add_parser("sort-prompt", help="Print the prompt that asks the agent to sort global/inbox.md")
     p.set_defaults(bm_func=cmd_sort_prompt)
-    p = sub.add_parser("pending", help="List pending proposals, or show one")
-    p.add_argument("id", nargs="?")
-    p.set_defaults(bm_func=cmd_pending)
-    p = sub.add_parser("apply", help="Commit one proposal (asks for confirmation)")
-    p.add_argument("id")
-    p.set_defaults(bm_func=cmd_apply)
-    p = sub.add_parser("reject", help="Discard one proposal")
-    p.add_argument("id")
-    p.set_defaults(bm_func=cmd_reject)
 
 
 def _dispatch(args) -> int:
     func = getattr(args, "bm_func", None)
     if func is None:
-        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, sort-prompt, pending, apply, reject (--help for more)", file=sys.stderr)
+        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, sort-prompt (--help for more)", file=sys.stderr)
         return 2
     return func(args)
 

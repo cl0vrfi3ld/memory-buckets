@@ -86,7 +86,7 @@ try:
 except SystemExit as exc:
     out["diagnose_exit"] = exc.code
 
-# The sort-inbox skill and the user-only slash commands.
+# The sort-inbox skill (the plugin registers no slash commands of its own).
 from hermes_cli.plugins import get_plugin_command_handler  # noqa: E402
 from tools.skills_tool import skill_view  # noqa: E402
 
@@ -95,23 +95,12 @@ skill = sys.modules[type(p1).__module__.rsplit(".", 1)[0] + ".snapshot"].SORT_SK
 out["skill_name"] = skill
 # The canonical name, whatever the prompt says: tracks whether Hermes still can't serve pip installs' skills.
 viewed = json.loads(skill_view("memory-buckets:sort-inbox"))
-out["skill_ok"] = bool(viewed.get("success")) and "memory_propose" in json.dumps(viewed)
+out["skill_ok"] = bool(viewed.get("success")) and "global/inbox.md" in json.dumps(viewed)
 from agent.skill_commands import build_skill_invocation_message, scan_skill_commands  # noqa: E402
 
 out["slash_skill"] = ("/sort-inbox" in scan_skill_commands()
-                      and "memory_propose" in (build_skill_invocation_message("/sort-inbox", "") or ""))
+                      and "global/inbox.md" in (build_skill_invocation_message("/sort-inbox", "") or ""))
 out["slash"] = sorted(n for n in ("memory-pending", "memory-apply", "memory-reject") if get_plugin_command_handler(n))
-(home / "memory-buckets/memories/proj-1").mkdir(parents=True, exist_ok=True)
-manager.handle_tool_call("memory_write", {"path": "global/inbox.md", "description": "inbox", "if_version": "new",
-                                          "body": "- proj-1 deploys with colmena\n"})
-proposed = json.loads(manager.handle_tool_call("memory_propose", {
-    "project": "proj-1", "summary": "deploy tool", "inbox_lines": ["proj-1 deploys with colmena"],
-    "files": [{"path": "proj-1/topics/deploy.md", "description": "How proj-1 deploys", "lines": ["colmena"]}]}))
-out["propose_ok"] = proposed.get("ok")
-out["staged_not_written"] = not (home / "memory-buckets/memories/proj-1/topics/deploy.md").exists()
-if proposed.get("ok"):
-    out["apply_reply"] = get_plugin_command_handler("memory-apply")(proposed["id"])
-out["applied"] = (home / "memory-buckets/memories/proj-1/topics/deploy.md").is_file()
 
 # Scoping follows Hermes's own Projects: the project owning the session's cwd names the bucket.
 from hermes_cli import projects_db as pdb  # noqa: E402

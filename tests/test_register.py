@@ -41,7 +41,7 @@ class RegisterTest(unittest.TestCase):
             self.assertTrue((provider.store.memories / "global").is_dir(), "store exists as soon as it's active")
             provider.shutdown()
 
-    def test_registers_the_skill_and_slash_commands(self):
+    def test_registers_the_skill_and_no_slash_commands(self):
         ctx = _Ctx()
         ctx.skills, ctx.commands = [], {}
         ctx.register_skill = lambda name, path: ctx.skills.append((name, path))
@@ -50,7 +50,7 @@ class RegisterTest(unittest.TestCase):
         [(name, path)] = ctx.skills
         self.assertEqual(name, "sort-inbox")
         self.assertTrue(path.is_file())
-        self.assertEqual(sorted(ctx.commands), ["memory-apply", "memory-pending", "memory-reject"])
+        self.assertEqual(ctx.commands, {}, "the skill is the only slash command; the plugin registers none")
 
     def test_hermes_discovery_heuristic_matches(self):
         # plugins/memory/__init__.py::_is_memory_provider_dir greps __init__.py.
@@ -93,7 +93,10 @@ class RegisterTest(unittest.TestCase):
     def test_tool_names_are_unique_and_not_hermes_core(self):
         # Mirrors toolsets._HERMES_CORE_TOOLS at rev 59004a62; hermes_probe.py checks the real list.
         core = {"memory", "session_search", "read_file", "write_file", "search_files", "todo_list"}
-        self.assertEqual(len(set(tools.TOOL_NAMES)), 8)
+        self.assertEqual(len(set(tools.TOOL_NAMES)), 7)
+        self.assertEqual(sorted(tools.TOOL_NAMES), sorted([
+            "memory_list", "memory_read", "memory_search", "memory_write", "memory_str_replace",
+            "memory_append", "memory_delete"]))
         self.assertFalse(core & set(tools.TOOL_NAMES))
 
 

@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from . import frontmatter, inbox, pending
+from . import frontmatter, inbox
 from .config import Config
 from .index import Index
 from .scopes import Scope
@@ -90,33 +90,6 @@ SCHEMAS: List[Dict[str, Any]] = [
         {"path": {"type": "string", "description": _PATH_HELP},
          "if_version": {"type": "string", "description": "The file's current version."}},
         ["path", "if_version"]),
-    _fn("memory_propose",
-        "Stage facts for a project you cannot write in this session, or for any project while sorting "
-        "global/inbox.md. It writes no memory files: the user applies the proposal with /memory-apply <id>. "
-        "Make one call per project. The facts must already be lines in global/inbox.md; those lines are removed "
-        "from the inbox when the proposal is applied.",
-        {"project": {"type": "string", "description": "The project id: lower-case, hyphens between words, for example "
-                                                      "'home-server'."},
-         "new_project": {"type": "boolean",
-                         "description": "Set to true only for a project that is not in your list of projects. Then "
-                                        "files must include <project>/profile.md with a description."},
-         "files": {"type": "array", "minItems": 1, "maxItems": pending.MAX_FILES,
-                   "items": {"type": "object", "additionalProperties": False, "required": ["path", "lines"],
-                             "properties": {
-                                 "path": {"type": "string", "description": "<project>/profile.md, <project>/preferences.md, "
-                                          "or <project>/topics/<name>.md, <project>/areas/<name>.md, "
-                                          "<project>/people/<name>.md."},
-                                 "description": {"type": "string",
-                                                 "description": "Required when the file does not exist yet: one line "
-                                                                "that says when to read it."},
-                                 "lines": {"type": "array", "items": {"type": "string"}, "minItems": 1,
-                                           "description": "The facts to add, one per item, written as short bullet points."}}},
-                   "description": "The files to create, or to add to if they already exist."},
-         "inbox_lines": {"type": "array", "items": {"type": "string"}, "minItems": 1,
-                         "description": "The lines from global/inbox.md that this proposal covers, copied exactly."},
-         "summary": {"type": "string", "description": "One sentence for the user: what the facts are and why they "
-                                                      "belong to this project. The user sees it."}},
-        ["project", "files", "inbox_lines", "summary"]),
 ]
 TOOL_NAMES = [s["name"] for s in SCHEMAS]
 
@@ -389,23 +362,6 @@ def _delete(args, ctx: Context):
     return {"ok": True, "path": path}
 
 
-def _propose(args, ctx: Context):
-    if ctx.scope.read_only:
-        raise StoreError("read_only", f"memory is read-only in this session ({ctx.scope.read_only_reason})")
-    p = pending.propose(ctx.store, project=args.get("project"), new_project=args.get("new_project"),
-                        files=args.get("files"), inbox_lines=args.get("inbox_lines"), summary=args.get("summary"),
-                        known_projects=ctx.hermes_buckets)
-    pid, commands = p["id"], f"/memory-apply {p['id']} saves it, /memory-reject {p['id']} discards it."
-    shown = ctx.tell_user(f"📥 Memory proposal {pid} for {p['project']}: {p['summary']} {commands}")
-    out = {"ok": True, "id": pid, "preview": pending.render(p, ctx.store)}
-    if shown:
-        out["next"] = "The user has been shown the proposal. Nothing is saved until they apply it."
-    else:
-        out["next"] = (f"Nothing is saved yet. Tell the user: {p['summary']} Then tell them: {commands} "
-                       "Do not try to apply it yourself.")
-    return out
-
-
 _HANDLERS = {
     "memory_list": _list,
     "memory_read": _read,
@@ -414,5 +370,4 @@ _HANDLERS = {
     "memory_str_replace": _str_replace,
     "memory_append": _append,
     "memory_delete": _delete,
-    "memory_propose": _propose,
 }

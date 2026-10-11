@@ -77,7 +77,7 @@ class ProviderTest(StoreCase):
         self.assertIn("### Project: proj-1\nHermes project name: Proj-1\nFolders: /src/proj-1\n"
                       "This project has no memory yet.", block)
 
-    def test_hermes_projects_are_proposable(self):
+    def test_hermes_projects_are_listed(self):
         with fake_hermes({"proj-1": "/src/proj-1", "nixos-config": "/etc/nixos"}):
             block = self.make(cwd="/src/proj-1").system_prompt_block()
         self.assertIn("Projects: nixos-config.", block)
