@@ -6,6 +6,68 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [0.2.0] - Unreleased
+
+Upgrading from 0.1.0 needs nothing from you: the first writable session
+migrates the store. It backs up and removes `_pending/`, and keeps every
+file it changes or removes under `_backup/`. `hermes memory-buckets migrate
+--dry-run` shows what it will do. **If your config sets `write_policy:
+confined`, upgrading widens what sessions may write.** Project sessions now
+write `global/`, and every writable session can add to other projects'
+buckets. The setting is ignored, with a warning in the log.
+
+### Added
+
+- **Provenance on cross-project writes.** A write into another project's
+  bucket adds `<platform>@<project>` to the file's `sources`, or
+  `<platform>@*` from an unscoped session: `tui@ex-luna`, `tui@*`. Nothing
+  undoes these writes yet; the tag is there to trace them.
+- **A status line on cross-project writes:** `📝 Saved to <path>`. The
+  classic CLI and the terminal TUI show it. Elsewhere it isn't shown, and the
+  agent isn't asked to tell you.
+- `status` and `lint` report a leftover `_pending/` until migration removes
+  it.
+
+### Changed
+
+- **The agent files every fact itself.** Nothing waits for you to apply it.
+  - Any writable session, unscoped ones included, can add to another
+    project's bucket: `memory_append` to an existing file, or `memory_write`
+    with `if_version: "new"` to create one. Editing, overwriting and deleting
+    there stay with that project's own sessions, and the refusal points the
+    agent at `memory_append`.
+  - Another project is a bucket on disk or any Hermes project, including
+    ones with no memory yet. A fact about a project with neither goes to
+    `global/topics/<name>.md`.
+  - A fact the agent can't place goes under `global/`, not the inbox.
+- **`global/inbox.md` only holds imported memory:** entries from
+  `hermes memory-buckets import` and the mirror of built-in memory writes.
+  `memory_append` to it is refused. Its description is now "Imported memory
+  waiting to be sorted", and migration updates it. Existing
+  `added in conversation` sections stay and are sorted with the rest.
+- **The prompt block** follows suit: the rules for other projects' buckets
+  replace the inbox and proposal steps, and the inbox note only mentions
+  imported memory.
+- **The `sort-inbox` skill is now `sort-imports`,** and its slash command is
+  `/sort-imports`. It writes project facts straight into their buckets
+  instead of proposing them. There's no alias; `skills.external_dirs` needs
+  no change.
+- **`hermes memory-buckets sort-prompt` is now `import-prompt`,** with no
+  alias.
+
+### Removed
+
+- **Proposals:** the `memory_propose` tool (eight tools become seven), the
+  `/memory-pending`, `/memory-apply` and `/memory-reject` slash commands, and
+  the CLI's `pending`, `apply` and `reject`. The inbox and proposal notices
+  go with them.
+- **`<store>/_pending/`.** Migration copies each proposal to
+  `_backup/0.2.0/_pending/` and removes the folder. It applies none of them:
+  you never confirmed them, and their lines are still in the inbox, so the
+  next `/sort-imports` files them.
+- **`write_policy`.** Project sessions always write `global/`. A leftover
+  `confined` is ignored with a logged warning (see above).
+
 ## [0.1.0] - 2026-10-01
 
 Upgrading from 0.0.1 needs nothing from you: the first writable session
@@ -93,5 +155,6 @@ will do.
 
 Initial release.
 
+[0.2.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.1.0...HEAD
 [0.1.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.0.1...v0.1.0
 [0.0.1]: https://git.cl0vr.co/cl0vr/memory-buckets/src/tag/v0.0.1
