@@ -106,7 +106,6 @@ class Context:
     # reach the user directly (gateways; see provider._notifier). The notice is
     # best-effort and the result never asks the agent to relay it (D5).
     notify: Optional[Callable[[str], bool]] = None
-    hermes_buckets: Optional[List[str]] = None  # buckets of every Hermes project; None outside Hermes
 
     def tell_user(self, message: str) -> bool:
         try:

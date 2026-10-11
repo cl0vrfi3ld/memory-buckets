@@ -4,7 +4,7 @@ import unittest
 from unittest import mock
 
 from .helpers import FakeEmbedder, StoreCase, doc, fake_hermes
-from memory_buckets import inbox
+from memory_buckets import inbox, projects
 from memory_buckets import provider as prov
 
 
@@ -71,6 +71,24 @@ class ProviderTest(StoreCase):
 
     def test_without_hermes_nothing_is_scoped(self):
         self.assertIsNone(self.make(cwd="/src/proj-1")._scope().project)
+
+    def test_the_project_list_is_read_once_per_tool_call(self):
+        # One read per tool call (inside _scope_and_project); handle_tool_call
+        # used to read it a second time for a Context field nobody read.
+        with fake_hermes({"proj-1": "/src/proj-1"}):
+            p = self.make(cwd="/src/proj-1")
+            with mock.patch("memory_buckets.projects.list_projects",
+                            side_effect=projects.list_projects) as reads:
+                self.call(p, "memory_list")
+            self.assertEqual(reads.call_count, 1, "one read per tool call")
+
+    def test_the_project_list_is_read_once_per_prompt_build(self):
+        with fake_hermes({"proj-1": "/src/proj-1"}):
+            p = self.make(cwd="/src/proj-1")
+            with mock.patch("memory_buckets.projects.list_projects",
+                            side_effect=projects.list_projects) as reads:
+                p.system_prompt_block()
+            self.assertEqual(reads.call_count, 1, "one read per prompt build")
 
     def test_project_index_header_comes_from_hermes(self):
         with fake_hermes({"proj-1": "/src/proj-1"}):

@@ -176,18 +176,18 @@ class MemoryBucketsProvider(MemoryProvider):
     def _scope(self, session_id: str = "") -> scopes.Scope:
         return self._scope_and_project(session_id)[0]
 
-    def _scope_and_project(self, session_id: str = "") -> "tuple[scopes.Scope, Optional[projects.Project]]":
+    def _scope_and_project(self, session_id: str = "") \
+            -> "tuple[scopes.Scope, Optional[projects.Project], Optional[List[str]]]":
+        """The session's scope, its Hermes project (or None), and the buckets of
+        every Hermes project (None outside Hermes) — from one project-list read."""
         sid = session_id or self._current
         state = self._state(sid)
         project = projects.session_project(state.cwd)
+        hermes_buckets = self._hermes_buckets()
         scope = scopes.resolve(self.config, project.bucket if project else None, state.agent_context,
-                               buckets=self._known_buckets())
-        return scope, (project if scope.project else None)
-
-    def _known_buckets(self) -> List[str]:
-        """Every bucket a cross-project write could land in: on-disk ∪ Hermes's."""
-        on_disk = self.store.projects() if self.store else []
-        return scopes.known_buckets(on_disk, self._hermes_buckets())
+                               buckets=scopes.known_buckets(
+                                   self.store.projects() if self.store else [], hermes_buckets))
+        return scope, (project if scope.project else None), hermes_buckets
 
     @_traced
     def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "", reset: bool = False,
@@ -211,9 +211,9 @@ class MemoryBucketsProvider(MemoryProvider):
         state = self._state()
         if state.snapshot is None:
             try:
-                scope, project = self._scope_and_project()
+                scope, project, hermes_buckets = self._scope_and_project()
                 state.snapshot = snapshot.build(self.store, self.index, scope, self.config, project,
-                                                hermes_buckets=self._hermes_buckets())
+                                                hermes_buckets=hermes_buckets)
             except Exception:  # never break the prompt build
                 logger.warning("memory-buckets: snapshot failed", exc_info=True)
                 return ""
@@ -277,8 +277,7 @@ class MemoryBucketsProvider(MemoryProvider):
             return json.dumps({"ok": False, "error": {"code": "unavailable", "message": "memory-buckets isn't initialised"}})
         state = self._state()
         ctx = tools.Context(store=self.store, index=self.index, scope=self._scope(), config=self.config,
-                            source=state.platform, on_write=self._after_write, notify=self._notifier(state),
-                            hermes_buckets=self._hermes_buckets())
+                            source=state.platform, on_write=self._after_write, notify=self._notifier(state))
         try:
             return json.dumps(tools.handle(tool_name, args or {}, ctx), ensure_ascii=False)
         except sqlite3.Error as err:
@@ -298,6 +297,8 @@ class MemoryBucketsProvider(MemoryProvider):
 
     @staticmethod
     def _hermes_buckets() -> Optional[List[str]]:
+        """Buckets of every Hermes project, from one projects.list_projects() read;
+        None outside Hermes."""
         found = projects.list_projects()
         return None if found is None else [p.bucket for p in found]
 
