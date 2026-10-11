@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 from .helpers import FakeEmbedder, StoreCase, doc, fake_hermes
+from memory_buckets import inbox
 from memory_buckets import provider as prov
 
 
@@ -82,19 +83,32 @@ class ProviderTest(StoreCase):
             block = self.make(cwd="/src/proj-1").system_prompt_block()
         self.assertIn("Projects: nixos-config.", block)
 
-    def test_status_callback_shows_inbox_alerts(self):
+    def cross_write(self, p, line="a"):
+        """An unscoped session adds to another project's bucket: the one write that shows a status line."""
+        if not (self.store.memories / "clogpt/topics/x.md").exists():
+            self.put("clogpt/topics/x.md", doc("x", "X", "- first\n"))
+        return self.call(p, "memory_append", path="clogpt/topics/x.md", lines=[line])
+
+    def test_status_callback_shows_cross_project_writes(self):
         shown = []
         p = self.make(platform="cli", status_callback=shown.append)
-        result = self.call(p, "memory_append", path="global/inbox.md", lines=["unsure where this goes"])
+        result = self.cross_write(p)
         self.assertTrue(result["ok"], result)
-        self.assertEqual(shown, ["📥 Memory inbox: 1 new entry (global/inbox.md)"])
+        self.assertEqual(shown, ["📝 Saved to clogpt/topics/x.md"])
         self.assertNotIn("next", result)
         p.on_session_switch("s2", reset=True)  # /new keeps the channel
-        self.call(p, "memory_append", path="global/inbox.md", lines=["another"])
+        self.cross_write(p, "another")
         self.assertEqual(len(shown), 2)
-        # A gateway session has no status channel: the agent is asked to say it.
+        # A write inside the session's own scope shows nothing.
+        self.call(p, "memory_append", path="global/people/sam.md", lines=["has a dog"])
+        self.assertEqual(len(shown), 2)
+
+    def test_a_gateway_session_has_no_status_line_and_no_fallback(self):
+        # D5: the notice is best-effort. The agent is never asked to relay it.
         gateway = self.make(session="g1", platform="telegram")
-        self.assertIn("Tell the user", self.call(gateway, "memory_append", path="global/inbox.md", lines=["x"])["next"])
+        result = self.cross_write(gateway)
+        self.assertTrue(result["ok"], result)
+        self.assertNotIn("next", result)
 
     def fake_tui(self, provider, status_callback, **agent_flags):
         """``tui_gateway.server._sessions`` as the TUI keeps it: an agent whose memory manager holds ``provider``."""
@@ -110,32 +124,33 @@ class ProviderTest(StoreCase):
         shown = []
         p = self.make(platform="tui")
         with self.fake_tui(p, lambda kind, text=None: shown.append((kind, text))):
-            result = self.call(p, "memory_append", path="global/inbox.md", lines=["unsure where this goes"])
-        self.assertEqual(shown, [("lifecycle", "📥 Memory inbox: 1 new entry (global/inbox.md)")])
+            result = self.cross_write(p)
+        self.assertEqual(shown, [("lifecycle", "📝 Saved to clogpt/topics/x.md")])
         self.assertNotIn("next", result)
 
-    def test_tui_falls_back_to_the_agent(self):
+    def test_tui_without_a_status_line_stays_quiet(self):
         p = self.make(session="t1", platform="tui")
         # Outside the TUI process, or another provider's agent: nothing to show it on.
-        self.assertIn("next", self.call(p, "memory_append", path="global/inbox.md", lines=["a"]))
+        self.assertNotIn("next", self.cross_write(p, "a"))
         with self.fake_tui(object(), lambda kind, text=None: None):
-            self.assertIn("next", self.call(p, "memory_append", path="global/inbox.md", lines=["b"]))
+            self.assertNotIn("next", self.cross_write(p, "b"))
         # A callback that raises never fails the write.
         with self.fake_tui(p, lambda kind, text=None: 1 / 0):
-            result = self.call(p, "memory_append", path="global/inbox.md", lines=["c"])
+            result = self.cross_write(p, "c")
         self.assertTrue(result["ok"], result)
-        self.assertIn("next", result)
+        self.assertNotIn("next", result)
         # Desktop ignores "lifecycle" status updates, and gateways have no status
         # line: neither looks for the TUI, even when it owns the provider.
         for platform in ("desktop", "telegram"):
             other = self.make(session=f"x-{platform}", platform=platform)
             with self.fake_tui(other, lambda kind, text=None: self.fail(f"{platform} isn't the TUI")):
-                result = self.call(other, "memory_append", path="global/inbox.md", lines=["d"])
-            self.assertIn("next", result)
+                result = self.cross_write(other, "d")
+            self.assertTrue(result["ok"], result)
+            self.assertNotIn("next", result)
 
-    def test_quiet_and_muted_sessions_fall_back_to_the_agent(self):
-        # `hermes chat -q`, one-shot runs and muted turns print nothing, so a notice
-        # there isn't "shown": the agent has to say it.
+    def test_quiet_and_muted_sessions_show_nothing(self):
+        # `hermes chat -q`, one-shot runs and muted turns print nothing, so there the
+        # notice isn't shown (and nobody asks the agent to say it).
         class Agent:
             suppress_status_output = False
             _mute_notification_reply = False
@@ -151,17 +166,17 @@ class ProviderTest(StoreCase):
                 agent = Agent()
                 p = self.make(session=f"q-{flag}", platform="cli", status_callback=agent._emit_status)
                 setattr(agent, flag, True)
-                result = self.call(p, "memory_append", path="global/inbox.md", lines=["x"])
+                result = self.cross_write(p, "x")
                 self.assertEqual(agent.printed, [])
-                self.assertIn("next", result)
+                self.assertNotIn("next", result)
                 setattr(agent, flag, False)  # read live: a muted turn ends, notices resume
-                self.assertNotIn("next", self.call(p, "memory_append", path="global/inbox.md", lines=["y"]))
-                self.assertEqual(len(agent.printed), 1)
+                self.assertNotIn("next", self.cross_write(p, "y"))
+                self.assertEqual(agent.printed, ["📝 Saved to clogpt/topics/x.md"])
         # The TUI agent's flags count too.
         p = self.make(session="q-tui", platform="tui")
         with self.fake_tui(p, lambda kind, text=None: self.fail("a muted turn showed a notice"),
                            _mute_notification_reply=True):
-            self.assertIn("next", self.call(p, "memory_append", path="global/inbox.md", lines=["z"]))
+            self.assertNotIn("next", self.cross_write(p, "z"))
 
     def test_cron_is_read_only(self):
         p = self.make(agent_context="cron", platform="cron")
@@ -213,7 +228,7 @@ class ProviderTest(StoreCase):
         p.on_memory_write("add", "user", "Prefers tea")
         p.on_memory_write("replace", "memory", "Uses NixOS", {"previous_content": "Uses Arch"})
         text = self.store.read("global/inbox.md")["content"]
-        self.assertIn("name: inbox", text)
+        self.assertIn(f"name: inbox\ndescription: {inbox.DESCRIPTION}", text)
         self.assertIn("- [user add] Prefers tea\n- [memory replace] Uses NixOS (was: Uses Arch)\n", text)
         self.assertEqual(text.count("## mirrored from built-in memory"), 1)
 

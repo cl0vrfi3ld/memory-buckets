@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 from .helpers import FakeEmbedder, StoreCase, doc, fake_hermes, run_hermes_cli
-from memory_buckets import cli
+from memory_buckets import cli, inbox
 
 
 class CliTest(StoreCase):
@@ -48,6 +48,7 @@ class CliTest(StoreCase):
         code, out = self.run_cli("import")
         self.assertEqual(code, 0, out)
         text = self.store.read("global/inbox.md")["content"]
+        self.assertIn(f"description: {inbox.DESCRIPTION}\n", text)
         self.assertIn("- Name is Ivy\n- Uses they/them\n", text)
         self.assertIn("- Host runs NixOS with flakes\n", text)
         self.assertIn("  - cli:import", text)
@@ -114,13 +115,13 @@ class CliTest(StoreCase):
         self.assertNotIn("migrate", out)
 
     def test_inbox_messages_count_entries(self):
-        self.put("global/inbox.md", doc("inbox", "Memory waiting to be sorted", "## imported\n"))
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported\n"))
         self.assertNotIn("inbox ", self.run_cli("status")[1])
         self.assertNotIn("waiting to be sorted", self.run_cli("lint")[1])
         code, out = self.run_cli("sort-prompt")
         self.assertEqual(code, 1)
         self.assertIn("has nothing to sort", out)
-        self.put("global/inbox.md", doc("inbox", "Memory waiting to be sorted",
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION,
                                         "## imported\n- a\n- b\n```\n- not an entry\n```\n"))
         self.assertIn("inbox       global/inbox.md: 2 entries waiting to be sorted", self.run_cli("status")[1])
         self.assertIn("note: global/inbox.md has 2 entries waiting to be sorted", self.run_cli("lint")[1])

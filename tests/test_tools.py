@@ -190,54 +190,66 @@ class ToolsTest(StoreCase):
                             notify=(lambda m: seen.append(m) or shown) if shown is not None else None)
         return tools.handle(name, args, ctx), seen
 
-    def test_inbox_append_creates_it_and_tells_the_user(self):
-        got, seen = self.call_notified("memory_append", True, path="global/inbox.md", lines=["ex-luna: uses a SID"])
+    def test_append_to_the_inbox_is_refused(self):
+        refusal = "the inbox only holds imported memory; save the fact where it belongs."
+        for project in (None, "proj-1"):
+            with self.subTest(project=project, inbox="missing"):
+                got = self.call("memory_append", project=project, path="global/inbox.md", lines=["ex-luna: uses a SID"])
+                self.assertEqual(got["error"], {"code": "invalid_args", "message": refusal})
+                self.assertFalse((self.store.memories / "global/inbox.md").exists(), "refusing must not create it")
+        original = doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Ivy\n")
+        self.put("global/inbox.md", original)
+        for project in (None, "proj-1"):
+            with self.subTest(project=project, inbox="present"):
+                got = self.call("memory_append", project=project, path="global/inbox.md", lines=["x"])
+                self.assertEqual(got["error"]["message"], refusal)
+        self.assertEqual(self.content("global/inbox.md"), original)
+        self.assertEqual(self.written, [])
+
+    def test_the_inbox_description_does_not_offer_it_as_a_target(self):
+        schemas = {s["name"]: s for s in tools.SCHEMAS}
+        self.assertNotIn("inbox", json.dumps(schemas["memory_append"]))
+        self.assertNotIn("inbox", json.dumps(schemas["memory_write"]))
+
+    def test_inbox_lines_can_be_removed_with_str_replace(self):
+        # What the sort-imports skill does for every entry it files or drops.
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Ivy\n- Uses tea\n"))
+        got = self.call("memory_str_replace", path="global/inbox.md", old="- Ivy\n", new="")
         self.assertTrue(got["ok"], got)
-        self.assertEqual(seen, ["📥 Memory inbox: 1 new entry (global/inbox.md)"])
-        self.assertNotIn("next", got, "the user was told directly; the agent mustn't repeat it")
         text = self.content("global/inbox.md")
-        self.assertIn("name: inbox\ndescription: Memory waiting to be sorted", text)
-        self.assertRegex(text, r"## added in conversation \d{4}-\d\d-\d\d \(cli\)\n- ex-luna: uses a SID\n$")
-        # A second append joins the same section.
-        self.call_notified("memory_append", True, path="global/inbox.md", lines=["a", "b"])
-        self.assertTrue(self.content("global/inbox.md").endswith("- ex-luna: uses a SID\n- a\n- b\n"))
+        self.assertTrue(text.endswith("## imported USER.md\n- Uses tea\n"), text)
+        self.assertNotIn("- Ivy", text)
+        self.assertEqual(inbox.count_entries(text.split("\n---\n", 1)[1]), 1)
+        # Project sessions write global/ in full, so they can sort too.
+        self.assertTrue(self.call("memory_str_replace", project="proj-1", path="global/inbox.md",
+                                  old="- Uses tea\n", new="")["ok"])
 
-    def test_inbox_append_without_a_status_channel_asks_the_agent(self):
-        for notify in (None, False):  # no callback (gateways), or one that couldn't show it
-            got, _ = self.call_notified("memory_append", notify, path="global/inbox.md", lines=["x"])
-            self.assertIn("Tell the user in one line", got["next"])
-
-    def test_inbox_without_frontmatter_is_repaired_on_append(self):
-        # Hand-written (e.g. in Obsidian): every append and mirrored write used to fail.
+    def test_inbox_without_frontmatter_is_repaired_on_import(self):
+        # Hand-written (e.g. in Obsidian): every import and mirrored write used to fail.
         (self.store.memories / "global/inbox.md").write_text("- jotted down by hand\n")
-        got, _ = self.call_notified("memory_append", True, path="global/inbox.md", lines=["x"])
-        self.assertTrue(got["ok"], got)
-        text = self.content("global/inbox.md")
-        self.assertTrue(text.startswith("---\nname: inbox\ndescription: Memory waiting to be sorted"), text)
-        self.assertIn("- jotted down by hand\n", text)
-        self.assertTrue(text.endswith("- x\n"))
-        (self.store.memories / "global/inbox.md").write_text("- by hand again\n")
         self.assertIsNotNone(inbox.append(self.store, "imported MEMORY.md", ["y"], source="cli:import"))
-        self.assertIn("name: inbox", self.content("global/inbox.md"))
+        text = self.content("global/inbox.md")
+        self.assertTrue(text.startswith(f"---\nname: inbox\ndescription: {inbox.DESCRIPTION}"), text)
+        self.assertIn("- jotted down by hand\n", text)
+        self.assertTrue(text.endswith("## imported MEMORY.md\n- y\n"), text)
 
     def test_unparseable_inbox_is_refused_not_clobbered(self):
         broken = "---\nname: inbox\n- no closing fence\n"
         (self.store.memories / "global/inbox.md").write_text(broken)
-        got, _ = self.call_notified("memory_append", True, path="global/inbox.md", lines=["x"])
-        self.assertEqual(got["error"]["code"], "invalid_frontmatter")
         with self.assertRaises(StoreError) as caught:
             inbox.append(self.store, "imported", ["y"], source="cli:import")
         self.assertEqual(caught.exception.code, "invalid_frontmatter")
+        got = self.call("memory_str_replace", path="global/inbox.md", old="no closing", new="x")
+        self.assertEqual(got["error"]["code"], "invalid_frontmatter")
         self.assertEqual((self.store.memories / "global/inbox.md").read_text(), broken)
 
     def test_inbox_heading_inside_a_code_block_is_not_a_section(self):
-        self.call_notified("memory_append", True, path="global/inbox.md", lines=["a"])
-        heading = self.content("global/inbox.md").split("\n## ", 1)[1].split("\n", 1)[0]
+        inbox.append(self.store, "imported MEMORY.md", ["a"], source="cli:import")
         path = self.store.memories / "global/inbox.md"
         path.write_text(path.read_text() + "```\n## not a heading\n- not an entry\n```\n")
-        self.call_notified("memory_append", True, path="global/inbox.md", lines=["b"])
+        inbox.append(self.store, "imported MEMORY.md", ["b"], source="cli:import")
         text = self.content("global/inbox.md")
-        self.assertEqual(text.count(f"## {heading}"), 1, text)
+        self.assertEqual(text.count("## imported MEMORY.md"), 1, "a fenced heading is not the last section")
         self.assertEqual(inbox.count_entries(text.split("\n---\n", 1)[1]), 2)
 
     def test_no_tool_can_edit_a_file_with_broken_frontmatter(self):
@@ -255,12 +267,14 @@ class ToolsTest(StoreCase):
         self.assertEqual((self.store.memories / "global/topics/nix.md").read_text(), "- flakes\n")
 
     def test_a_broken_status_channel_never_fails_the_write(self):
+        self.put("clogpt/topics/x.md", doc("x", "X", "- a\n"))
+        self.index.reconcile()
         c = config.Config()
-        ctx = tools.Context(self.store, self.index, scopes.resolve(c), c, source="cli",
+        ctx = tools.Context(self.store, self.index, scopes.resolve(c, buckets=["clogpt", "proj-1"]), c, source="cli",
                             notify=lambda m: bool(1 / 0))
-        got = tools.handle("memory_append", {"path": "global/inbox.md", "lines": ["x"]}, ctx)
+        got = tools.handle("memory_append", {"path": "clogpt/topics/x.md", "lines": ["x"]}, ctx)
         self.assertTrue(got["ok"], got)
-        self.assertIn("next", got)
+        self.assertNotIn("next", got)
 
     def test_delete(self):
         v = version(self.content("global/topics/nix.md").encode())

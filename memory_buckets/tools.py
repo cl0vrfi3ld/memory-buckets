@@ -31,7 +31,7 @@ MAX_READ_PATHS = 20
 MAX_SEARCH_LIMIT = 20
 
 _PATH_HELP = ("Path relative to the memory root: lower-case, hyphens between words, ending in .md. Allowed forms: "
-              "global/profile.md, global/preferences.md, global/inbox.md, global/topics/<name>.md, "
+              "global/profile.md, global/preferences.md, global/topics/<name>.md, "
               "global/areas/<name>.md, global/people/<name>.md, <project>/profile.md, <project>/preferences.md, "
               "<project>/topics/<name>.md, <project>/areas/<name>.md, <project>/people/<name>.md.")
 
@@ -79,7 +79,7 @@ SCHEMAS: List[Dict[str, Any]] = [
         ["path", "old", "new"]),
     _fn("memory_append",
         "Add facts to the end of an existing memory file, one bullet point per fact. The file must already "
-        "exist; to create a file, use memory_write. global/inbox.md is the exception: it is created if missing.",
+        "exist; to create a file, use memory_write.",
         {"path": {"type": "string", "description": _PATH_HELP},
          "lines": {"type": "array", "items": {"type": "string"}, "minItems": 1,
                    "description": "One fact per item. '- ' is added to the start if it is missing."},
@@ -103,8 +103,8 @@ class Context:
     source: str  # platform name, recorded in `sources`
     on_write: Optional[Callable[[str], None]] = None
     # Shows the user a one-line notice; returns True if it was shown. None: no way to
-    # reach the user directly (gateways; see provider._notifier), so the result asks
-    # the agent to say it.
+    # reach the user directly (gateways; see provider._notifier). The notice is
+    # best-effort and the result never asks the agent to relay it (D5).
     notify: Optional[Callable[[str], bool]] = None
     hermes_buckets: Optional[List[str]] = None  # buckets of every Hermes project; None outside Hermes
 
@@ -313,7 +313,7 @@ def _append(args, ctx: Context):
         raise ArgError("'lines' needs at least one non-empty line")
     if_version = _str(args, "if_version", required=False)
     if path == inbox.PATH:
-        return _append_inbox(ctx, lines, if_version)
+        raise ArgError("the inbox only holds imported memory; save the fact where it belongs.")
 
     def edit(current):
         if current is None:
@@ -329,24 +329,6 @@ def _append(args, ctx: Context):
         return frontmatter.render(fm, body)
 
     return _mutate(ctx, path, if_version, edit, append=True)
-
-
-def _append_inbox(ctx: Context, lines: List[str], if_version: Optional[str]) -> Dict[str, Any]:
-    """Appends to the inbox: create it if needed, go under a dated heading and tell the user."""
-    entries = inbox.bullets(" ".join(line.split("\n")) for line in lines)
-    heading = inbox.conversation_heading(ctx.source)
-
-    def edit(current):
-        if current is not None:
-            _existing(inbox.PATH, current)  # refuse to rewrite an inbox we can't parse
-        return inbox.with_entries(current, heading, entries, ctx.source)
-
-    out = _mutate(ctx, inbox.PATH, if_version, edit, append=True)
-    n = len(entries)
-    if not ctx.tell_user(f"📥 Memory inbox: {n} new entr{'y' if n == 1 else 'ies'} ({inbox.PATH})"):
-        out["next"] = ("Tell the user in one line that you added this to their memory inbox, "
-                       "unless you propose it next.")
-    return out
 
 
 def _delete(args, ctx: Context):

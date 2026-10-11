@@ -1,25 +1,24 @@
-"""``global/inbox.md``: memory waiting to be sorted.
+"""``global/inbox.md``: imported memory waiting to be sorted.
 
-It holds general unsorted memory: entries from ``hermes memory-buckets import``,
-built-in memory writes mirrored by the provider's ``on_memory_write`` bridge,
-facts the agent couldn't place, and facts for a project the session can't write
-(which the agent then proposes). It's a standing file: sorting empties it, but
-nothing needs to delete it.
+It holds entries from ``hermes memory-buckets import`` and built-in memory writes
+mirrored by the provider's ``on_memory_write`` bridge. The agent never appends to
+it (``memory_append`` refuses the path); the sort-inbox skill removes filed lines
+with ``memory_str_replace``. It's a standing file: sorting empties it, but nothing
+needs to delete it.
 
-Appends go under a ``## <heading>`` section, one bullet per entry, so a fact
-added in conversation never lands under an "imported USER.md" heading.
+Appends go under a ``## <heading>`` section, one bullet per entry, so entries from
+different imports stay apart.
 """
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Iterable, List, Optional
 
 from . import frontmatter
 from .store import GLOBAL, Store, StoreError, check_content, stamp
 
 PATH = f"{GLOBAL}/inbox.md"
-DESCRIPTION = "Memory waiting to be sorted, from imports and facts with no clear home yet"
+DESCRIPTION = "Imported memory waiting to be sorted"
 
 
 def _bullet(entry: str) -> str:
@@ -57,10 +56,6 @@ def _outside_fences(body: str) -> List[str]:
 def count_entries(body: str) -> int:
     """How many entries (top-level bullets, outside code fences) the inbox body holds."""
     return sum(1 for line in _outside_fences(body) if line.startswith(("- ", "* ")))
-
-
-def conversation_heading(platform: str = "") -> str:
-    return f"added in conversation {date.today().isoformat()}" + (f" ({platform})" if platform else "")
 
 
 def with_entries(current: Optional[bytes], heading: str, lines: List[str], source: str) -> str:

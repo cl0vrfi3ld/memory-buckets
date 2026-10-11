@@ -306,7 +306,7 @@ class MemoryBucketsProvider(MemoryProvider):
         the classic CLI hands it to ``initialize``; the terminal TUI has one on
         the agent, found at call time (the agent registers after ``initialize``).
         Desktop ignores this kind of status update and gateways have no status
-        line: None, and the tool result asks the agent instead."""
+        line: None, and the notice is simply not shown."""
         status = state.status
         if status is not None:
             # agent._emit_status: its __self__ is the agent, whose flags say
