@@ -324,6 +324,23 @@ class PendingMigrationTest(StoreCase):
         self.assertTrue((self.pending / "d4e5f6.json").exists())
         self.assertFalse((self.pending / "a1b2c3.json").exists())
 
+    def test_a_copy_that_doesnt_match_leaves_the_original(self):
+        # Failure injection for the read-back check: a "successful" copy with
+        # wrong bytes must not let the original be removed.
+        real = self.store._atomic_write
+
+        def corrupting(target, data):
+            return real(target, data + b"tampered") if target.name == "d4e5f6.json" else real(target, data)
+
+        with mock.patch.object(self.store, "_atomic_write", side_effect=corrupting):
+            steps = {s.name: s for s in migrate.run(self.store) if s.project == migrate.PENDING_DIR}
+        self.assertEqual(steps["d4e5f6.json"].action, "skip")
+        self.assertIn("doesn't match", steps["d4e5f6.json"].describe())
+        self.assertIn("run `hermes memory-buckets migrate` again", steps["d4e5f6.json"].describe())
+        self.assertTrue((self.pending / "d4e5f6.json").exists())
+        self.assertEqual((self.pending / "d4e5f6.json").read_bytes(), self.proposals["d4e5f6.json"])
+        self.assertNotIn("", steps, "the folder stays while a file is still in it")
+
     def test_rerun_after_a_crash_between_copy_and_removal(self):
         with mock.patch("pathlib.Path.unlink", side_effect=OSError("crash")):
             steps = [s for s in migrate.run(self.store) if s.project == migrate.PENDING_DIR]
