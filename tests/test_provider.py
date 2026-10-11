@@ -90,6 +90,17 @@ class ProviderTest(StoreCase):
                 p.system_prompt_block()
             self.assertEqual(reads.call_count, 1, "one read per prompt build")
 
+    def test_a_create_in_a_hermes_project_with_no_bucket_yet_is_allowed(self):
+        # The known buckets are on-disk ∪ Hermes's: a project Hermes knows but
+        # that has no memory files yet is still addable (ADR-0015, D2).
+        with fake_hermes({"fresh-proj": "/src/fresh"}):
+            p = self.make()  # unscoped: the session's cwd is nowhere
+            result = self.call(p, "memory_write", path="fresh-proj/topics/x.md",
+                               description="What fresh-proj is", body="- a fact\n", if_version="new")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["path"], "fresh-proj/topics/x.md")
+        self.assertTrue((self.store.memories / "fresh-proj/topics/x.md").exists())
+
     def test_project_index_header_comes_from_hermes(self):
         with fake_hermes({"proj-1": "/src/proj-1"}):
             block = self.make(cwd="/src/proj-1/app").system_prompt_block()
