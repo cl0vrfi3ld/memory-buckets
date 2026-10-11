@@ -102,6 +102,9 @@ def cmd_status(args) -> int:
         _out(f"migration   index.md left over in: {', '.join(leftovers)}; run `hermes memory-buckets migrate`")
     if migrate.inbox_needs_migrating(store):
         _out(f"migration   {inbox.PATH} has an outdated description; run `hermes memory-buckets migrate`")
+    pending = _leftover_pending(store)
+    if pending:
+        _out(f"migration   {migrate.PENDING_DIR}/ left over from 0.1.0 ({pending}); run `hermes memory-buckets migrate`")
     waiting = _inbox_entries(store)
     if waiting:
         _out(f"inbox       {inbox.PATH}: {_entries(waiting)} waiting to be sorted")
@@ -340,6 +343,10 @@ def cmd_lint(args) -> int:
     problems = lint(store)
     if migrate.inbox_needs_migrating(store):
         problems.append(f"{inbox.PATH}: outdated description; run `hermes memory-buckets migrate`")
+    pending = _leftover_pending(store)
+    if pending:
+        problems.append(f"{store.root / migrate.PENDING_DIR}/: left over from 0.1.0 ({pending}); "
+                        "run `hermes memory-buckets migrate`")
     for line in problems:
         _out(line)
     waiting = _inbox_entries(store)
@@ -351,6 +358,15 @@ def cmd_lint(args) -> int:
 
 def _entries(n: int) -> str:
     return f"{n} entr{'y' if n == 1 else 'ies'}"
+
+
+def _leftover_pending(store: Store) -> str:
+    """"N proposals" for a leftover ``_pending/``, or "" when there's none."""
+    names = migrate.leftover_pending(store)
+    if names is None:
+        return ""
+    n = sum(1 for name in names if name.endswith(".json"))
+    return f"{n} proposal{'' if n == 1 else 's'}"
 
 
 def _inbox_entries(store: Store) -> int:
@@ -375,7 +391,7 @@ def cmd_migrate(args) -> int:
     for step in steps:
         _out(("would: " if args.dry_run else "") + step.describe())
     if not args.dry_run and any(s.action != "skip" for s in steps):
-        _out(f"originals kept in {migrate.backup_dir(store)}")
+        _out(f"originals kept in {store.root / migrate.BACKUP_DIR}")
     return 1 if any(s.action == "skip" for s in steps) else 0
 
 

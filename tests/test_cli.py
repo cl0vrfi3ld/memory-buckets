@@ -191,6 +191,42 @@ class CliTest(StoreCase):
         self.assertFalse((self.store.memories / "proj-1/index.md").exists())
         self.assertEqual(self.run_cli("migrate")[1].strip(), "nothing to migrate")
 
+    def test_leftover_pending_is_reported_until_migrate_runs(self):
+        pending = self.store.root / "_pending"
+        pending.mkdir()
+        for pid in ("a1b2c3", "d4e5f6"):
+            (pending / f"{pid}.json").write_text(f'{{"id": "{pid}", "project": "proj-1"}}\n')
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## added in conversation 2026-10-02\n- a\n"))
+        code, out = self.run_cli("status")
+        self.assertIn("migration   _pending/ left over from 0.1.0 (2 proposals); run `hermes memory-buckets migrate`", out)
+        code, out = self.run_cli("lint")
+        self.assertEqual(code, 1)
+        self.assertIn(f"{pending}/: left over from 0.1.0 (2 proposals); run `hermes memory-buckets migrate`", out)
+        code, out = self.run_cli("migrate", "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out.splitlines(), [
+            "would: _pending/a1b2c3.json (a proposal for proj-1) kept in _backup/0.2.0/_pending/ and removed",
+            "would: _pending/d4e5f6.json (a proposal for proj-1) kept in _backup/0.2.0/_pending/ and removed",
+            "would: _pending/ removed: its proposals weren't applied. Their lines are still in global/inbox.md; "
+            "/sort-imports files them",
+        ])
+        self.assertTrue(pending.is_dir())
+        code, out = self.run_cli("migrate")
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"originals kept in {self.store.root / '_backup'}\n", out)
+        self.assertFalse(pending.exists())
+        self.assertNotIn("_pending", self.run_cli("status")[1])
+        code, out = self.run_cli("lint")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("_pending", out)
+        self.assertEqual(self.run_cli("migrate")[1].strip(), "nothing to migrate")
+
+    def test_an_empty_leftover_pending_is_still_reported(self):
+        (self.store.root / "_pending").mkdir()
+        self.assertIn("_pending/ left over from 0.1.0 (0 proposals)", self.run_cli("status")[1])
+        code, out = self.run_cli("migrate")
+        self.assertEqual((code, out.splitlines()[0]), (0, "_pending/ removed: it was empty"))
+
     def test_reindex_and_search(self):
         self.put("global/topics/nix.md", doc("nix", "Nix", "- flakes pin inputs\n"))
         code, out = self.run_cli("reindex")

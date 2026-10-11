@@ -15,11 +15,23 @@ read or parse is a ``skip`` step: it stays as it is, and the other files still m
 - ``global/inbox.md`` is now a standing file, and the plugin owns its description.
   Any other description (the 0.0.1 default said "… sort it, then delete it")
   becomes the current one.
+
+0.2.0:
+
+- Proposals are gone, and so is ``<store>/_pending/``, where 0.1.0 staged them as
+  ``<id>.json``. Each file in it is copied byte for byte to
+  ``_backup/0.2.0/_pending/``, then removed, and the empty folder goes last. Nothing
+  is applied: the user never confirmed those proposals, and their lines are still in
+  the inbox, where the next import sort files them. A file whose copy fails or
+  doesn't match stays where it is, and so does ``_pending/``.
+- The inbox's lines stay as they are, "added in conversation" sections included.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -31,6 +43,8 @@ logger = logging.getLogger("memory_buckets")
 
 BACKUP_DIR = "_backup"
 INDEX_MIGRATION = "0.1.0"
+PENDING_MIGRATION = "0.2.0"
+PENDING_DIR = "_pending"  # 0.1.0's pending.py PENDING_DIR: <store>/_pending/<id>.json
 SOURCE = "migration"
 MOVED_HEADING = "## Moved from index.md"
 DEFAULT_PROFILE_DESCRIPTION = "What the {p} project is, its purpose, technology and status, and where things are"
@@ -38,12 +52,21 @@ DEFAULT_PROFILE_DESCRIPTION = "What the {p} project is, its purpose, technology 
 
 @dataclass
 class Step:
-    project: str
-    action: str  # rename | merge | remove | skip | inbox
+    project: str  # or PENDING_DIR for the 0.2.0 steps
+    action: str  # rename | merge | remove | skip | inbox | pending
     detail: str = ""
+    name: str = ""  # PENDING_DIR steps: the file in it, or "" for the folder itself
 
     def describe(self) -> str:
         p = self.project
+        if p == PENDING_DIR:
+            where = f"{PENDING_DIR}/{self.name}"
+            if self.action == "pending":
+                what = f" ({self.detail})" if self.detail else ""
+                return f"{where}{what} kept in {BACKUP_DIR}/{PENDING_MIGRATION}/{PENDING_DIR}/ and removed"
+            if self.action == "remove":
+                return f"{where} removed: {self.detail}"
+            return f"{where} left in place: {self.detail}"
         if self.action == "rename":
             return f"{p}/index.md becomes {p}/profile.md"
         if self.action == "merge":
@@ -72,6 +95,20 @@ def leftover_indexes(store: Store) -> List[str]:
             if index.is_file() and not index.is_symlink():
                 found.append(d.name)
     return found
+
+
+def leftover_pending(store: Store) -> Optional[List[str]]:
+    """What's in a leftover ``_pending/``, sorted. None when there's no ``_pending/``;
+    an empty list for an empty folder, or for something there that isn't a folder."""
+    folder = store.root / PENDING_DIR
+    if not os.path.lexists(folder):
+        return None
+    if folder.is_symlink() or not folder.is_dir():
+        return []
+    try:
+        return sorted(p.name for p in folder.iterdir())
+    except OSError:
+        return []
 
 
 def _add_source(fm: frontmatter.Frontmatter) -> None:
@@ -169,19 +206,22 @@ def inbox_needs_migrating(store: Store) -> bool:
     return step is not None and step.action == "inbox"
 
 
-def _keep(store: Store, project: str, name: str, data: Optional[bytes]) -> None:
-    """Back up an original. A rerun never overwrites an earlier copy: the same bytes are
-    already kept, and different bytes (an index.md that came back) go under their version."""
+def _keep(store: Store, project: str, name: str, data: Optional[bytes],
+          migration: str = INDEX_MIGRATION) -> Optional[Path]:
+    """Back up an original, and return where the copy is. A rerun never overwrites an
+    earlier copy: the same bytes are already kept, and different bytes (an index.md
+    that came back) go under their version."""
     if data is None:
-        return
-    target = backup_dir(store) / project / name
+        return None
+    target = backup_dir(store, migration) / project / name
     if target.exists():
         if target.read_bytes() == data:
-            return
+            return target
         target = target.with_name(f"{target.stem}-{version(data)}{target.suffix}")
         if target.exists():
-            return
+            return target
     store._atomic_write(target, data)
+    return target
 
 
 def _apply(store: Store, project: str, data: Optional[bytes]) -> None:
@@ -194,15 +234,81 @@ def _apply(store: Store, project: str, data: Optional[bytes]) -> None:
     _fsync_dir(index.parent)
 
 
+RERUN = "run `hermes memory-buckets migrate` again"
+FOLDER_GONE = f"its proposals weren't applied. Their lines are still in {inbox.PATH}; /sort-imports files them"
+
+
+def _proposal_for(path: Path) -> str:
+    """"a proposal for <project>", or "" when the file doesn't say (it's copied either way)."""
+    try:
+        project = json.loads(path.read_bytes()).get("project")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return f"a proposal for {project}" if isinstance(project, str) and is_project_id(project) else ""
+
+
+def _pending_plan(store: Store) -> List[Step]:
+    """A ``pending`` step per file in ``_pending/``, then a ``remove`` step for the folder
+    when nothing in it is a ``skip``. [] when there's no ``_pending/``."""
+    folder = store.root / PENDING_DIR
+    if not os.path.lexists(folder):
+        return []
+    if folder.is_symlink() or not folder.is_dir():
+        return [Step(PENDING_DIR, "skip", "it isn't a folder. Remove it by hand")]
+    try:
+        names = sorted(p.name for p in folder.iterdir())
+    except OSError as err:
+        return [Step(PENDING_DIR, "skip", f"can't list it ({_reason(err)})")]
+    steps = []
+    for name in names:
+        path = folder / name
+        if path.is_symlink() or not path.is_file():
+            steps.append(Step(PENDING_DIR, "skip", "it isn't a regular file. Move it out by hand, then run "
+                                                   "`hermes memory-buckets migrate`", name))
+        else:
+            steps.append(Step(PENDING_DIR, "pending", _proposal_for(path), name))
+    if not any(s.action == "skip" for s in steps):
+        steps.append(Step(PENDING_DIR, "remove", FOLDER_GONE if steps else "it was empty"))
+    return steps
+
+
+def _apply_pending(store: Store, planned: List[Step]) -> List[Step]:
+    """Copy each file to the backup, check the copy, then remove the original. The folder
+    goes only once every file in it has: nothing is removed that wasn't copied."""
+    folder = store.root / PENDING_DIR
+    steps = []
+    for step in planned:
+        if step.action == "pending":
+            path = folder / step.name
+            try:
+                data = path.read_bytes()
+                kept = _keep(store, PENDING_DIR, step.name, data, PENDING_MIGRATION)
+                if kept.read_bytes() != data:
+                    raise OSError(f"the copy in {kept} doesn't match it")
+                path.unlink()
+            except OSError as err:
+                step = Step(PENDING_DIR, "skip", f"{_reason(err)}; {RERUN}", step.name)
+        elif step.action == "remove":
+            if any(s.action == "skip" for s in steps):
+                continue  # a file is still in it; its skip step says why
+            try:
+                folder.rmdir()
+                _fsync_dir(store.root)
+            except OSError as err:
+                step = Step(PENDING_DIR, "skip", f"{_reason(err)}; {RERUN}")
+        steps.append(step)
+    return steps
+
+
 def run(store: Store, *, dry_run: bool = False) -> List[Step]:
     """Run every pending migration. Raises ``StoreError("locked")`` if the store stays
     locked. Anything else that goes wrong with one file is a ``skip`` step for that file."""
-    if not leftover_indexes(store) and _inbox_plan(store)[0] is None:
+    if not leftover_indexes(store) and _inbox_plan(store)[0] is None and leftover_pending(store) is None:
         return []
     if dry_run:
         steps = [_plan(store, p)[0] for p in leftover_indexes(store)]
         inbox_step = _inbox_plan(store)[0]
-        return steps + ([inbox_step] if inbox_step else [])
+        return steps + ([inbox_step] if inbox_step else []) + _pending_plan(store)
     steps = []
     with store.lock():
         for project in leftover_indexes(store):  # again, under the lock
@@ -211,7 +317,7 @@ def run(store: Store, *, dry_run: bool = False) -> List[Step]:
                 try:
                     _apply(store, project, data)
                 except (OSError, StoreError) as err:
-                    step = Step(project, "skip", f"{_reason(err)}; run `hermes memory-buckets migrate` again")
+                    step = Step(project, "skip", f"{_reason(err)}; {RERUN}")
             steps.append(step)
         step, data = _inbox_plan(store)
         if step is not None and data is not None:
@@ -222,4 +328,5 @@ def run(store: Store, *, dry_run: bool = False) -> List[Step]:
                 step = Step(GLOBAL, "skip", _reason(err))
         if step is not None:
             steps.append(step)
+        steps.extend(_apply_pending(store, _pending_plan(store)))
     return steps

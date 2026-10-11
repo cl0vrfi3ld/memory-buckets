@@ -1,10 +1,11 @@
+import json
 import os
 import unittest
 from unittest import mock
 
 from .helpers import StoreCase, doc
 from memory_buckets import inbox, migrate
-from memory_buckets.store import StoreError
+from memory_buckets.store import StoreError, version
 
 OLD_INBOX_DESCRIPTION = ("Imported memory waiting to be sorted into proper files (migration only); "
                          "sort it, then delete it")  # 0.0.1's default
@@ -186,6 +187,168 @@ class IndexMigrationTest(StoreCase):
             with self.assertRaises(StoreError) as caught:
                 migrate.run(self.store)
         self.assertEqual(caught.exception.code, "locked")
+
+
+OLD_DESCRIPTION_0_1_0 = "Memory waiting to be sorted, from imports and facts with no clear home yet"
+INBOX_0_1_0_BODY = (
+    "## imported USER.md from /home/ivy/.hermes (2026-09-30)\n"
+    "- Ivy studies film at UVM\n"
+    "- ex-luna deploys with colmena\n"
+    "\n"
+    "## added in conversation 2026-10-02 (cli)\n"
+    "- Prefers British spelling\n"
+    "- nixos-config pins nixpkgs unstable\n"
+    "\n"
+    "## added in conversation 2026-10-05 (telegram)\n"
+    "- Likes pasta\n"
+)
+
+
+def proposal_0_1_0(pid, project, lines):
+    """A proposal as 0.1.0's pending.propose wrote it."""
+    p = {"id": pid, "project": project, "new_project": False, "summary": f"Files {len(lines)} fact(s) for {project} — é",
+         "files": [{"path": f"{project}/profile.md", "lines": lines}], "inbox_lines": lines,
+         "session": "s1", "created": "2026-10-05T12:00:00Z"}
+    return (json.dumps(p, indent=2, ensure_ascii=False) + "\n").encode()
+
+
+class PendingMigrationTest(StoreCase):
+    """0.2.0: ``_pending/`` is backed up and removed, nothing is applied, the inbox's lines stay."""
+
+    def setUp(self):
+        super().setUp()
+        self.pending = self.store.root / migrate.PENDING_DIR
+        self.kept_dir = migrate.backup_dir(self.store, migrate.PENDING_MIGRATION) / migrate.PENDING_DIR
+        self.proposals = {
+            "a1b2c3.json": proposal_0_1_0("a1b2c3", "ex-luna", ["- ex-luna deploys with colmena"]),
+            "d4e5f6.json": proposal_0_1_0("d4e5f6", "nixos-config", ["- nixos-config pins nixpkgs unstable"]),
+            "0f0f0f.json": b"{ not json, but still copied\n",
+        }
+        self.pending.mkdir()
+        for name, data in self.proposals.items():
+            (self.pending / name).write_bytes(data)
+        self.put("global/inbox.md", doc("inbox", OLD_DESCRIPTION_0_1_0, INBOX_0_1_0_BODY))
+        self.put("ex-luna/profile.md", doc("profile", "What ex-luna is", "- a web app\n"))
+
+    def tree(self, root):
+        return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+    def test_backs_up_and_removes_pending_and_applies_nothing(self):
+        before = self.tree(self.store.memories)
+        steps = migrate.run(self.store)
+        self.assertEqual([(s.action, s.name) for s in steps],
+                         [("inbox", ""), ("pending", "0f0f0f.json"), ("pending", "a1b2c3.json"),
+                          ("pending", "d4e5f6.json"), ("remove", "")])
+        self.assertFalse(os.path.lexists(self.pending))
+        self.assertEqual(self.tree(self.kept_dir), self.proposals, "byte for byte")
+        after = self.tree(self.store.memories)
+        self.assertEqual(sorted(after), sorted(before), "no file created or removed under memories/")
+        self.assertEqual({k for k in after if after[k] != before[k]}, {"global/inbox.md"})
+        inbox_text = after["global/inbox.md"].decode()
+        self.assertIn(f"description: {inbox.DESCRIPTION}\n", inbox_text)
+        self.assertTrue(inbox_text.endswith("\n---\n" + INBOX_0_1_0_BODY), "every inbox line in place")
+        self.assertIsNone(migrate.leftover_pending(self.store))
+
+    def test_describes_each_step(self):
+        lines = [s.describe() for s in migrate.run(self.store, dry_run=True)]
+        self.assertEqual(lines[1:], [
+            "_pending/0f0f0f.json kept in _backup/0.2.0/_pending/ and removed",
+            "_pending/a1b2c3.json (a proposal for ex-luna) kept in _backup/0.2.0/_pending/ and removed",
+            "_pending/d4e5f6.json (a proposal for nixos-config) kept in _backup/0.2.0/_pending/ and removed",
+            "_pending/ removed: its proposals weren't applied. Their lines are still in global/inbox.md; "
+            "/sort-imports files them",
+        ])
+
+    def test_dry_run_changes_nothing(self):
+        before = self.tree(self.store.root)
+        steps = migrate.run(self.store, dry_run=True)
+        self.assertEqual(len(steps), 5)
+        self.assertEqual(self.tree(self.store.root), before)
+        self.assertFalse((self.store.root / migrate.BACKUP_DIR).exists())
+
+    def test_rerun_is_a_no_op(self):
+        migrate.run(self.store)
+        kept = self.tree(self.store.root)
+        self.assertEqual(migrate.run(self.store), [])
+        self.assertEqual(migrate.run(self.store, dry_run=True), [])
+        self.assertEqual(self.tree(self.store.root), kept)
+
+    def test_missing_or_empty_pending_is_not_an_error(self):
+        for name in self.proposals:
+            (self.pending / name).unlink()
+        steps = [s for s in migrate.run(self.store) if s.project == migrate.PENDING_DIR]
+        self.assertEqual([(s.action, s.describe()) for s in steps], [("remove", "_pending/ removed: it was empty")])
+        self.assertFalse(self.pending.exists())
+        self.assertEqual(migrate.run(self.store), [])  # missing: nothing to do
+
+    def test_a_file_that_cant_be_backed_up_is_not_removed(self):
+        # Something already in the way at the backup path: the copy can't be made or checked.
+        (self.kept_dir / "a1b2c3.json").mkdir(parents=True)
+        steps = {s.name: s for s in migrate.run(self.store) if s.project == migrate.PENDING_DIR}
+        self.assertEqual(steps["a1b2c3.json"].action, "skip")
+        self.assertIn("run `hermes memory-buckets migrate` again", steps["a1b2c3.json"].describe())
+        self.assertTrue(steps["a1b2c3.json"].describe().startswith("_pending/a1b2c3.json left in place: "))
+        self.assertNotIn("", steps, "the folder stays while a file is still in it")
+        self.assertEqual((self.pending / "a1b2c3.json").read_bytes(), self.proposals["a1b2c3.json"])
+        self.assertEqual(sorted(p.name for p in self.pending.iterdir()), ["a1b2c3.json"])
+        self.assertEqual(migrate.leftover_pending(self.store), ["a1b2c3.json"])
+        (self.kept_dir / "a1b2c3.json").rmdir()
+        steps = migrate.run(self.store)
+        self.assertEqual([s.action for s in steps], ["pending", "remove"])
+        self.assertEqual(self.tree(self.kept_dir), self.proposals)
+
+    def test_a_failed_copy_is_not_removed(self):
+        real = self.store._atomic_write
+
+        def flaky(target, data):
+            if target.name == "d4e5f6.json":
+                raise OSError("disk full")
+            return real(target, data)
+
+        with mock.patch.object(self.store, "_atomic_write", side_effect=flaky):
+            steps = {s.name: s for s in migrate.run(self.store) if s.project == migrate.PENDING_DIR}
+        self.assertEqual(steps["d4e5f6.json"].describe(),
+                         "_pending/d4e5f6.json left in place: disk full; run `hermes memory-buckets migrate` again")
+        self.assertTrue((self.pending / "d4e5f6.json").exists())
+        self.assertFalse((self.pending / "a1b2c3.json").exists())
+
+    def test_rerun_after_a_crash_between_copy_and_removal(self):
+        with mock.patch("pathlib.Path.unlink", side_effect=OSError("crash")):
+            steps = [s for s in migrate.run(self.store) if s.project == migrate.PENDING_DIR]
+        self.assertEqual({s.action for s in steps}, {"skip"})
+        self.assertEqual(len(steps), 3, "no folder step while files are still in it")
+        migrate.run(self.store)
+        self.assertFalse(self.pending.exists())
+        self.assertEqual(self.tree(self.kept_dir), self.proposals, "no second copy")
+
+    def test_an_earlier_backup_is_never_overwritten(self):
+        self.kept_dir.mkdir(parents=True)
+        (self.kept_dir / "a1b2c3.json").write_bytes(b"an older copy\n")
+        migrate.run(self.store)
+        self.assertEqual((self.kept_dir / "a1b2c3.json").read_bytes(), b"an older copy\n")
+        data = self.proposals["a1b2c3.json"]
+        self.assertEqual((self.kept_dir / f"a1b2c3-{version(data)}.json").read_bytes(), data)
+        self.assertFalse(self.pending.exists())
+
+    def test_anything_but_a_regular_file_is_left_with_the_folder(self):
+        (self.pending / "stray").mkdir()
+        steps = migrate.run(self.store, dry_run=True)
+        self.assertNotIn("remove", [s.action for s in steps])
+        steps = {s.name: s for s in migrate.run(self.store) if s.project == migrate.PENDING_DIR}
+        self.assertEqual(steps["stray"].describe(), "_pending/stray left in place: it isn't a regular file. "
+                                                    "Move it out by hand, then run `hermes memory-buckets migrate`")
+        self.assertEqual([p.name for p in self.pending.iterdir()], ["stray"])
+        self.assertEqual(self.tree(self.kept_dir), self.proposals)
+
+    def test_provider_runs_it_on_startup(self):
+        from memory_buckets import provider as prov
+        with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_EMBEDDINGS_BACKEND": "off"}), \
+                self.assertLogs("memory_buckets", "INFO") as logs:
+            p = prov.MemoryBucketsProvider()
+            p.initialize("s1", hermes_home=str(self.home), platform="cli")
+        self.addCleanup(p.shutdown)
+        self.assertFalse(self.pending.exists())
+        self.assertTrue(any("_pending/ removed" in line for line in logs.output))
 
 
 class ProviderRunsTheMigrationTest(StoreCase):
