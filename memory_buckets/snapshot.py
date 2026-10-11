@@ -28,18 +28,20 @@ PROFILE = f"{GLOBAL}/profile.md"
 PREFERENCES = f"{GLOBAL}/preferences.md"
 INBOX = f"{GLOBAL}/inbox.md"
 SORT_SKILL: Optional[str] = (
-    "memory-buckets:sort-inbox"  # None when Hermes can't serve it (pip installs)
+    "memory-buckets:sort-imports"  # None when Hermes can't serve it (pip installs)
 )
 INBOX_NOTE = (
     "### Inbox\n"
-    f"{INBOX} holds memory waiting to be sorted. Sort it only when the user asks. "
-    'To sort it, load skill_view("{skill}") and follow it step by step.'
+    f"{INBOX} holds imported memory waiting to be sorted.\n"
+    "- Sort it only when the user asks.\n"
+    '- To sort it, load skill_view("{skill}") and follow it step by step.'
 )
 INBOX_NOTE_NO_SKILL = (
     "### Inbox\n"
-    f"{INBOX} holds memory waiting to be sorted. Sort it only when the user asks. "
-    "To sort it, ask the user to paste the output of `hermes memory-buckets sort-prompt`, "
-    "then follow it step by step."
+    f"{INBOX} holds imported memory waiting to be sorted.\n"
+    "- Sort it only when the user asks.\n"
+    "- To sort it, ask the user to paste the output of `hermes memory-buckets import-prompt`.\n"
+    "- Then follow it step by step."
 )
 
 # Prompt style: second person, one instruction per line, short sentences, no nested
@@ -91,16 +93,17 @@ GLOBAL_ROUTES_IN_PROJECT = _GLOBAL_ROUTES.format(
     people=" Their role in a project goes in that project's people/ file."
 )
 
-INBOX_BULLET = f"- When you are not sure where a fact goes, append it to {INBOX}."
+# D3 (ADR-0015): every session reads global/, so a misplaced global fact is still found.
+UNSURE = "- When you are not sure where a fact goes, save it under global/."
 
 UNSCOPED = (
     """\
 ### Where facts go
-This session is not in a project. You can write only under global/.
+This session is not in a project. Save general facts under global/.
 - When a fact is about a project, follow "Facts for another project".
-- When a fact is partly about a project, save the general part here. Treat the project part as above.
+- When a fact is partly about a project, save the general part under global/. Treat the project part as above.
 """
-    + INBOX_BULLET
+    + UNSURE
     + "\n\n"
     + GLOBAL_ROUTES
 )
@@ -114,23 +117,28 @@ This session is in the project {p}. Save each fact once, in one place:
 - When a fact is partly both, split it. "Prefers uv for Python; this project pins 3.10" becomes "prefers uv for Python" in global/preferences.md and "pins Python 3.10" in {p}/preferences.md.
 - When a fact is about another project, follow "Facts for another project".
 """
-    + INBOX_BULLET
+    + UNSURE
     + "\n\n"
     + PROJECT_ROUTES
     + "\n\n"
     + GLOBAL_ROUTES_IN_PROJECT
 )
 
-ELSEWHERE = (
-    """\
+# D1 and D2 (ADR-0015): add to another project's bucket, never edit it; a project
+# with no bucket and no Hermes project gets a global topic.
+ELSEWHERE = """\
 ### Facts for another project
-1. Append the fact to """
-    + INBOX
-    + """ as "<project>: <fact>".
-2. Call memory_propose for that project. Copy the inbox line exactly into inbox_lines. In summary, say what the fact is and why it belongs there.
-3. Do what the result tells you.
+- Save a fact about another project under <project>/ (one of the projects below).
+- To add to an existing file there, use memory_append.
+- To create a file there, use memory_write with if_version "new".
+- Do not edit or delete another project's files.
+- When the project is not in the list, use global/topics/<name>.md (name it after the project).
 Projects: {projects}."""
-)
+
+OTHER_PROJECTS = """\
+{label} with memory: {projects}.
+- Read their files only when the user asks about that project."""
+OTHER_PROJECTS_ADD = "- You may only add to their files. Do not edit or delete them."
 
 
 @dataclass
@@ -140,7 +148,7 @@ class Snapshot:
 
 
 def rules(scope: Scope, config: Config, projects: List[str]) -> str:
-    """The fixed instructions. ``projects`` are the buckets this session can propose into."""
+    """The fixed instructions. ``projects`` are the other buckets this session can add to."""
     if scope.read_only:
         return READING + "\n\n" + READ_ONLY.format(reason=scope.read_only_reason)
     if not scope.project:
@@ -262,7 +270,7 @@ def build(
 ) -> Snapshot:
     """``project`` is the Hermes project behind ``scope.project``, for the index header;
     without it the header shows only the bucket name. ``hermes_buckets`` are the buckets of
-    every Hermes project, so the agent can propose into projects with no memory yet."""
+    every Hermes project, so the agent can add to projects with no memory yet."""
     index.reconcile()
     listing_files = [(p, d) for p, _, d, _ in index.files()]
     cap = max(1000, config.snapshot_max_chars)
@@ -270,10 +278,10 @@ def build(
     others = sorted(
         {p.split("/", 1)[0] for p, _ in listing_files if not scope.reads_by_default(p)}
     )
-    proposable = sorted(
+    addable = sorted(
         (set(others) | set(hermes_buckets or [])) - {GLOBAL, scope.project}
     )
-    head = rules(scope, config, proposable)
+    head = rules(scope, config, addable)
     profile = _body(store, PROFILE)
 
     # Files inlined in full, in render order. The project header sits between the
@@ -330,10 +338,11 @@ def build(
             parts.append("\n".join(lines))
         if others:
             parts.append(
-                ("Other projects" if scope.project else "Projects")
-                + " with memory: "
-                + ", ".join(others)
-                + ". Read their files only when the user asks about that project. You cannot write them directly, you must propose edits to them."
+                OTHER_PROJECTS.format(
+                    label="Other projects" if scope.project else "Projects",
+                    projects=", ".join(others),
+                )
+                + ("" if scope.read_only else "\n" + OTHER_PROJECTS_ADD)
             )
         if has_inbox and not scope.read_only:
             parts.append(

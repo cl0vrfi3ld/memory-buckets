@@ -41,26 +41,44 @@ class SnapshotTest(StoreCase):
         self.assertIn("- global/topics/nix.md: Read for Nix", snap.text)
         self.assertNotIn("proj-1/topics/deploy.md", snap.text)
         self.assertNotIn("### Project:", snap.text)
-        self.assertIn("Projects with memory: proj-1. Read their files only when the user asks", snap.text)
+        self.assertIn("Projects with memory: proj-1.\n- Read their files only when the user asks", snap.text)
+        self.assertIn("- You may only add to their files. Do not edit or delete them.", snap.text)
         self.assertEqual(snap.paths, {"global/profile.md", "global/preferences.md"})
 
     def test_unscoped_routing(self):
         where = self.section(self.build().text, "Where facts go")
-        self.assertIn("This session is not in a project. You can write only under global/.", where)
+        self.assertIn("This session is not in a project. Save general facts under global/.", where)
         for path in ("global/profile.md:", "global/preferences.md:", "global/people/<name>.md:",
                      "global/areas/<name>.md:", "global/topics/<subject>.md:"):
             self.assertIn(path, where)
-        self.assertIn("When you are not sure where a fact goes, append it to global/inbox.md.", where)
+        self.assertIn("- When you are not sure where a fact goes, save it under global/.", where)  # D3
         self.assertNotIn("proj-1/", where)
         self.assertNotIn("Their role in a project", where)
 
+    def test_no_rule_sends_facts_to_the_inbox(self):
+        # ADR-0015: the inbox only holds imported memory. The Inbox note may name it; no rule may.
+        self.put("global/inbox.md", doc("inbox", "Imported memory waiting to be sorted"))
+        self.index.reconcile()
+        for kw in ({}, {"project": "proj-1"}):
+            with self.subTest(**kw):
+                text = self.build(**kw).text
+                rules = text.split("### global/profile.md", 1)[0]
+                self.assertNotIn("inbox", rules.lower())
+                self.assertNotIn("memory_propose", text)
+                self.assertNotIn("propose", text.split("### Inbox", 1)[0].lower())
+
     def test_facts_for_another_project(self):
-        # Ivy's call: write the fact to the inbox, then propose it from there.
+        # D1: add to another bucket, never edit it. D2: no bucket and no Hermes project, a global topic.
         steps = self.section(self.build().text, "Facts for another project")
-        self.assertIn('1. Append the fact to global/inbox.md as "<project>: <fact>".', steps)
-        self.assertIn("2. Call memory_propose for that project. Copy the inbox line exactly into inbox_lines.", steps)
-        self.assertIn("Projects: proj-1.", steps)
-        # Hermes projects with no memory yet can be proposed into; the session's own project can't.
+        self.assertEqual(
+            steps.rstrip("\n"),
+            "- Save a fact about another project under <project>/ (one of the projects below).\n"
+            "- To add to an existing file there, use memory_append.\n"
+            '- To create a file there, use memory_write with if_version "new".\n'
+            "- Do not edit or delete another project's files.\n"
+            "- When the project is not in the list, use global/topics/<name>.md (name it after the project).\n"
+            "Projects: proj-1.")
+        # Hermes projects with no memory yet can be added to; the session's own project isn't listed.
         steps = self.section(self.build(project="proj-1", hermes_buckets=["proj-1", "nixos-config"]).text,
                              "Facts for another project")
         self.assertIn("Projects: nixos-config.", steps)
@@ -78,6 +96,19 @@ class SnapshotTest(StoreCase):
         self.assertIn("When a fact only matters to proj-1, save it under proj-1/.", where)
         self.assertIn("When a fact is also true outside proj-1, save it under global/ only.", where)
         self.assertIn("in proj-1/preferences.md.", where)  # the split example names the project
+        self.assertIn("- When you are not sure where a fact goes, save it under global/.", where)  # D3
+
+    def test_other_projects_line(self):
+        self.put("proj-2/topics/x.md", doc("x", "Something about proj-2"))
+        self.index.reconcile()
+        text = self.build(project="proj-1").text
+        self.assertIn("Other projects with memory: proj-2.\n"
+                      "- Read their files only when the user asks about that project.\n"
+                      "- You may only add to their files. Do not edit or delete them.", text)
+        # Read-only sessions get no save instruction, here or anywhere.
+        text = self.build(project="proj-1", context="cron").text
+        self.assertIn("Other projects with memory: proj-2.\n- Read their files only", text)
+        self.assertNotIn("add to their files", text)
 
     def test_read_only_sessions_get_no_save_rules(self):
         text = self.build(project="proj-1", context="cron").text
@@ -91,6 +122,23 @@ class SnapshotTest(StoreCase):
             rules = self.build(**kw).text.split("### global/profile.md", 1)[0]
             longest = max(rules.splitlines(), key=lambda line: len(line.split()))
             self.assertLessEqual(len(longest.split()), 40, longest)
+
+    def test_new_wording_keeps_sentences_short(self):
+        # The 0.2.0 blocks: one instruction per line, sentences under 15 words.
+        self.put("global/inbox.md", doc("inbox", "Imported memory waiting to be sorted"))
+        self.put("proj-2/topics/x.md", doc("x", "Something about proj-2"))
+        self.index.reconcile()
+        text = self.build(project="proj-1").text
+        lines = [*self.section(text, "Facts for another project").splitlines(),
+                 *self.section(text, "Inbox").splitlines(),
+                 snapshot.OTHER_PROJECTS_ADD, snapshot.UNSURE]
+        with mock.patch.object(snapshot, "SORT_SKILL", None):
+            lines += self.section(self.build().text, "Inbox").splitlines()
+        for line in lines:
+            if line.startswith("Projects:"):
+                continue
+            for sentence in line.removeprefix("- ").replace("(", ". ").split(". "):
+                self.assertLess(len(sentence.split()), 15, line)
 
     def test_project_index_inlines_the_projects_files(self):
         snap = self.build(project="proj-1")
@@ -232,9 +280,10 @@ class SnapshotTest(StoreCase):
         self.assertNotIn("skill_view", self.build().text)
         self.put("global/inbox.md", doc("inbox", "Imported memory waiting to be sorted"))
         self.index.reconcile()
-        self.assertIn('skill_view("memory-buckets:sort-inbox")', self.build().text)
+        self.assertIn('skill_view("memory-buckets:sort-imports")', self.build().text)
+        self.assertIn("global/inbox.md holds imported memory waiting to be sorted.", self.build().text)
         with mock.patch.object(snapshot, "SORT_SKILL", None):
-            self.assertIn("hermes memory-buckets sort-prompt", self.build().text)
+            self.assertIn("hermes memory-buckets import-prompt", self.build().text)
 
     def test_empty_store(self):
         snap = self.build()

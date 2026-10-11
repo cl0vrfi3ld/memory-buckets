@@ -31,7 +31,7 @@ def _register_extras(ctx) -> None:
         # ("memory_buckets"), and Hermes then prunes the skill as not belonging to the active
         # provider, so it can't be loaded there (README: The inbox and proposals).
         namespace = getattr(ctx, "name", None)
-        snapshot.SORT_SKILL = "memory-buckets:sort-inbox" if namespace in (None, "memory-buckets") else None
+        snapshot.SORT_SKILL = "memory-buckets:sort-imports" if namespace in (None, "memory-buckets") else None
         # The documented bundle-skills layout: skills/<name>/SKILL.md, loaded with
         # skill_view("<plugin>:<name>") and never listed in the prompt's skill index.
         for child in sorted(SKILLS_DIR.iterdir()):

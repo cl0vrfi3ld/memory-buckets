@@ -48,7 +48,7 @@ class HermesIntegrationTest(unittest.TestCase):
             out = self.probe(tmp, home)
             self.check(out)
             self.assertTrue(out["skill_ok"], "skill_view('memory-buckets:sort-inbox')")
-            self.assertEqual(out["skill_name"], "memory-buckets:sort-inbox")
+            self.assertEqual(out["skill_name"], "memory-buckets:sort-imports")
 
     @unittest.skipUnless(CAN_PIP, "needs pip and hatchling (uv sync installs them)")
     def test_real_hermes_finds_the_pip_install_by_entry_point(self):
