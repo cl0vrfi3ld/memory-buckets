@@ -65,9 +65,10 @@ Do not save temporary plans or details of a one-off task.
 
 - Add to an existing file before you create a new one.
 - To add a fact, use memory_append. To change a fact, use memory_str_replace.
-- To create a file, use memory_write with if_version "new" and a description that says when to read it.
+- To create a file, use memory_write with if_version "new".
+- Give the file a description that says when to read it.
 - Write one short bullet per fact.
-- Do not mention reading or saving memory to the user, unless a tool result tells you to."""
+- Do not mention reading or saving memory to the user."""
 
 READ_ONLY = (
     "Memory is read-only in this session ({reason}). Read it; do not try to save."

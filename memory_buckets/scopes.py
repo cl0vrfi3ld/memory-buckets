@@ -67,8 +67,10 @@ class Scope:
                 return
             raise StoreError(
                 "out_of_scope",
-                f"you may only add to {self._bucket_of(path)}/ with memory_append (no edits or deletes there)",
+                f"you may only add to {self._bucket_of(path)}/. Use memory_append, or memory_write "
+                'with if_version "new" (no edits or deletes there)',
                 allowed_prefixes=list(self.write_prefixes),
+                add_only_buckets=list(self.other_buckets),
             )
         where = f"project '{self.project}'" if self.project else "an unscoped session"
         raise StoreError(

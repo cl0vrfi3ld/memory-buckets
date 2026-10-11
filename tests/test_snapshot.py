@@ -139,6 +139,15 @@ class SnapshotTest(StoreCase):
             for sentence in line.removeprefix("- ").replace("(", ". ").split(". "):
                 self.assertLess(len(sentence.split()), 15, line)
 
+    def test_saving_rules_are_split_and_drop_the_dead_clause(self):
+        # QA 2026-10-11: the 18-word "To create a file" line, and a "unless a
+        # tool result tells you to" clause no tool result can trigger.
+        saving = self.section(self.build().text, "Saving")
+        self.assertIn('- To create a file, use memory_write with if_version "new".', saving)
+        self.assertIn("- Give the file a description that says when to read it.", saving)
+        self.assertIn("- Do not mention reading or saving memory to the user.", saving)
+        self.assertNotIn("unless a tool result", self.build().text)
+
     def test_project_index_inlines_the_projects_files(self):
         snap = self.build(project="proj-1")
         text = snap.text

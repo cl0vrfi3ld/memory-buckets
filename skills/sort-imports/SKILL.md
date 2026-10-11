@@ -1,6 +1,6 @@
 ---
 name: sort-imports
-description: Sort the imported memory in global/inbox.md. File each fact where it belongs (global/ or a project bucket), then remove its line from the inbox.
+description: Sort the imported memory in global/inbox.md. File each fact where it belongs (global/ or a project bucket). Then remove its line from the inbox.
 ---
 # Sort the imported memory
 
@@ -17,7 +17,7 @@ Entries under a MEMORY.md heading are notes you wrote earlier.
 An entry written as "<project>: <fact>" is a project fact for that project.
 
 Each bullet point is one entry.
-Move every entry into the right memory file, or drop it if it is not worth keeping.
+Move every entry into the right memory file. Drop an entry only if it is not worth keeping.
 
 ## The two kinds of entry
 
@@ -27,7 +27,7 @@ Decide which kind each entry is before you do anything with it.
   Examples: the user's name, their preferred tone, a friend's birthday, a hobby.
   Save it under global/.
 - **Project fact** (only matters for one project)
-  Examples: how an app is deployed, the stack a repository uses, a decision made for one project.
+  Examples: how an app is deployed, the stack a repository uses. Also a decision made for one project.
   Save it in that project's bucket (<project>/).
 
 If an entry has a general part and a project part, split it.
@@ -35,7 +35,7 @@ Save each part where it belongs.
 
 ## Rules for project facts
 
-- Known projects are the ones in memory_list and the ones your memory instructions list under "Facts for another project" (even with no files yet).
+- Known projects are the ones in memory_list. Your memory instructions also list known projects under "Facts for another project". That list counts even with no files yet.
 - To add to an existing file, use memory_append.
 - To create a file, use memory_write with if_version "new" and a description.
 - Add facts only. Do not edit or delete files in a project's bucket during this task.
@@ -66,7 +66,8 @@ Follow these steps in order.
    - If the file exists, read it first.
    - Add only facts it does not already have, with memory_append.
    - Correct outdated facts in global/ files with memory_str_replace.
-   - If the file does not exist, create it with memory_write (if_version "new") and a description that says when to read it.
+   - If the file does not exist, create it with memory_write (if_version "new").
+   - Give the file a description that says when to read it.
    - Write each fact as a short bullet point, one fact per line.
 
 4. **Save the project facts.** Group them by project. Then, for each project:

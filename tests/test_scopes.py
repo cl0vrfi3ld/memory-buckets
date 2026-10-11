@@ -50,13 +50,18 @@ class ScopeTest(StoreCase):
         with self.assertRaises(StoreError):
             scoped.check_write("clogpt/profile.md")
 
-    def test_refused_edit_names_memory_append(self):
+    def test_refused_edit_names_both_add_tools(self):
         scoped = self.resolve("proj-1")
         for check in ({"append": False}, {}):
             with self.assertRaises(StoreError) as caught:
                 scoped.check_write("clogpt/topics/deploy.md", **check)
             self.assertEqual(caught.exception.code, "out_of_scope")
+            self.assertIn("you may only add to clogpt/", caught.exception.message)
             self.assertIn("memory_append", caught.exception.message)
+            self.assertIn("memory_write", caught.exception.message)
+            self.assertEqual(caught.exception.fields,
+                             {"allowed_prefixes": ["proj-1/", "global/"],
+                              "add_only_buckets": ["clogpt"]})
 
     def test_read_only_contexts(self):
         for context in ("cron", "subagent", "flush"):

@@ -90,10 +90,14 @@ class ToolsTest(StoreCase):
                          body="- x", if_version="new")
         self.assertTrue(made["ok"], made)
         self.assertIn("sources:\n  - telegram@*\n", self.content("proj-1/topics/notes.md"))
-        # Edit and delete: refused, and the error points at memory_append.
+        # Edit and delete: refused; the error names both add tools and the add-only buckets.
         got = self.call("memory_str_replace", path="proj-1/topics/deploy.md", old="- colmena", new="- x")
         self.assertEqual(got["error"]["code"], "out_of_scope")
+        self.assertIn("you may only add to proj-1/", got["error"]["message"])
         self.assertIn("memory_append", got["error"]["message"])
+        self.assertIn('memory_write with if_version "new"', got["error"]["message"])
+        self.assertEqual(got["allowed_prefixes"], ["global/"])
+        self.assertEqual(got["add_only_buckets"], ["clogpt", "proj-1"])
         got = self.call("memory_write", path="proj-1/topics/deploy.md", description="x", body="- y",
                         if_version=version(self.content("proj-1/topics/deploy.md").encode()))
         self.assertEqual(got["error"]["code"], "out_of_scope")
@@ -195,7 +199,7 @@ class ToolsTest(StoreCase):
         for project in (None, "proj-1"):
             with self.subTest(project=project, inbox="missing"):
                 got = self.call("memory_append", project=project, path="global/inbox.md", lines=["ex-luna: uses a SID"])
-                self.assertEqual(got["error"], {"code": "invalid_args", "message": refusal})
+                self.assertEqual(got["error"], {"code": "out_of_scope", "message": refusal})
                 self.assertFalse((self.store.memories / "global/inbox.md").exists(), "refusing must not create it")
         original = doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Ivy\n")
         self.put("global/inbox.md", original)

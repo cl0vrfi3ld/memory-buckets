@@ -3,7 +3,7 @@
 Every result carries ``ok``. Errors are ``{"ok": false, "error": {"code", "message"}, ...}``:
 
 - ``conflict`` adds ``current: {path, version, content}`` so the agent can merge and retry;
-- ``out_of_scope`` adds ``allowed_prefixes``.
+- ``out_of_scope`` adds ``allowed_prefixes``; the add-only refusal also adds ``add_only_buckets``.
 
 The contract codes come from ``store.py``. The tool layer adds ``out_of_scope``,
 ``read_only`` and ``invalid_args``.
@@ -11,8 +11,8 @@ The contract codes come from ``store.py``. The tool layer adds ``out_of_scope``,
 Write rights (ADR-0015): a session writes fully inside ``scope.write_prefixes``.
 Into another known bucket it may only append to existing files
 (``memory_append``) and create new ones (``memory_write`` with ``if_version``
-"new"); edits and deletes there are refused with an error pointing at
-``memory_append``. Cross-project writes record ``<platform>@<session project or
+"new"); edits and deletes there are refused with an error naming both add tools.
+Cross-project writes record ``<platform>@<session project or
 "*">`` in ``sources`` and show the user a status line where one exists.
 """
 
@@ -313,7 +313,7 @@ def _append(args, ctx: Context):
         raise ArgError("'lines' needs at least one non-empty line")
     if_version = _str(args, "if_version", required=False)
     if path == inbox.PATH:
-        raise ArgError("the inbox only holds imported memory; save the fact where it belongs.")
+        raise StoreError("out_of_scope", "the inbox only holds imported memory; save the fact where it belongs.")
 
     def edit(current):
         if current is None:
