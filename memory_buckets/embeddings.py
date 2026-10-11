@@ -107,8 +107,15 @@ def make_embedder(cfg, store_root: Path, *, spawn: Optional[Callable[..., thread
 
 
 def min_similarity(cfg, embedder) -> float:
-    """Configured prefetch threshold, or the model's measured default when unset (< 0)."""
+    """Configured prefetch threshold, or the model's measured default when unset (< 0).
+
+    With embeddings off there is no model to take a default from, and ``index.hints``
+    returns [] before any similarity is compared, so the value is never used: return
+    a threshold nothing can meet rather than crash on the missing embedder.
+    """
     configured = cfg.prefetch_min_similarity
     if configured is not None and configured >= 0:
         return configured
+    if embedder is None:
+        return float("inf")
     return embedder.default_min_similarity

@@ -185,7 +185,8 @@ class ProviderTest(StoreCase):
 
     def test_prefetch_is_empty_without_embeddings(self):
         p = self.make()
-        self.assertEqual(p.prefetch("Sam likes climbing", session_id="s1"), "")
+        with self.assertNoLogs("memory_buckets", "WARNING"):
+            self.assertEqual(p.prefetch("Sam likes climbing", session_id="s1"), "")
         self.assertIsNone(p.recall_status())
 
     def test_prefetch_hints_with_embeddings(self):
