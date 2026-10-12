@@ -165,7 +165,7 @@ other buckets only when asked. What a session may write:
 **Full** is every write tool. **Add only** is `memory_append` to an existing
 file and `memory_write` with `if_version: "new"` to create one. Editing,
 overwriting and deleting another project's files are refused, and the error
-points the agent at `memory_append`. Those stay with that project's own
+names both ways to add. Those stay with that project's own
 sessions. A cron job under `cron_writes: true` writes like any other session.
 
 "Other buckets" are the buckets on disk plus every Hermes project, including
@@ -282,8 +282,8 @@ skills:
 Without it, asking still works for a plugin-directory install: the prompt block
 tells the agent to load the skill with `skill_view`. pip and Nix installs can't
 do that, because Hermes prunes the bundled skills of a pip-installed provider.
-There, either add the line or paste the output of
-`hermes memory-buckets import-prompt`.
+There, either add the line or paste the prompt that
+`hermes memory-buckets import-prompt` prints.
 
 Don't save the sort prompt as a skill of your own. That copy goes stale when
 the plugin's instructions change.

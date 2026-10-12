@@ -34,8 +34,8 @@ buckets. The setting is ignored, with a warning in the log.
   - Any writable session, unscoped ones included, can add to another
     project's bucket: `memory_append` to an existing file, or `memory_write`
     with `if_version: "new"` to create one. Editing, overwriting and deleting
-    there stay with that project's own sessions, and the refusal points the
-    agent at `memory_append`.
+    there stay with that project's own sessions, and the refusal names both
+    ways to add.
   - Another project is a bucket on disk or any Hermes project, including
     ones with no memory yet. A fact about a project with neither goes to
     `global/topics/<name>.md`.
