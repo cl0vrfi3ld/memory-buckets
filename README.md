@@ -240,8 +240,8 @@ store.
 
 ## Importing built-in memory
 
-`global/inbox.md` holds imported memory that's waiting to be sorted. It stays
-when it's empty, and you can edit it by hand: adding an entry fills in
+`global/inbox.md` holds imported memory that's waiting to be sorted. It can
+stay when it's empty, and you can edit it by hand: adding an entry fills in
 missing frontmatter. Two things add to it:
 
 - `hermes memory-buckets import`, which copies in built-in memory's
@@ -251,6 +251,10 @@ missing frontmatter. Two things add to it:
 Nothing else does. The agent files what it learns in conversation itself, and
 `memory_append` to the inbox is refused. An inbox from 0.1.0 may still have
 `added in conversation` sections; they're sorted like the rest.
+
+The agent can still remove entries with `memory_str_replace`, `memory_write`
+or `memory_delete`. If the inbox is deleted, the next import or mirrored write
+creates it again.
 
 **To sort it**, run `/sort-imports` or ask the agent to sort your imported
 memory. It's sorted only when you ask.

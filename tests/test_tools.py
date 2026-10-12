@@ -243,6 +243,43 @@ class ToolsTest(StoreCase):
         self.assertTrue(self.call("memory_str_replace", project="proj-1", path="global/inbox.md",
                                   old="- Uses tea\n", new="")["ok"])
 
+    def test_inbox_can_be_rewritten_and_deleted_from_a_writable_session(self):
+        # Ivy's decision, 2026-10-11: only memory_append is refused on the inbox.
+        refusal = "the inbox only holds imported memory; save the fact where it belongs."
+        for project in (None, "proj-1"):
+            with self.subTest(project=project, tool="memory_write"):
+                self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Ivy\n- Uses tea\n"))
+                v = version(self.content("global/inbox.md").encode())
+                got = self.call("memory_write", project=project, path="global/inbox.md",
+                                description=inbox.DESCRIPTION, body="## imported USER.md\n- Uses tea\n", if_version=v)
+                self.assertTrue(got["ok"], got)
+                text = self.content("global/inbox.md")
+                self.assertTrue(text.startswith(f"---\nname: inbox\ndescription: {inbox.DESCRIPTION}\n"), text)
+                self.assertTrue(text.endswith("---\n## imported USER.md\n- Uses tea\n"), text)
+                self.assertNotIn("- Ivy", text)
+                self.assertEqual(self.call("memory_append", project=project, path="global/inbox.md",
+                                           lines=["x"])["error"]["code"], "out_of_scope")
+            with self.subTest(project=project, tool="memory_delete"):
+                self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n"))
+                v = version(self.content("global/inbox.md").encode())
+                got = self.call("memory_delete", project=project, path="global/inbox.md", if_version=v)
+                self.assertTrue(got["ok"], got)
+                self.assertFalse((self.store.memories / "global/inbox.md").exists())
+                self.assertEqual(self.call("memory_append", project=project, path="global/inbox.md",
+                                           lines=["x"])["error"], {"code": "out_of_scope", "message": refusal})
+                self.assertFalse((self.store.memories / "global/inbox.md").exists())
+
+    def test_a_deleted_inbox_is_recreated_with_the_current_description(self):
+        # The skill says deleting is safe: the import and the mirror both go through inbox.append.
+        self.put("global/inbox.md", doc("inbox", "Imported memory waiting to be sorted (old)", "## imported\n- a\n"))
+        v = version(self.content("global/inbox.md").encode())
+        self.assertTrue(self.call("memory_delete", path="global/inbox.md", if_version=v)["ok"])
+        self.assertIsNotNone(inbox.append(self.store, "imported MEMORY.md", ["b"], source="cli:import"))
+        text = self.content("global/inbox.md")
+        self.assertTrue(text.startswith(f"---\nname: inbox\ndescription: {inbox.DESCRIPTION}\n"), text)
+        self.assertTrue(text.endswith("## imported MEMORY.md\n- b\n"), text)
+        self.assertNotIn("- a", text)
+
     def test_inbox_without_frontmatter_is_repaired_on_import(self):
         # Hand-written (e.g. in Obsidian): every import and mirrored write used to fail.
         (self.store.memories / "global/inbox.md").write_text("- jotted down by hand\n")

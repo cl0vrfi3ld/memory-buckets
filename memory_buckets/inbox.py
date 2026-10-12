@@ -3,8 +3,9 @@
 It holds entries from ``hermes memory-buckets import`` and built-in memory writes
 mirrored by the provider's ``on_memory_write`` bridge. The agent never appends to
 it (``memory_append`` refuses the path); the sort-imports skill removes filed lines
-with ``memory_str_replace``. It's a standing file: sorting empties it, but nothing
-needs to delete it.
+with ``memory_str_replace``, ``memory_write`` or ``memory_delete``. It's a standing
+file, but a deleted one is fine: the next ``append`` (import or mirrored built-in
+write) recreates it with ``DESCRIPTION``.
 
 Appends go under a ``## <heading>`` section, one bullet per entry, so entries from
 different imports stay apart.

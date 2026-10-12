@@ -268,6 +268,19 @@ class ProviderTest(StoreCase):
         self.assertIn("- [user add] Prefers tea\n- [memory replace] Uses NixOS (was: Uses Arch)\n", text)
         self.assertEqual(text.count("## mirrored from built-in memory"), 1)
 
+    def test_on_memory_write_recreates_a_deleted_inbox(self):
+        p = self.make()
+        p.on_memory_write("add", "user", "Prefers tea")
+        path = self.store.memories / "global/inbox.md"
+        v = self.store.read("global/inbox.md")["version"]
+        self.assertTrue(self.call(p, "memory_delete", path="global/inbox.md", if_version=v)["ok"])
+        self.assertFalse(path.exists())
+        p.on_memory_write("add", "user", "Uses NixOS")
+        text = self.store.read("global/inbox.md")["content"]
+        self.assertIn(f"name: inbox\ndescription: {inbox.DESCRIPTION}", text)
+        self.assertIn("- [user add] Uses NixOS\n", text)
+        self.assertNotIn("Prefers tea", text)
+
     def test_nothing_to_set_up_and_uninitialised(self):
         p = prov.MemoryBucketsProvider()
         self.assertEqual(p.get_config_schema(), [])

@@ -44,7 +44,9 @@ buckets. The setting is ignored, with a warning in the log.
   `hermes memory-buckets import` and the mirror of built-in memory writes.
   `memory_append` to it is refused. Its description is now "Imported memory
   waiting to be sorted", and migration updates it. Existing
-  `added in conversation` sections stay and are sorted with the rest.
+  `added in conversation` sections stay and are sorted with the rest. The
+  agent can still clear it with `memory_str_replace`, `memory_write` or
+  `memory_delete`; a deleted inbox comes back with the next import.
 - **The prompt block** follows suit: the rules for other projects' buckets
   replace the inbox and proposal steps, and the inbox note only mentions
   imported memory.

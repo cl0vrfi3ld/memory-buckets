@@ -60,6 +60,18 @@ class CliTest(StoreCase):
         self.assertEqual(code, 0)
         self.assertEqual(again, out[out.index("\nNext:"):])
 
+    def test_import_recreates_a_deleted_inbox(self):
+        (self.home / "memories").mkdir()
+        (self.home / "memories/USER.md").write_text("Name is Ivy\n")
+        self.put("global/inbox.md", doc("inbox", "Old description", "## imported\n- a\n"))
+        (self.store.memories / "global/inbox.md").unlink()
+        code, out = self.run_cli("import")
+        self.assertEqual(code, 0, out)
+        text = self.store.read("global/inbox.md")["content"]
+        self.assertIn(f"description: {inbox.DESCRIPTION}\n", text)
+        self.assertIn("- Name is Ivy\n", text)
+        self.assertNotIn("- a\n", text)
+
     def test_import_prompt_needs_an_inbox(self):
         code, out = self.run_cli("import-prompt")
         self.assertEqual(code, 1)
