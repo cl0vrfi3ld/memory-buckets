@@ -75,6 +75,10 @@ class ToolsTest(StoreCase):
         result = self.call("memory_write", path="unknown-bucket/topics/x.md", description="x", body="y", if_version="new")
         self.assertEqual(result["error"]["code"], "out_of_scope")
         self.assertEqual(result["allowed_prefixes"], ["global/"])
+        # An unknown bucket: the refusal points where the prompt does (D2).
+        self.assertEqual(result["error"]["message"],
+                         "unknown-bucket/topics/x.md is outside what an unscoped session may write; "
+                         "unknown-bucket is not a known project, so use global/topics/unknown-bucket.md")
         cron = self.call("memory_append", context="cron", path="global/topics/nix.md", lines=["x"])
         self.assertEqual(cron["error"]["code"], "read_only")
 
@@ -183,7 +187,18 @@ class ToolsTest(StoreCase):
     def test_append(self):
         self.assertTrue(self.call("memory_append", path="global/topics/nix.md", lines=["a", "- b", "multi\nline"])["ok"])
         self.assertTrue(self.content("global/topics/nix.md").endswith("- flakes\n- a\n- b\n- multi line\n"))
-        self.assertEqual(self.call("memory_append", path="global/topics/new.md", lines=["a"])["error"]["code"], "not_found")
+        self.assertEqual(self.call("memory_append", path="global/topics/new.md", lines=["a"])["error"],
+                         {"code": "not_found", "message": "global/topics/new.md doesn't exist; to create it, "
+                                                          "use memory_write with if_version \"new\""})
+
+    def test_schema_copy_says_one_thing_one_way(self):
+        # The create instruction reads as in the prompt's Saving rules; no sentence runs long.
+        described = {s["name"]: s["description"] for s in tools.SCHEMAS}
+        self.assertTrue(described["memory_append"].endswith(
+            'The file must already exist. To create a file, use memory_write with if_version "new".'))
+        self.assertTrue(described["memory_list"].endswith(
+            "pass its directory as prefix (for example 'home-server/'). To list every project, "
+            "set include_projects to true."))
 
     def call_notified(self, name, shown, project=None, **args):
         """Call with a ``notify`` that records messages and returns ``shown``."""
@@ -269,6 +284,13 @@ class ToolsTest(StoreCase):
                         if_version=version(current))
         self.assertEqual(got["error"]["code"], "invalid_frontmatter")
         self.assertEqual((self.store.memories / "global/topics/nix.md").read_text(), "- flakes\n")
+
+    def test_unparseable_frontmatter_refusal_names_the_user(self):
+        # Only the user can fix frontmatter that won't parse; the refusal says who.
+        (self.store.memories / "global/topics/nix.md").write_text("---\nname: nix\n- flakes\n")
+        got = self.call("memory_append", path="global/topics/nix.md", lines=["x"])
+        self.assertEqual(got["error"]["code"], "invalid_frontmatter")
+        self.assertTrue(got["error"]["message"].endswith("; tell the user to fix it by hand"), got)
 
     def test_a_broken_status_channel_never_fails_the_write(self):
         self.put("clogpt/topics/x.md", doc("x", "X", "- a\n"))

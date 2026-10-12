@@ -73,9 +73,12 @@ class Scope:
                 add_only_buckets=list(self.other_buckets),
             )
         where = f"project '{self.project}'" if self.project else "an unscoped session"
+        # Only a bucket nobody knows gets here (D2): point at the same place the prompt does.
+        bucket = self._bucket_of(path)
         raise StoreError(
             "out_of_scope",
-            f"{path} is outside what {where} may write",
+            f"{path} is outside what {where} may write; {bucket} is not a known project, "
+            f"so use global/topics/{bucket}.md",
             allowed_prefixes=list(self.write_prefixes),
         )
 

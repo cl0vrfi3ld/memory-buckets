@@ -44,8 +44,8 @@ def _fn(name: str, description: str, properties: Dict[str, Any], required: List[
 SCHEMAS: List[Dict[str, Any]] = [
     _fn("memory_list",
         "List memory files with their descriptions and versions. By default it lists global/ and the current "
-        "project. To see another project, pass its directory as prefix (for example 'home-server/'), or set "
-        "include_projects to true to list every project.",
+        "project. To see another project, pass its directory as prefix (for example 'home-server/'). To list "
+        "every project, set include_projects to true.",
         {"prefix": {"type": "string", "description": "Only list paths that start with this, for example 'global/people/'."},
          "include_projects": {"type": "boolean", "description": "Set to true to also list other projects' files."}}, []),
     _fn("memory_read",
@@ -79,7 +79,7 @@ SCHEMAS: List[Dict[str, Any]] = [
         ["path", "old", "new"]),
     _fn("memory_append",
         "Add facts to the end of an existing memory file, one bullet point per fact. The file must already "
-        "exist; to create a file, use memory_write.",
+        "exist. To create a file, use memory_write with if_version \"new\".",
         {"path": {"type": "string", "description": _PATH_HELP},
          "lines": {"type": "array", "items": {"type": "string"}, "minItems": 1,
                    "description": "One fact per item. '- ' is added to the start if it is missing."},
@@ -228,7 +228,7 @@ def _existing(path: str, current: Optional[bytes]):
         return frontmatter.parse(text)
     except frontmatter.FrontmatterError as err:
         raise StoreError("invalid_frontmatter",
-                         f"{path}: can't parse its frontmatter ({err}); fix it by hand before editing") from None
+                         f"{path}: can't parse its frontmatter ({err}); tell the user to fix it by hand") from None
 
 
 def _add_source(fm: frontmatter.Frontmatter, source: str) -> None:
@@ -316,7 +316,7 @@ def _append(args, ctx: Context):
 
     def edit(current):
         if current is None:
-            raise StoreError("not_found", f"{path} doesn't exist; create it with memory_write (if_version \"new\")")
+            raise StoreError("not_found", f"{path} doesn't exist; to create it, use memory_write with if_version \"new\"")
         fm, body = _existing(path, current)
         if body and not body.endswith("\n"):
             body += "\n"

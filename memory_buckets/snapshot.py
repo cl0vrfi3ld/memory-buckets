@@ -225,7 +225,7 @@ def project_header(
             lines.append("Folders: " + ", ".join(shown))
     if profile == "broken":
         # The file exists, but memory_write would conflict and memory_append and
-        # memory_str_replace refuse ("fix it by hand"): an instruction only the
+        # memory_str_replace refuse ("tell the user to fix it by hand"): an instruction only the
         # user can carry out, so the agent must pass it on, not try anything.
         lines.append(
             f"{bucket}/profile.md exists, but its frontmatter is missing or can't be parsed. No memory "
