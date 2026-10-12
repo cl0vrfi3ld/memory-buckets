@@ -66,7 +66,7 @@ Follow these steps in order.
    - If the file exists, read it first.
    - Add only facts it does not already have, with memory_append.
    - Correct outdated facts in global/ files with memory_str_replace.
-   - If the file does not exist, create it with memory_write (if_version "new").
+   - If the file does not exist, use memory_write with if_version "new".
    - Give the file a description that says when to read it.
    - Write each fact as a short bullet point, one fact per line.
 
@@ -86,7 +86,7 @@ Follow these steps in order.
    - Set new to an empty string.
    - Leave the headings in place.
 
-6. **Drop entries.** Remove entries labelled "drop" the same way. Drop an entry only if it is stale, already saved, or clearly not useful.
+6. **Drop entries.** Remove entries labelled "drop" the same way. Drop an entry only if it is stale, already saved, or not worth keeping.
 
 7. **Check for conflicts.** If two entries contradict each other, save both under global/. Say what conflicts in your reply. Entries have no dates, so do not guess which one is newer.
 
@@ -98,4 +98,4 @@ When you have finished, reply to the user with these sections:
 
 1. **Saved:** the files you created or changed, global/ and project buckets.
 2. **Dropped:** the entries you removed, and why.
-3. **Check these:** entries you saved under global/ because you could not place them, each with a one-line reason. Include any conflicts.
+3. **Check these:** entries you saved under global/ because you could not place them. Give a one-line reason for each. Include any conflicts.

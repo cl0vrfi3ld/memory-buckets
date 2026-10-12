@@ -104,6 +104,20 @@ class CliTest(StoreCase):
             self.assertEqual(lines, [(True, f"skill file {Path(tmp) / 'sort-imports/SKILL.md'}")])
         self.assertIn("/sort-imports", out.getvalue(), "outside Hermes it says what it can't check")
 
+    def test_the_skill_keeps_sentences_short(self):
+        # House style for model-facing text: sentences of 15 words or fewer.
+        import re
+        for line in cli.import_prompt().splitlines():
+            line = re.sub(r"^\s*(?:[-*]|\d+\.)?\s*(?:\*\*[^*]+\*\*)?\s*", "", line)
+            if not line or line.startswith("#"):
+                continue
+            for sentence in re.split(r"(?<=[.?!])\s+", line):
+                self.assertLessEqual(len(sentence.split()), 15, sentence)
+        text = cli.import_prompt()
+        self.assertIn("could not place them. Give a one-line reason for each.", text)
+        self.assertIn('If the file does not exist, use memory_write with if_version "new".', text)
+        self.assertIn("Drop an entry only if it is stale, already saved, or not worth keeping.", text)
+
     def test_import_prompt_only_names_real_tools(self):
         import re
         from memory_buckets import tools
