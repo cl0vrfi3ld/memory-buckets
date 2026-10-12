@@ -221,6 +221,12 @@ class ProviderTest(StoreCase):
             seen.append(prov.NUDGE in p.prefetch("what's new", session_id="s1"))
         self.assertEqual(seen, [False, False, True, False, False, True])
 
+    def test_nudge_copy(self):
+        # "new" is the Saving rules' word for "not saved yet"; it keeps the question under 15 words.
+        self.assertEqual(prov.NUDGE, "Memory check: has this conversation produced new durable facts about the user or "
+                                     "their work? If yes, save them now with the memory tools, following your memory "
+                                     "instructions. If no, do nothing. Do not mention this check to the user.")
+
     def test_no_nudge_when_read_only(self):
         p = self.make(agent_context="cron")
         p.config.nudge_interval = 1

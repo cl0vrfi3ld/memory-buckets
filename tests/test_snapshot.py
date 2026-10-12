@@ -182,7 +182,7 @@ class SnapshotTest(StoreCase):
     def test_empty_bucket_gets_a_cold_start_line(self):
         self.assertEqual(header_of(self.build(project="fresh").text, "fresh"),
                          "This project has no memory yet. When you learn what the project is, create "
-                         "fresh/profile.md with memory_write: its purpose, technology, status, and where things are.")
+                         "fresh/profile.md with memory_write. Include its purpose, technology, status, and where things are.")
         self.assertEqual(header_of(self.build(project="fresh", context="cron").text, "fresh"),
                          "This project has no memory yet.")
 
@@ -198,7 +198,7 @@ class SnapshotTest(StoreCase):
         text = self.build(project="proj-1").text
         self.assertEqual(header_of(text, "proj-1"),
                          "proj-1/profile.md is empty. When you learn what the project is, add to it with "
-                         "memory_append: its purpose, technology, status, and where things are.")
+                         "memory_append. Include its purpose, technology, status, and where things are.")
         self.assertNotIn("does not exist yet", text)
         # The nudge is a save instruction: read-only sessions don't get it.
         self.assertNotIn("is empty", self.build(project="proj-1", context="cron").text)
@@ -208,7 +208,7 @@ class SnapshotTest(StoreCase):
         text = self.build(project="proj-1").text
         self.assertEqual(
             header_of(text, "proj-1"),
-            "proj-1/profile.md exists, but its frontmatter is missing or can't be parsed: no memory tool "
+            "proj-1/profile.md exists, but its frontmatter is missing or can't be parsed. No memory tool "
             "can edit it. Tell the user in one line to fix it (hermes memory-buckets lint names the problem).")
         self.assertNotIn("does not exist yet", text)
         self.assertIn("### proj-1/profile.md\n- a web app", text, "the content is still readable")
@@ -291,7 +291,9 @@ class SnapshotTest(StoreCase):
         self.assertIn('skill_view("memory-buckets:sort-imports")', self.build().text)
         self.assertIn("global/inbox.md holds imported memory waiting to be sorted.", self.build().text)
         with mock.patch.object(snapshot, "SORT_SKILL", None):
-            self.assertIn("hermes memory-buckets import-prompt", self.build().text)
+            # "the prompt", not "the output": the output also holds steps meant for the user.
+            self.assertIn("- To sort it, ask the user to paste the prompt from "
+                          "`hermes memory-buckets import-prompt`.", self.build().text)
 
     def test_empty_store(self):
         snap = self.build()

@@ -40,7 +40,7 @@ INBOX_NOTE_NO_SKILL = (
     "### Inbox\n"
     f"{INBOX} holds imported memory waiting to be sorted.\n"
     "- Sort it only when the user asks.\n"
-    "- To sort it, ask the user to paste the output of `hermes memory-buckets import-prompt`.\n"
+    "- To sort it, ask the user to paste the prompt from `hermes memory-buckets import-prompt`.\n"
     "- Then follow it step by step."
 )
 
@@ -228,7 +228,7 @@ def project_header(
         # memory_str_replace refuse ("fix it by hand"): an instruction only the
         # user can carry out, so the agent must pass it on, not try anything.
         lines.append(
-            f"{bucket}/profile.md exists, but its frontmatter is missing or can't be parsed: no memory "
+            f"{bucket}/profile.md exists, but its frontmatter is missing or can't be parsed. No memory "
             "tool can edit it. Tell the user in one line to fix it (hermes memory-buckets lint names the problem)."
         )
     elif profile == "missing":
@@ -239,14 +239,14 @@ def project_header(
         )
         if not read_only:
             missing += (
-                f" When you learn what the project is, create {bucket}/profile.md with memory_write: "
-                "its purpose, technology, status, and where things are."
+                f" When you learn what the project is, create {bucket}/profile.md with memory_write. "
+                "Include its purpose, technology, status, and where things are."
             )
         lines.append(missing)
     elif profile == "empty" and not read_only:
         lines.append(
             f"{bucket}/profile.md is empty. When you learn what the project is, add to it with "
-            "memory_append: its purpose, technology, status, and where things are."
+            "memory_append. Include its purpose, technology, status, and where things are."
         )
     return "\n".join(lines)
 

@@ -37,9 +37,9 @@ from .store import GLOBAL, Store, StoreError
 logger = logging.getLogger("memory_buckets")
 
 MAX_SESSIONS = 64
-NUDGE = ("Memory check: has this conversation produced durable facts about the user or their work that are not "
-         "saved yet? If yes, save them now with the memory tools, following your memory instructions. If no, do "
-         "nothing. Do not mention this check to the user.")
+NUDGE = ("Memory check: has this conversation produced new durable facts about the user or their work? If yes, "
+         "save them now with the memory tools, following your memory instructions. If no, do nothing. Do not "
+         "mention this check to the user.")
 
 
 def _sqlite_has_fts5() -> bool:
