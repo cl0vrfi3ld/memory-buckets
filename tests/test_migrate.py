@@ -193,6 +193,77 @@ class IndexMigrationTest(StoreCase):
         self.assertFalse(migrate.inbox_needs_migrating(self.store))
         self.assertEqual(migrate.run(self.store), [])
 
+    def test_empty_headings_are_removed_but_filled_sections_are_kept(self):
+        body = ("## imported USER.md\n"
+                "- Ivy\n"
+                "\n"
+                "## imported PROJECTS.md\n"
+                "\n"
+                "## added in conversation (cli)\n"
+                "- Likes pasta\n"
+                "\n"
+                "## added in conversation (telegram)\n")
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, body))
+        self.assertFalse(migrate.inbox_needs_migrating(self.store), "headings alone don't ask for a migration")
+        steps = migrate.run(self.store, dry_run=True)
+        self.assertEqual([(s.action, s.detail) for s in steps],
+                         [("tidy", "## imported PROJECTS.md; ## added in conversation (telegram)")])
+        self.assertTrue((self.store.memories / "global/inbox.md").exists(), "a dry run changes nothing")
+        steps = migrate.run(self.store)
+        self.assertEqual([(s.action, s.detail) for s in steps],
+                         [("tidy", "## imported PROJECTS.md; ## added in conversation (telegram)")])
+        text = self.store.read("global/inbox.md")["content"]
+        self.assertIn("## imported USER.md\n- Ivy\n\n## added in conversation (cli)\n- Likes pasta\n", text)
+        self.assertNotIn("## imported PROJECTS.md", text)
+        self.assertNotIn("## added in conversation (telegram)", text)
+        self.assertFalse((migrate.backup_dir(self.store, migrate.INBOX_MIGRATION) / "global/inbox.md").exists(),
+                         "removing empty headings keeps no backup")
+
+    def test_a_section_with_only_a_code_fence_is_kept(self):
+        # Raw-line emptiness: dropping the heading would turn the fenced lines into plain ones.
+        body = "## a\n- x\n\n## code\n```\njust a block\n```\n\n## blank\n\n\n## end\n"
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, body))
+        steps = migrate.run(self.store)
+        self.assertEqual([(s.action, s.detail) for s in steps], [("tidy", "## blank; ## end")])
+        text = self.store.read("global/inbox.md")["content"]
+        self.assertIn("## code\n```\njust a block\n```\n", text)
+        self.assertNotIn("## blank", text)
+
+    def test_headings_only_run_is_idempotent(self):
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## a\n- x\n\n## empty\n"))
+        self.assertEqual([(s.action, s.detail) for s in migrate.run(self.store)], [("tidy", "## empty")])
+        text = self.store.read("global/inbox.md")["content"]
+        self.assertEqual(migrate.run(self.store), [])
+        self.assertEqual(migrate.run(self.store, dry_run=True), [])
+        self.assertEqual(self.store.read("global/inbox.md")["content"], text)
+
+    def test_a_0_1_0_inbox_gets_the_description_and_the_cleanup_in_one_run(self):
+        old = doc("inbox", OLD_INBOX_DESCRIPTION,
+                  "## imported USER.md\n"
+                  "- Ivy studies film at UVM\n"
+                  "\n"
+                  "## added in conversation 2026-10-02 (cli)\n"
+                  "\n"
+                  "## added in conversation 2026-10-05 (telegram)\n"
+                  "- Likes pasta\n")
+        self.put("global/inbox.md", old)
+        steps = migrate.run(self.store)
+        self.assertEqual(len(steps), 1, steps)
+        self.assertEqual(steps[0].action, "inbox", "one step, not one per change")
+        self.assertIn("was: 'Imported memory waiting to be sorted into", steps[0].describe())
+        text = self.store.read("global/inbox.md")["content"]
+        self.assertIn(f"description: {inbox.DESCRIPTION}\n", text)
+        self.assertNotIn("## added in conversation 2026-10-02", text)
+        self.assertIn("## added in conversation 2026-10-05 (telegram)\n- Likes pasta\n", text,
+                      "the section with an entry stays")
+        self.assertEqual(self.kept_020("global", "inbox.md"), old, "the description change is backed up, once")
+        self.assertEqual(len(list((migrate.backup_dir(self.store, migrate.INBOX_MIGRATION) / "global").iterdir())), 1)
+
+    def test_a_missing_inbox_is_a_no_op(self):
+        self.assertEqual(migrate.run(self.store), [])
+        self.assertEqual(migrate.run(self.store, dry_run=True), [])
+        self.assertFalse((self.store.memories / "global/inbox.md").exists())
+
     def test_locked_store_raises(self):
         self.put("proj-1/index.md", doc("index", "overview"))
         with self.store.lock(), mock.patch("memory_buckets.store.LOCK_TIMEOUT_S", 0.1):

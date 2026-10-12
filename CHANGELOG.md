@@ -47,6 +47,13 @@ buckets. The setting is ignored, with a warning in the log.
   `added in conversation` sections stay and are sorted with the rest. The
   agent can still clear it with `memory_str_replace`, `memory_write` or
   `memory_delete`; a deleted inbox comes back with the next import.
+- **Migration removes empty inbox headings.** A `## ` heading with no
+  non-blank lines before the next heading or the end of the file goes,
+  whenever the migration runs — so each run after a sort tidies what the
+  last sort emptied. A section holding only a code fence counts as content.
+  Removal loses nothing, so a headings-only run keeps no backup (only a
+  description change is backed up, as before), and `status` and `lint`
+  don't report empty headings: the next writable session clears them.
 - **The prompt block** follows suit: the rules for other projects' buckets
   replace the inbox and proposal steps, and the inbox note only mentions
   imported memory.

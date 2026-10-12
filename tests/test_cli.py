@@ -203,6 +203,23 @@ class CliTest(StoreCase):
         self.assertIn("global/inbox.md: description set to the current one", out)
         self.assertEqual(self.run_cli("lint")[0], 0)
 
+    def test_empty_headings_are_quiet_and_cleared_by_the_next_session(self):
+        # status and lint don't report them; a migrate --dry-run lists them, and
+        # a headings-only run mentions no backup because it keeps none.
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## a\n- x\n\n## empty\n\n## b\n- y\n\n## end\n"))
+        status = self.run_cli("status")[1]
+        self.assertNotIn("empty heading", status)
+        self.assertEqual(self.run_cli("lint")[0], 0)
+        code, out = self.run_cli("migrate", "--dry-run")
+        self.assertEqual(code, 0, out)
+        self.assertIn("would: global/inbox.md: removed ## empty; ## end", out)
+        self.assertIn("## a\n- x\n", self.store.read("global/inbox.md")["content"], "a dry run changes nothing")
+        code, out = self.run_cli("migrate")
+        self.assertEqual(code, 0, out)
+        self.assertIn("global/inbox.md: removed ## empty; ## end", out)
+        self.assertNotIn("originals kept", out)
+        self.assertEqual(self.run_cli("migrate")[1].strip(), "nothing to migrate")
+
     def test_migrate_command(self):
         self.put("proj-1/index.md", doc("index", "proj-1 overview", "- a web app\n"))
         code, out = self.run_cli("status")

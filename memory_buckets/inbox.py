@@ -5,7 +5,8 @@ mirrored by the provider's ``on_memory_write`` bridge. The agent never appends t
 it (``memory_append`` refuses the path); the sort-imports skill removes filed lines
 with ``memory_str_replace``, ``memory_write`` or ``memory_delete``. It's a standing
 file, but a deleted one is fine: the next ``append`` (import or mirrored built-in
-write) recreates it with ``DESCRIPTION``.
+write) recreates it with ``DESCRIPTION``. The store migration removes the headings
+a sort empties; the skill leaves them for it.
 
 Appends go under a ``## <heading>`` section, one bullet per entry, so entries from
 different imports stay apart.
@@ -13,7 +14,7 @@ different imports stay apart.
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 
 from . import frontmatter
 from .store import GLOBAL, Store, StoreError, check_content, stamp
@@ -57,6 +58,49 @@ def _outside_fences(body: str) -> List[str]:
 def count_entries(body: str) -> int:
     """How many entries (top-level bullets, outside code fences) the inbox body holds."""
     return sum(1 for line in _outside_fences(body) if line.startswith(("- ", "* ")))
+
+
+def _empty_headings(body: str) -> List[Tuple[int, str]]:
+    """(line number, line) for each ``## `` heading with no non-blank lines before
+    the next ``## `` heading or the end of the body. Raw lines: a section holding
+    only a fenced block counts as content, since dropping its heading would turn
+    the fenced lines into plain ones."""
+    found, heading_at, heading, blank = [], None, None, False
+    for i, line in enumerate(body.split("\n")):
+        if line.startswith("## "):
+            if heading is not None and blank:
+                found.append((heading_at, heading))
+            heading_at, heading, blank = i, line, True
+        elif line.strip():
+            blank = False
+    if heading is not None and blank:
+        found.append((heading_at, heading))
+    return found
+
+
+def empty_headings(body: str) -> List[str]:
+    """The ``## `` headings that ``_empty_headings`` finds."""
+    return [line for _, line in _empty_headings(body)]
+
+
+def without_empty_sections(body: str) -> str:
+    """``body`` without the sections ``empty_headings`` finds: each heading line and
+    the blank lines that follow it (the section's own) go; everything else stays
+    where it is."""
+    drop = {i for i, _ in _empty_headings(body)}
+    if not drop:
+        return body
+    out, skipping = [], False
+    for i, line in enumerate(body.split("\n")):
+        if i in drop:
+            skipping = True
+        elif skipping and not line.strip():
+            continue
+        else:
+            skipping = False
+            out.append(line)
+    text = "\n".join(out).rstrip("\n")
+    return text + "\n" if text.strip() else ""
 
 
 def with_entries(current: Optional[bytes], heading: str, lines: List[str], source: str) -> str:

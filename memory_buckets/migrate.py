@@ -25,6 +25,9 @@ read or parse is a ``skip`` step: it stays as it is, and the other files still m
   the inbox, where the next import sort files them. A file whose copy fails or
   doesn't match stays where it is, and so does ``_pending/``.
 - The inbox's lines stay as they are, "added in conversation" sections included.
+  Empty ``## `` headings (a heading with no non-blank lines before the next one or
+  the end of the file) are removed: they carry nothing, so they are not backed up.
+  A headings-only run reports itself and writes no backup.
 """
 
 from __future__ import annotations
@@ -76,6 +79,8 @@ class Step:
             return f"{p}/index.md removed ({self.detail})"
         if self.action == "inbox":
             return f"{inbox.PATH}: description set to the current one (was: {self.detail})"
+        if self.action == "tidy":
+            return f"{inbox.PATH}: removed {self.detail}"
         if p == GLOBAL:
             return f"{inbox.PATH} left as it is: {self.detail}"
         return f"{p}/index.md left in place: {self.detail}"
@@ -171,39 +176,80 @@ def _plan(store: Store, project: str) -> Tuple[Step, Optional[bytes]]:
         return Step(project, "skip", f"{err.message}; move its content by hand"), None
 
 
-def _inbox_plan(store: Store) -> Tuple[Optional[Step], Optional[bytes]]:
-    """Give the inbox the current description. None: nothing to do.
+def _inbox_change(text: str) -> Tuple[str, bool, bool, List[str]]:
+    """(new text, description changed, anything changed, the empty ``## `` headings
+    found) for one inbox text: the description set to the current one, then those
+    headings removed. Raises ``FrontmatterError`` for frontmatter it can't parse."""
+    fm, body = frontmatter.parse(text)
+    desc_changed = fm.get("description") != inbox.DESCRIPTION
+    headings = inbox.empty_headings(body)
+    if desc_changed:
+        fm.set("description", inbox.DESCRIPTION)
+        if not fm.get("name"):
+            fm.set("name", "inbox")
+        _add_source(fm)
+    if not desc_changed and not headings:
+        return text, False, False, []
+    stamp(fm)
+    return frontmatter.render(fm, inbox.without_empty_sections(body)), desc_changed, True, headings
 
-    The plugin owns the inbox's description, as it owns its name: the prompt's inbox
-    note and the sort-imports skill depend on what it says, and older versions (and
-    older skills) wrote descriptions that contradict them. An edited one is replaced
-    too; the original is kept in the backup."""
+
+def _inbox_plan(store: Store) -> Optional[Step]:
+    """The next inbox change: the description, then empty headings. ``None``:
+    nothing to do. Found on the current state, like the description step before it,
+    so a store that has already migrated gets cleaned on the next writable session
+    start, and each run after a sort tidies again."""
     try:
         current = store.read_bytes(inbox.PATH)
     except (OSError, StoreError) as err:
-        return Step(GLOBAL, "skip", f"can't read it ({_reason(err)})"), None
+        return Step(GLOBAL, "skip", f"can't read it ({_reason(err)})")
     if current is None:
-        return None, None
+        return None
     try:
-        fm, body = frontmatter.parse(current.decode("utf-8", errors="replace"))
+        new_text, desc_changed, changed, headings = _inbox_change(current.decode("utf-8", errors="replace"))
     except frontmatter.FrontmatterError:
-        return None, None  # lint reports it, and appends refuse it until it's fixed by hand
-    was = fm.get("description")
-    if was == inbox.DESCRIPTION:
-        return None, None
-    fm.set("description", inbox.DESCRIPTION)
-    if not fm.get("name"):
-        fm.set("name", "inbox")
-    _add_source(fm)
-    stamp(fm)
+        return None  # lint reports it, and appends refuse it until it's fixed by hand
+    if not changed:
+        return None
+    if not desc_changed:
+        return Step(GLOBAL, "tidy", "; ".join(headings))
     try:
-        return Step(GLOBAL, "inbox", repr(was) if was else "none"), check_content(inbox.PATH, frontmatter.render(fm, body))
+        check_content(inbox.PATH, new_text)
     except StoreError as err:
-        return Step(GLOBAL, "skip", err.message), None
+        return Step(GLOBAL, "skip", err.message)
+    was = frontmatter.parse(current.decode("utf-8", errors="replace"))[0].get("description")
+    return Step(GLOBAL, "inbox", repr(was) if was else "none")
+
+
+def _apply_inbox(store: Store) -> Optional[Step]:
+    """Apply the next inbox change. The caller holds the store lock — the same one
+    the ``on_memory_write`` mirror takes for ``inbox.append`` — so a mirrored write
+    lands entirely before this one (and is kept, and tidied) or entirely after, never
+    halfway. The text is recomputed from a fresh read under the lock. Only a changed
+    description loses anything, so only that is backed up: removing empty headings
+    keeps no copy, or ``_backup/0.2.0/global/`` would fill with a near-identical
+    inbox on every run after a sort."""
+    current = store.read_bytes(inbox.PATH)
+    if current is None:
+        return None  # deleted after the plan (a sort can remove it): nothing to do
+    was = frontmatter.parse(current.decode("utf-8", errors="replace"))[0].get("description")
+    new_text, desc_changed, changed, headings = _inbox_change(current.decode("utf-8", errors="replace"))
+    if not changed:
+        return None  # changed after the plan: nothing left to do
+    check_content(inbox.PATH, new_text)  # too large: raises, and the step becomes a skip
+    if desc_changed:
+        _keep(store, GLOBAL, "inbox.md", current, INBOX_MIGRATION)
+    store._atomic_write(store.resolve(inbox.PATH), new_text.encode("utf-8"))
+    if desc_changed:
+        return Step(GLOBAL, "inbox", repr(was) if was else "none")
+    return Step(GLOBAL, "tidy", "; ".join(headings))
 
 
 def inbox_needs_migrating(store: Store) -> bool:
-    step, _ = _inbox_plan(store)
+    """Whether ``status`` and ``lint`` should ask for a migration: only an outdated
+    description counts. Empty headings are not reported — the next writable session
+    clears them, and a note after every sort would be noise."""
+    step = _inbox_plan(store)
     return step is not None and step.action == "inbox"
 
 
@@ -304,11 +350,11 @@ def _apply_pending(store: Store, planned: List[Step]) -> List[Step]:
 def run(store: Store, *, dry_run: bool = False) -> List[Step]:
     """Run every pending migration. Raises ``StoreError("locked")`` if the store stays
     locked. Anything else that goes wrong with one file is a ``skip`` step for that file."""
-    if not leftover_indexes(store) and _inbox_plan(store)[0] is None and leftover_pending(store) is None:
+    if not leftover_indexes(store) and _inbox_plan(store) is None and leftover_pending(store) is None:
         return []
     if dry_run:
         steps = [_plan(store, p)[0] for p in leftover_indexes(store)]
-        inbox_step = _inbox_plan(store)[0]
+        inbox_step = _inbox_plan(store)
         return steps + ([inbox_step] if inbox_step else []) + _pending_plan(store)
     steps = []
     with store.lock():
@@ -320,14 +366,11 @@ def run(store: Store, *, dry_run: bool = False) -> List[Step]:
                 except (OSError, StoreError) as err:
                     step = Step(project, "skip", f"{_reason(err)}; {RERUN}")
             steps.append(step)
-        step, data = _inbox_plan(store)
-        if step is not None and data is not None:
-            try:
-                _keep(store, GLOBAL, "inbox.md", store.read_bytes(inbox.PATH), INBOX_MIGRATION)
-                store._atomic_write(store.resolve(inbox.PATH), data)
-            except (OSError, StoreError) as err:
-                step = Step(GLOBAL, "skip", _reason(err))
-        if step is not None:
-            steps.append(step)
+        try:
+            inbox_step = _apply_inbox(store)  # under the lock: no race with the mirror
+        except (OSError, StoreError) as err:
+            inbox_step = Step(GLOBAL, "skip", _reason(err))
+        if inbox_step is not None:
+            steps.append(inbox_step)
         steps.extend(_apply_pending(store, _pending_plan(store)))
     return steps

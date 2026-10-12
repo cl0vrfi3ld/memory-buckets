@@ -390,7 +390,7 @@ def cmd_migrate(args) -> int:
         return 0
     for step in steps:
         _out(("would: " if args.dry_run else "") + step.describe())
-    if not args.dry_run and any(s.action != "skip" for s in steps):
+    if not args.dry_run and any(s.action not in ("skip", "tidy") for s in steps):
         _out(f"originals kept in {store.root / migrate.BACKUP_DIR}")
     return 1 if any(s.action == "skip" for s in steps) else 0
 

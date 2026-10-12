@@ -380,7 +380,11 @@ file it can't read or parse is left alone and reported; the rest still migrate.
   so the next `/sort-imports` files them. A proposal whose copy fails stays
   where it is, with `_pending/`, and `migrate` says so. The inbox's
   description becomes "Imported memory waiting to be sorted", and its lines
-  stay as they are.
+  stay as they are. Empty `## ` headings (a heading with no non-blank lines
+  before the next one or the end of the file) are removed, including on a
+  later run after a sort emptied them; that loses nothing, so a run that only
+  removes headings keeps no backup. `status` and `lint` don't report empty
+  headings.
 
   `write_policy` is gone too. **If your config sets `write_policy: confined`,
   upgrading widens what sessions may write:** project sessions now write
