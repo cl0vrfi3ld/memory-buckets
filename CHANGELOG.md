@@ -6,7 +6,7 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-10-12
 
 Upgrading from 0.1.0 needs nothing from you: the first writable session
 migrates the store. It backs up and removes `_pending/`, and keeps every
@@ -76,6 +76,17 @@ buckets. The setting is ignored, with a warning in the log.
   next `/sort-imports` files them.
 - **`write_policy`.** Project sessions always write `global/`. A leftover
   `confined` is ignored with a logged warning (see above).
+
+### Fixed
+
+- With `embeddings.backend: off`, prefetch logged a traceback and returned
+  nothing on every turn. It now runs keyword-only, with no hints.
+- A path or project id ending in a newline passed validation, so
+  `memory_write` could create a file literally named `x.md\n`. Both are now
+  refused.
+- The built-in tokeniser turned a word-final capital sigma (Σ) into a final
+  sigma (ς), where the reference tokeniser gives σ. Greek text now embeds
+  the same as the reference.
 
 ## [0.1.0] - 2026-10-01
 
@@ -164,6 +175,6 @@ will do.
 
 Initial release.
 
-[0.2.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.1.0...HEAD
+[0.2.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.1.0...v0.2.0
 [0.1.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.0.1...v0.1.0
 [0.0.1]: https://git.cl0vr.co/cl0vr/memory-buckets/src/tag/v0.0.1
