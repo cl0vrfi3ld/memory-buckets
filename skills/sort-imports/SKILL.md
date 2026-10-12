@@ -81,16 +81,24 @@ Follow these steps in order.
      - anything else durable (a decision, a component, a procedure): <project>/topics/<subject>.md
 
 5. **Remove each filed line from the inbox.** Do this straight after you save it.
-   - Call memory_str_replace on global/inbox.md.
+   - Call memory_str_replace on global/inbox.md (one line at a time).
    - Set old to the bullet line, exactly as it appears.
    - Set new to an empty string.
    - Leave the headings in place.
+   - Step 8 lists the other ways to remove lines.
 
 6. **Drop entries.** Remove entries labelled "drop" the same way. Drop an entry only if it is stale, already saved, or not worth keeping.
 
 7. **Check for conflicts.** If two entries contradict each other, save both under global/. Say what conflicts in your reply. Entries have no dates, so do not guess which one is newer.
 
-8. **Leave the inbox file alone.** Only remove single lines with memory_str_replace. Never use memory_write or memory_delete on it. Never use memory_append on it (the inbox only holds imported memory). The inbox stays when it is empty, because the next import adds to it.
+8. **Clear the inbox.** After you file or drop entries, remove them with any of these:
+   - memory_str_replace (one line at a time, as in step 5).
+   - memory_write, to rewrite the inbox without the filed lines. Read it first, so if_version is current. Keep its description. Leave the headings in place.
+   - memory_delete, only when every entry is filed or dropped.
+
+   Never use memory_append on it (the inbox only holds imported memory).
+   An empty inbox can stay. The next import adds to it.
+   A deleted inbox is safe. The next import creates it again.
 
 ## Final reply
 
