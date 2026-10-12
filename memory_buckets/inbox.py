@@ -64,10 +64,19 @@ def _empty_headings(body: str) -> List[Tuple[int, str]]:
     """(line number, line) for each ``## `` heading with no non-blank lines before
     the next ``## `` heading or the end of the body. Raw lines: a section holding
     only a fenced block counts as content, since dropping its heading would turn
-    the fenced lines into plain ones."""
-    found, heading_at, heading, blank = [], None, None, False
+    the fenced lines into plain ones. A ``## `` line inside a fence is content, not
+    a heading, as in every other heading lookup here."""
+    found, heading_at, heading, blank, open_fence = [], None, None, False, None
     for i, line in enumerate(body.split("\n")):
-        if line.startswith("## "):
+        marker = _fence(line)
+        if open_fence is None and marker:
+            open_fence, blank = marker, False  # a fence line is content
+        elif open_fence is not None:
+            if marker == open_fence:
+                open_fence = None
+            if line.strip():
+                blank = False
+        elif line.startswith("## "):
             if heading is not None and blank:
                 found.append((heading_at, heading))
             heading_at, heading, blank = i, line, True

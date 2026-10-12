@@ -247,10 +247,16 @@ class IndexMigrationTest(StoreCase):
                   "## added in conversation 2026-10-05 (telegram)\n"
                   "- Likes pasta\n")
         self.put("global/inbox.md", old)
+        dry = migrate.run(self.store, dry_run=True)
+        self.assertEqual(len(dry), 1, dry)
+        self.assertTrue(dry[0].describe().endswith("; removed ## added in conversation 2026-10-02 (cli)"),
+                        "the dry run names the headings too")
         steps = migrate.run(self.store)
         self.assertEqual(len(steps), 1, steps)
         self.assertEqual(steps[0].action, "inbox", "one step, not one per change")
         self.assertIn("was: 'Imported memory waiting to be sorted into", steps[0].describe())
+        self.assertTrue(steps[0].describe().endswith("; removed ## added in conversation 2026-10-02 (cli)"),
+                        steps[0].describe())
         text = self.store.read("global/inbox.md")["content"]
         self.assertIn(f"description: {inbox.DESCRIPTION}\n", text)
         self.assertNotIn("## added in conversation 2026-10-02", text)
@@ -258,6 +264,32 @@ class IndexMigrationTest(StoreCase):
                       "the section with an entry stays")
         self.assertEqual(self.kept_020("global", "inbox.md"), old, "the description change is backed up, once")
         self.assertEqual(len(list((migrate.backup_dir(self.store, migrate.INBOX_MIGRATION) / "global").iterdir())), 1)
+
+    def test_a_heading_line_inside_a_code_fence_is_not_a_heading(self):
+        # memory_write and hand edits can put "## " lines in a fence; they are content.
+        body = "## notes\n```\n## step one\n\n## step two\n```\n\n## end\n"
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, body))
+        steps = migrate.run(self.store)
+        self.assertEqual([(s.action, s.detail) for s in steps], [("tidy", "## end")])
+        text = self.store.read("global/inbox.md")["content"]
+        self.assertIn("## notes\n```\n## step one\n\n## step two\n```\n", text, "every fenced line stays")
+        self.assertEqual(migrate.run(self.store), [])
+
+    def test_broken_inbox_frontmatter_does_not_stop_the_rest_of_the_run(self):
+        # lint reports it; the other steps still go ahead and run() doesn't raise.
+        broken = "---\nname: inbox\n## a\n- x\n"  # no closing ---
+        self.put("global/inbox.md", broken)
+        self.put("proj-1/index.md", doc("index", "proj-1 overview", "- a web app\n"))
+        pending = self.store.root / migrate.PENDING_DIR
+        pending.mkdir()
+        (pending / "a1b2c3.json").write_bytes(b"{}\n")
+        dry = migrate.run(self.store, dry_run=True)
+        self.assertEqual([s.action for s in dry], ["rename", "pending", "remove"])
+        steps = migrate.run(self.store)
+        self.assertEqual([s.action for s in steps], ["rename", "pending", "remove"])
+        self.assertFalse(os.path.lexists(pending))
+        self.assertTrue((self.store.memories / "proj-1/profile.md").exists())
+        self.assertEqual((self.store.memories / "global/inbox.md").read_text(), broken, "left for lint")
 
     def test_a_missing_inbox_is_a_no_op(self):
         self.assertEqual(migrate.run(self.store), [])

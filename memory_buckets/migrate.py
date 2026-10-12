@@ -37,7 +37,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, NamedTuple, Optional, Tuple
 
 from . import frontmatter, inbox
 from .store import GLOBAL, Store, StoreError, _fsync_dir, check_content, is_project_id, stamp, version
@@ -60,6 +60,7 @@ class Step:
     action: str  # rename | merge | remove | skip | inbox | pending
     detail: str = ""
     name: str = ""  # PENDING_DIR steps: the file in it, or "" for the folder itself
+    removed: str = ""  # inbox step: the empty headings that went in the same run
 
     def describe(self) -> str:
         p = self.project
@@ -78,7 +79,8 @@ class Step:
         if self.action == "remove":
             return f"{p}/index.md removed ({self.detail})"
         if self.action == "inbox":
-            return f"{inbox.PATH}: description set to the current one (was: {self.detail})"
+            tail = f"; removed {self.removed}" if self.removed else ""
+            return f"{inbox.PATH}: description set to the current one (was: {self.detail}){tail}"
         if self.action == "tidy":
             return f"{inbox.PATH}: removed {self.detail}"
         if p == GLOBAL:
@@ -176,22 +178,39 @@ def _plan(store: Store, project: str) -> Tuple[Step, Optional[bytes]]:
         return Step(project, "skip", f"{err.message}; move its content by hand"), None
 
 
-def _inbox_change(text: str) -> Tuple[str, bool, bool, List[str]]:
-    """(new text, description changed, anything changed, the empty ``## `` headings
-    found) for one inbox text: the description set to the current one, then those
-    headings removed. Raises ``FrontmatterError`` for frontmatter it can't parse."""
+class _InboxChange(NamedTuple):
+    text: str  # the inbox text after the change
+    was: str  # the description it had, as a step shows it ("none" when it had none)
+    desc_changed: bool
+    changed: bool  # the description or the headings
+    headings: List[str]  # the empty ``## `` headings removed
+
+
+def _inbox_change(text: str) -> _InboxChange:
+    """The description set to the current one, then the empty ``## `` headings
+    removed, for one inbox text. Raises ``FrontmatterError`` for frontmatter it
+    can't parse."""
     fm, body = frontmatter.parse(text)
-    desc_changed = fm.get("description") != inbox.DESCRIPTION
+    was = fm.get("description")
+    shown = repr(was) if was else "none"
+    desc_changed = was != inbox.DESCRIPTION
     headings = inbox.empty_headings(body)
+    if not desc_changed and not headings:
+        return _InboxChange(text, shown, False, False, [])
     if desc_changed:
         fm.set("description", inbox.DESCRIPTION)
         if not fm.get("name"):
             fm.set("name", "inbox")
         _add_source(fm)
-    if not desc_changed and not headings:
-        return text, False, False, []
     stamp(fm)
-    return frontmatter.render(fm, inbox.without_empty_sections(body)), desc_changed, True, headings
+    return _InboxChange(frontmatter.render(fm, inbox.without_empty_sections(body)),
+                        shown, desc_changed, True, headings)
+
+
+def _inbox_step(change: _InboxChange) -> Step:
+    if change.desc_changed:
+        return Step(GLOBAL, "inbox", change.was, removed="; ".join(change.headings))
+    return Step(GLOBAL, "tidy", "; ".join(change.headings))
 
 
 def _inbox_plan(store: Store) -> Optional[Step]:
@@ -206,19 +225,17 @@ def _inbox_plan(store: Store) -> Optional[Step]:
     if current is None:
         return None
     try:
-        new_text, desc_changed, changed, headings = _inbox_change(current.decode("utf-8", errors="replace"))
+        change = _inbox_change(current.decode("utf-8", errors="replace"))
     except frontmatter.FrontmatterError:
         return None  # lint reports it, and appends refuse it until it's fixed by hand
-    if not changed:
+    if not change.changed:
         return None
-    if not desc_changed:
-        return Step(GLOBAL, "tidy", "; ".join(headings))
-    try:
-        check_content(inbox.PATH, new_text)
-    except StoreError as err:
-        return Step(GLOBAL, "skip", err.message)
-    was = frontmatter.parse(current.decode("utf-8", errors="replace"))[0].get("description")
-    return Step(GLOBAL, "inbox", repr(was) if was else "none")
+    if change.desc_changed:
+        try:
+            check_content(inbox.PATH, change.text)
+        except StoreError as err:
+            return Step(GLOBAL, "skip", err.message)
+    return _inbox_step(change)
 
 
 def _apply_inbox(store: Store) -> Optional[Step]:
@@ -228,21 +245,22 @@ def _apply_inbox(store: Store) -> Optional[Step]:
     halfway. The text is recomputed from a fresh read under the lock. Only a changed
     description loses anything, so only that is backed up: removing empty headings
     keeps no copy, or ``_backup/0.2.0/global/`` would fill with a near-identical
-    inbox on every run after a sort."""
+    inbox on every run after a sort. Frontmatter that can't be parsed is left for
+    ``lint``, as in the plan, so the rest of the run still goes ahead."""
     current = store.read_bytes(inbox.PATH)
     if current is None:
         return None  # deleted after the plan (a sort can remove it): nothing to do
-    was = frontmatter.parse(current.decode("utf-8", errors="replace"))[0].get("description")
-    new_text, desc_changed, changed, headings = _inbox_change(current.decode("utf-8", errors="replace"))
-    if not changed:
+    try:
+        change = _inbox_change(current.decode("utf-8", errors="replace"))
+    except frontmatter.FrontmatterError:
+        return None
+    if not change.changed:
         return None  # changed after the plan: nothing left to do
-    check_content(inbox.PATH, new_text)  # too large: raises, and the step becomes a skip
-    if desc_changed:
+    check_content(inbox.PATH, change.text)  # too large: raises, and the step becomes a skip
+    if change.desc_changed:
         _keep(store, GLOBAL, "inbox.md", current, INBOX_MIGRATION)
-    store._atomic_write(store.resolve(inbox.PATH), new_text.encode("utf-8"))
-    if desc_changed:
-        return Step(GLOBAL, "inbox", repr(was) if was else "none")
-    return Step(GLOBAL, "tidy", "; ".join(headings))
+    store._atomic_write(store.resolve(inbox.PATH), change.text.encode("utf-8"))
+    return _inbox_step(change)
 
 
 def inbox_needs_migrating(store: Store) -> bool:

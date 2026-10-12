@@ -208,7 +208,8 @@ class CliTest(StoreCase):
         # a headings-only run mentions no backup because it keeps none.
         self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## a\n- x\n\n## empty\n\n## b\n- y\n\n## end\n"))
         status = self.run_cli("status")[1]
-        self.assertNotIn("empty heading", status)
+        self.assertNotIn("migration", status, "no migration line at all")
+        self.assertNotIn("outdated description", status)
         self.assertEqual(self.run_cli("lint")[0], 0)
         code, out = self.run_cli("migrate", "--dry-run")
         self.assertEqual(code, 0, out)
