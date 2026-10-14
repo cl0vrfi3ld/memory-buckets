@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "memory-buckets"
 version = "0.2.0"
-description = "Claude-style memory provider for Hermes Agent: one Markdown file per subject, global and per-project buckets, hybrid search"
+description = "Markdown-based memory provider with hybrid search (FTS keyword + static embeddings), inspired by Claude memory."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
