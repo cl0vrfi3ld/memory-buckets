@@ -144,6 +144,36 @@ class IndexTest(StoreCase):
         self.assertEqual(hits[0]["path"], "global/topics/infra.md")
         self.assertEqual(hits[0]["heading"], "Infrastructure > Hetzner Storage Box")
 
+    def test_stopword_heavy_natural_language_query_prefers_the_keyword_match(self):
+        self.put("global/topics/aurora.md", doc("aurora", "Northern lights", "- green aurora\n"))
+        self.put(
+            "global/topics/noise.md",
+            doc("noise", "What do I do",
+                "- what do you do\n- what will you do\n- I do what you do\n- what do I do in the\n"),
+        )
+        hits = list(self.make().search("what do I do in the aurora", ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual(hits[0]["path"], "global/topics/aurora.md")
+        self.assertNotIn("global/topics/noise.md", [h["path"] for h in hits])
+
+    def test_scope_filter_reaches_fts_matches_beyond_the_unscoped_rank_cutoff(self):
+        # global/ holds more than CANDIDATES * 2 chunks that outrank the scoped file,
+        # so a scope filter applied after a fixed LIMIT would never see proj-1.
+        for i in range(250):
+            self.put(f"global/topics/filler-{i}.md", doc(f"filler-{i}", "zebra herd", "- zebra\n"))
+        long_body = "- zebra\n" + "".join(f"- padding line {j}\n" for j in range(40))
+        self.put("proj-1/topics/plan.md", doc("plan", "Project plan", long_body))
+        index = self.make()
+        hits = list(index.search("zebra", lambda p: p.startswith("proj-1/"))["results"])  # type: ignore[arg-type]
+        self.assertEqual([h["path"] for h in hits], ["proj-1/topics/plan.md"])
+
+    def test_identity_chunk_winner_returns_a_body_snippet(self):
+        self.put("global/topics/tea.md", doc("tea", "Ceremony ritual", "# Steeping\n- steep for three minutes\n"))
+        hits = list(self.make().search("ceremony ritual", ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["path"], "global/topics/tea.md")
+        self.assertEqual(hits[0]["heading"], "Steeping")
+        self.assertEqual(hits[0]["snippet"], "- steep for three minutes")
+
 
 class EmbeddingIndexTest(IndexTest):
     def test_hybrid_search_and_backlog(self):
@@ -199,6 +229,16 @@ class EmbeddingIndexTest(IndexTest):
         self.assertIn("Infrastructure > Hetzner Storage Box\n- mounted at /mnt/box", embedded_texts)
         hints = index.hints("Infrastructure", ALL, min_similarity=0.2)
         self.assertEqual(hints[0][0], "global/topics/infra.md")
+
+    def test_unrelated_and_zero_vector_queries_return_no_results(self):
+        index = self.make(FakeEmbedder())
+        self.assertEqual(index.search("chromodynamics astrobiology glacier", ALL)["results"], [])
+        self.assertEqual(index.search("!!!", ALL)["results"], [])
+
+    def test_single_relevant_hit_is_not_padded_with_unrelated_files(self):
+        index = self.make(FakeEmbedder())
+        hits = list(index.search("climbing", ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual([h["path"] for h in hits], ["global/people/sam.md"])
 
 
 

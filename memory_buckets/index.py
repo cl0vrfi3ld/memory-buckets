@@ -33,6 +33,15 @@ SCHEMA_VERSION = "2"
 CHUNK_CHARS = 700
 RRF_K = 60
 CANDIDATES = 200
+SEARCH_MIN_SIMILARITY = 0.20
+
+_STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does",
+    "for", "from", "had", "has", "have", "how", "i", "in", "is", "it", "its",
+    "me", "my", "of", "on", "or", "our", "that", "the", "their", "them",
+    "they", "this", "to", "was", "we", "what", "when", "where", "which",
+    "who", "whom", "why", "will", "with", "you", "your",
+})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -376,14 +385,27 @@ class Index:
         tokens = re.findall(r"\w+", query.lower())[:32]
         if not tokens:
             return []
-        match = " OR ".join(f'"{t}"' for t in tokens)
-        rows = self._conn().execute(
+        content_tokens = [t for t in tokens if t not in _STOPWORDS]
+        active = content_tokens or tokens
+        match = " OR ".join(f'"{t}"' for t in active)
+        out: List[int] = []
+        cursor = self._conn().execute(
             "SELECT chunks.id, chunks.path FROM chunks_fts JOIN chunks ON chunks.id = chunks_fts.rowid "
-            "WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts) LIMIT ?", (match, CANDIDATES * 2)).fetchall()
-        return [cid for cid, path in rows if read_ok(path)][:CANDIDATES]
+            "WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts)", (match,))
+        for cid, path in cursor:
+            if read_ok(path):
+                out.append(cid)
+                if len(out) >= CANDIDATES:
+                    break
+        cursor.close()
+        return out
 
-    def _cosine(self, qvec: array, read_ok: Callable[[str], bool]) -> List[Tuple[int, str, float]]:
-        scored = [(cid, path, dot(qvec, vec)) for cid, path, vec in self._vectors() if read_ok(path)]
+    def _cosine(self, qvec: array, read_ok: Callable[[str], bool],
+                min_similarity: float = SEARCH_MIN_SIMILARITY) -> List[Tuple[int, str, float]]:
+        if not any(qvec):  # zero vector: unknown tokens, punctuation or whitespace only
+            return []
+        scored = [(cid, path, sim) for cid, path, vec in self._vectors()
+                  if read_ok(path) and (sim := dot(qvec, vec)) >= min_similarity]
         scored.sort(key=lambda t: t[2], reverse=True)
         return scored[:CANDIDATES]
 
@@ -418,23 +440,37 @@ class Index:
         for start in range(0, len(ids), 500):
             part = ids[start:start + 500]
             marks = ",".join("?" * len(part))
-            for cid, path, heading, text in con.execute(
-                    f"SELECT id, path, heading, text FROM chunks WHERE id IN ({marks})", part):
-                info[cid] = (path, heading, text)
-        best: Dict[str, Tuple[float, int]] = {}
+            for cid, path, ord_, heading, text in con.execute(
+                    f"SELECT id, path, ord, heading, text FROM chunks WHERE id IN ({marks})", part):
+                info[cid] = (path, ord_, heading, text)
+        best_for_path: Dict[str, Tuple[float, int]] = {}
+        best_body_for_path: Dict[str, Tuple[float, int]] = {}
         for cid, score in scores.items():
             if cid not in info:
                 continue
-            path = info[cid][0]
+            path, ord_, _, _ = info[cid]
             if project and path.startswith(f"{project}/"):
                 score *= boost
-            if path not in best or score > best[path][0]:
-                best[path] = (score, cid)
-        ranked = sorted(best.items(), key=lambda kv: kv[1][0], reverse=True)[:limit]
+            if path not in best_for_path or score > best_for_path[path][0]:
+                best_for_path[path] = (score, cid)
+            if ord_ > 0 and (path not in best_body_for_path or score > best_body_for_path[path][0]):
+                best_body_for_path[path] = (score, cid)
+        ranked = sorted(best_for_path.items(), key=lambda kv: kv[1][0], reverse=True)[:limit]
         descriptions = self.descriptions([p for p, _ in ranked])
         results = []
         for path, (score, cid) in ranked:
-            _, heading, text = info[cid]
+            _, ord_, heading, text = info[cid]
+            if ord_ == 0:
+                # Chunk 0 is the identity chunk (path and description): prefer a body
+                # chunk's heading and text so the snippet is not a repeat of the metadata.
+                body = best_body_for_path.get(path)
+                if body is not None:
+                    _, heading, text = info[body[1]][1:]
+                else:
+                    row = con.execute("SELECT heading, text FROM chunks WHERE path = ? AND ord > 0 "
+                                      "ORDER BY ord LIMIT 1", (path,)).fetchone()
+                    if row is not None:
+                        heading, text = row
             snippet = " ".join(text.split())
             results.append({
                 "path": path,
@@ -457,7 +493,7 @@ class Index:
             return []
         exclude = exclude or set()
         best: Dict[str, float] = {}
-        for _, path, sim in self._cosine(qvec, lambda p: read_ok(p) and p not in exclude):
+        for _, path, sim in self._cosine(qvec, lambda p: read_ok(p) and p not in exclude, min_similarity):
             if sim >= min_similarity and sim > best.get(path, -1.0):
                 best[path] = sim
         ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:max_hints]
