@@ -65,6 +65,7 @@ Do not save temporary plans or details of a one-off task.
 
 - Add to an existing file before you create a new one.
 - To add a fact, use memory_append. To change a fact, use memory_str_replace.
+- When a fact changes or is no longer true, update or remove it.
 - To create a file, use memory_write with if_version "new".
 - Give the file a description that says when to read it.
 - Write one short bullet per fact.

@@ -143,6 +143,7 @@ class CliTest(StoreCase):
         self.assertIn("could not place them. Give a one-line reason for each.", text)
         self.assertIn('If the file does not exist, use memory_write with if_version "new".', text)
         self.assertIn("Drop an entry only if it is stale, already saved, or not worth keeping.", text)
+        self.assertIn("Set old to the bullet line, including its trailing newline (\\n).", text)
 
     def test_import_prompt_only_names_real_tools(self):
         import re

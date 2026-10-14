@@ -82,7 +82,7 @@ Follow these steps in order.
 
 5. **Remove each filed line from the inbox.** Do this straight after you save it.
    - Call memory_str_replace on global/inbox.md (one line at a time).
-   - Set old to the bullet line, exactly as it appears.
+   - Set old to the bullet line, including its trailing newline (\n). This removes only that full line.
    - Set new to an empty string.
    - Leave the headings in place.
    - Step 8 lists the other ways to remove lines.

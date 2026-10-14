@@ -64,6 +64,17 @@ class ToolsTest(StoreCase):
         self.assertTrue(self.call("memory_write", path="global/topics/nix.md", description="Nix", body="- new\n", if_version=v)["ok"])
         self.assertIn("obsidian:\n  cssclass: wide\n", self.content("global/topics/nix.md"))
 
+    def test_write_strips_duplicate_leading_frontmatter_in_body(self):
+        read_entry = self.call("memory_read", paths=["global/topics/nix.md"])["files"][0]
+        full_content = read_entry["content"] + "- nixos\n"
+        got = self.call("memory_write", path="global/topics/nix.md", description="Read for Nix",
+                        body=full_content, if_version=read_entry["version"])
+        self.assertTrue(got["ok"], got)
+        text = self.content("global/topics/nix.md")
+        self.assertEqual(text.count("\n---\n"), 1, text)
+        _, body = frontmatter.parse(text)
+        self.assertEqual(body, "- flakes\n- nixos\n")
+
     def test_conflict_returns_current(self):
         result = self.call("memory_write", path="global/topics/nix.md", description="x", body="y", if_version="new")
         self.assertEqual(result["error"]["code"], "conflict")
@@ -194,6 +205,26 @@ class ToolsTest(StoreCase):
                          "ambiguous_match")
         self.assertEqual(self.call("memory_str_replace", path="global/topics/nix.md", old="name: nix", new="name: x")["error"]["code"],
                          "no_match", "frontmatter isn't editable through str_replace")
+        fm_err = self.call("memory_str_replace", path="global/topics/nix.md",
+                           old="description: Read for Nix", new="description: Nix")["error"]
+        self.assertEqual(fm_err["code"], "no_match")
+        self.assertEqual(
+            fm_err["message"],
+            "memory_str_replace edits global/topics/nix.md's body only, not its frontmatter; "
+            "use memory_write to change description or aliases",
+        )
+
+    def test_str_replace_deletes_whole_bullet_line_and_preserves_trailing_newline(self):
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "- Ivy\n- Ivy studies film\n"))
+        got = self.call("memory_str_replace", path="global/inbox.md", old="- Ivy", new="")
+        self.assertTrue(got["ok"], got)
+        _, body = frontmatter.parse(self.content("global/inbox.md"))
+        self.assertEqual(body, "- Ivy studies film\n")
+        got = self.call("memory_str_replace", path="global/inbox.md",
+                        old="- Ivy studies film\n", new="- Ivy studies film and photography")
+        self.assertTrue(got["ok"], got)
+        text = self.content("global/inbox.md")
+        self.assertTrue(text.endswith("- Ivy studies film and photography\n"), text)
 
     def test_append(self):
         self.assertTrue(self.call("memory_append", path="global/topics/nix.md", lines=["a", "- b", "multi\nline"])["ok"])
@@ -210,6 +241,11 @@ class ToolsTest(StoreCase):
         self.assertTrue(described["memory_list"].endswith(
             "pass its directory as prefix (for example 'home-server/'). To list every project, "
             "set include_projects to true."))
+        schemas = {s["name"]: s["parameters"]["properties"] for s in tools.SCHEMAS}
+        self.assertEqual(schemas["memory_write"]["path"]["description"], tools._PATH_HELP)
+        self.assertEqual(schemas["memory_read"]["paths"]["description"], tools._EXISTING_PATH_HELP)
+        for name in ("memory_str_replace", "memory_append", "memory_delete"):
+            self.assertEqual(schemas[name]["path"]["description"], tools._EXISTING_PATH_HELP)
 
     def call_notified(self, name, shown, project=None, **args):
         """Call with a ``notify`` that records messages and returns ``shown``."""

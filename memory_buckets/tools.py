@@ -34,6 +34,7 @@ _PATH_HELP = ("Path relative to the memory root: lower-case, hyphens between wor
               "global/profile.md, global/preferences.md, global/topics/<name>.md, "
               "global/areas/<name>.md, global/people/<name>.md, <project>/profile.md, <project>/preferences.md, "
               "<project>/topics/<name>.md, <project>/areas/<name>.md, <project>/people/<name>.md.")
+_EXISTING_PATH_HELP = "Path relative to the memory root, e.g. 'global/topics/nix.md' or '<project>/profile.md'."
 
 
 def _fn(name: str, description: str, properties: Dict[str, Any], required: List[str]) -> Dict[str, Any]:
@@ -52,7 +53,7 @@ SCHEMAS: List[Dict[str, Any]] = [
         "Read one or more memory files in full. Each result has the file's content and its version. To edit a "
         "file later, pass that version as if_version.",
         {"paths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_READ_PATHS,
-                   "description": _PATH_HELP}}, ["paths"]),
+                   "description": _EXISTING_PATH_HELP}}, ["paths"]),
     _fn("memory_search",
         "Search memory by meaning and by keywords. Use it when no file description in the list matches what you "
         "need. Returns matching files, each with its best-matching passage.",
@@ -72,7 +73,7 @@ SCHEMAS: List[Dict[str, Any]] = [
     _fn("memory_str_replace",
         "Replace one piece of text in a memory file. The text in old must appear exactly once in the file. Use it "
         "to correct or update a fact.",
-        {"path": {"type": "string", "description": _PATH_HELP},
+        {"path": {"type": "string", "description": _EXISTING_PATH_HELP},
          "old": {"type": "string", "description": "The exact text to replace. It must appear exactly once."},
          "new": {"type": "string", "description": "The replacement text. Use an empty string to delete the text."},
          "if_version": {"type": "string", "description": "Optional: the version you read. The edit fails if the file has changed since."}},
@@ -80,14 +81,14 @@ SCHEMAS: List[Dict[str, Any]] = [
     _fn("memory_append",
         "Add facts to the end of an existing memory file, one bullet point per fact. The file must already "
         "exist. To create a file, use memory_write with if_version \"new\".",
-        {"path": {"type": "string", "description": _PATH_HELP},
+        {"path": {"type": "string", "description": _EXISTING_PATH_HELP},
          "lines": {"type": "array", "items": {"type": "string"}, "minItems": 1,
                    "description": "One fact per item. '- ' is added to the start if it is missing."},
          "if_version": {"type": "string", "description": "Optional: the version you read. The edit fails if the file has changed since."}},
         ["path", "lines"]),
     _fn("memory_delete",
         "Delete a memory file. Set if_version to the file's current version, from memory_read or memory_list.",
-        {"path": {"type": "string", "description": _PATH_HELP},
+        {"path": {"type": "string", "description": _EXISTING_PATH_HELP},
          "if_version": {"type": "string", "description": "The file's current version."}},
         ["path", "if_version"]),
 ]
@@ -264,6 +265,11 @@ def _mutate(ctx: Context, path: str, if_version: Optional[str],
     return {"ok": True, "path": path, "version": result["version"]}
 
 
+def _has_frontmatter(text: str) -> bool:
+    fn = getattr(frontmatter, "has_frontmatter", None)
+    return fn(text) if fn is not None else text.replace("\r\n", "\n").startswith("---\n")
+
+
 def _write(args, ctx: Context):
     path = _str(args, "path")
     description = " ".join(_str(args, "description").split())
@@ -271,6 +277,14 @@ def _write(args, ctx: Context):
     if_version = _str(args, "if_version")
     aliases = _str_list(args, "aliases", required=False)
     source = ctx.provenance(path)
+    if _has_frontmatter(body):
+        try:
+            inner_fm, inner_body = frontmatter.parse(body)
+        except frontmatter.FrontmatterError:
+            pass
+        else:
+            if inner_fm.get("name") in (None, stem(path)) and inner_fm.get("description") is not None:
+                body = inner_body
 
     def edit(current):
         if current is None:
@@ -299,14 +313,24 @@ def _str_replace(args, ctx: Context):
         if current is None:
             raise StoreError("not_found", f"{path} doesn't exist")
         fm, body = _existing(path, current)
-        count = body.count(old)
-        if count == 0:
-            raise StoreError("no_match", f"the text to replace isn't in {path}'s body; memory_read it for the exact text")
-        if count > 1:
-            raise StoreError("ambiguous_match", f"the text occurs {count} times in {path}; include more context so it's unique")
+        if new == "" and "\n" not in old and body.count(f"{old}\n") == 1:
+            replaced = body.replace(f"{old}\n", "", 1)
+        else:
+            count = body.count(old)
+            if count == 0:
+                if old in current.decode("utf-8", errors="replace"):
+                    raise StoreError(
+                        "no_match",
+                        f"memory_str_replace edits {path}'s body only, not its frontmatter; "
+                        "use memory_write to change description or aliases",
+                    )
+                raise StoreError("no_match", f"the text to replace isn't in {path}'s body; memory_read it for the exact text")
+            if count > 1:
+                raise StoreError("ambiguous_match", f"the text occurs {count} times in {path}; include more context so it's unique")
+            replaced = body.replace(old, new, 1)
         _add_source(fm, ctx.provenance(path))
         stamp(fm)
-        return frontmatter.render(fm, body.replace(old, new, 1))
+        return frontmatter.render(fm, _body_text(replaced))
 
     return _mutate(ctx, path, if_version, edit)
 

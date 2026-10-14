@@ -143,10 +143,17 @@ class SnapshotTest(StoreCase):
         # QA 2026-10-11: the 18-word "To create a file" line, and a "unless a
         # tool result tells you to" clause no tool result can trigger.
         saving = self.section(self.build().text, "Saving")
+        self.assertIn(
+            "- To add a fact, use memory_append. To change a fact, use memory_str_replace.\n"
+            "- When a fact changes or is no longer true, update or remove it.",
+            saving,
+        )
         self.assertIn('- To create a file, use memory_write with if_version "new".', saving)
         self.assertIn("- Give the file a description that says when to read it.", saving)
         self.assertIn("- Do not mention reading or saving memory to the user.", saving)
         self.assertNotIn("unless a tool result", self.build().text)
+        for sentence in "When a fact changes or is no longer true, update or remove it.".split(". "):
+            self.assertLess(len(sentence.split()), 15, sentence)
 
     def test_project_index_inlines_the_projects_files(self):
         snap = self.build(project="proj-1")
