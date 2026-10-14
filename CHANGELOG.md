@@ -6,6 +6,95 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [0.2.1] - 2026-10-14
+
+### Added
+
+- **`backup_paths` on the provider,** so `hermes backup` includes a custom
+  `store_path` outside `HERMES_HOME`.
+- **A staleness rule in the prompt's Saving section:** when a fact changes or is
+  no longer true, the agent is told to update or remove it rather than append a
+  contradicting bullet.
+
+### Changed
+
+- **Per-session prefetch hint cooldown.** Once a file is hinted by prefetch or
+  read/written in a session, prefetch suppresses it for the next four turns and
+  allows re-hinting five turns later. In-place context compression clears the
+  cooldown state.
+- **Hybrid search relevance floor and FTS stopword filtering.**
+  - Vector search ignores zero-norm queries and chunks below `0.20` cosine
+    similarity, so unrelated queries can return no matches instead of padding
+    results up to `limit`.
+  - Keyword search strips common English stopwords before building the `OR`
+    query (falling back to all tokens when a query is all stopwords) and checks
+    scope permissions before capping at 200 candidates.
+  - When a file's identity chunk (`path` and `description`) wins, the result
+    uses the best body chunk for `heading` and `snippet` instead of repeating
+    the metadata.
+- **Chunking and heading embeddings (index schema v2).**
+  - Section headings are included when embedding chunk text, and nested
+    headings without immediate body lines keep their parent path
+    (`Parent > Child`).
+  - Lines inside fenced code blocks (` ``` ` or `~~~`) are never parsed as
+    Markdown headings or top-level bullets.
+  - Existing `.index/memory.sqlite` caches rebuild automatically on startup.
+- **Tool guardrails and schema size.**
+  - `memory_write` strips a duplicate leading frontmatter block if the agent
+    passes `memory_read` output back as `body`.
+  - `memory_str_replace` deletes the full line (including its newline) when
+    `new` is empty and `old` matches a single line without `\n`, normalises
+    trailing newlines, and points to `memory_write` when `old` matches
+    frontmatter instead of body text.
+  - Cross-project `memory_write` conflicts with `if_version: "new"` direct the
+    agent to `memory_append` instead of a versioned overwrite that would be
+    refused as `out_of_scope`.
+  - The full path-format help stays on `memory_write` while `memory_read`,
+    `memory_str_replace`, `memory_append` and `memory_delete` use a shorter
+    path description.
+- **`plugin.yaml` uses Manifest v2** (`manifest_version: 2`, `api_version: 1`,
+  `author`, `homepage` and `tags`).
+
+### Fixed
+
+- One-shot prefetch and background embedding threads no longer accumulate open
+  SQLite connections in `Index._conns`, and opening a thread connection no
+  longer runs a `BEGIN IMMEDIATE` schema write transaction when the schema is
+  already current.
+- `queue_prefetch` and `_after_write` share the embedding lock so they never
+  embed the same backlog concurrently.
+- Entry-point installs (pip and Nix) no longer call `register_skill`, which
+  listed a descriptionless `memory_buckets:sort-imports` entry in the system
+  prompt that Hermes pruned on `skill_view`. Plugin-directory installs now pass
+  the parsed `description` and `frontmatter` from `SKILL.md`.
+- Resumed sessions (where Hermes reuses the persisted system prompt without
+  calling `system_prompt_block`) still exclude `global/profile.md`,
+  `global/preferences.md` and the project's `profile.md` and `preferences.md`
+  from prefetch hints.
+- In-place context compression (`on_session_switch` on the current session id)
+  clears the cached prompt snapshot so the rebuilt prompt reflects current
+  files.
+- `projects.session_cwd` checks the live terminal session cwd first, so
+  switching projects mid-turn with `desktop_project` or `cd` takes effect
+  immediately.
+- `provider.initialize` expands `~` in `store_path`, matching the CLI.
+- One-shot CLI commands (`status`, `search`, `reindex`, `hints`) no longer
+  spawn a background model download thread or create `<store>/.models/` when
+  the built-in model is not yet downloaded.
+- `Store.projects` ignores symlinked directories, and `Store.delete` removes
+  empty parent and bucket directories when the last file in a project is
+  deleted.
+- `frontmatter` preserves multi-quoted scalars (`"a" and "b"`) and handles
+  escaped quotes (`\"`) inside inline lists.
+- `migrate --dry-run` validates tidied inbox content the same way `migrate`
+  does, and `migrate` only prints `originals kept in _backup` when a backup was
+  written.
+- `lint` checks slash wikilinks (`[[bucket/topic]]`) against valid store files
+  rather than raw filesystem existence.
+- `diagnose` and `import-prompt` only say the agent loads `sort-imports`
+  automatically when installed as a plugin directory or configured in
+  `skills.external_dirs`.
+
 ## [0.2.0] - 2026-10-12
 
 Upgrading from 0.1.0 needs nothing from you: the first writable session
@@ -175,6 +264,7 @@ will do.
 
 Initial release.
 
+[0.2.1]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.2.0...v0.2.1
 [0.2.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.1.0...v0.2.0
 [0.1.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.0.1...v0.1.0
 [0.0.1]: https://git.cl0vr.co/cl0vr/memory-buckets/src/tag/v0.0.1

@@ -109,6 +109,8 @@ class RegisterTest(unittest.TestCase):
     def test_manifest_declares_no_kind(self):
         manifest = (PLUGIN_DIR / "plugin.yaml").read_text()
         self.assertIn("name: memory-buckets", manifest)
+        self.assertRegex(manifest, r"(?m)^manifest_version: 2$")
+        self.assertRegex(manifest, r"(?m)^api_version: 1$")
         self.assertNotRegex(manifest, r"(?m)^kind:")
         self.assertRegex(manifest, r"(?m)^python_runtime: external$")
 

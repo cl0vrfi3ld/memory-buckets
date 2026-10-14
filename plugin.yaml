@@ -1,12 +1,10 @@
 name: memory-buckets
-version: 0.2.0
+version: 0.2.1
+manifest_version: 2
+api_version: 1
 license: MIT
+author: cl0vrfi3ld
+homepage: https://git.cl0vr.co/cl0vr/memory-buckets
 description: "Markdown-based memory provider with hybrid search (FTS keyword + static embeddings), inspired by Claude memory."
-# No `kind`: Hermes detects memory providers from __init__.py and treats them
-# as `exclusive`. `memory` is not a valid kind and would be downgraded.
-#
-# Stdlib only, so Hermes's package manager has nothing to install. Without this,
-# the pyproject.toml (there for pip installs) makes the directory a PM workspace
-# member, and enabling it runs `uv lock` against Hermes's own uv.lock, which a
-# Nix-built Hermes doesn't have.
+tags: [memory, markdown, embeddings, fts5]
 python_runtime: external
