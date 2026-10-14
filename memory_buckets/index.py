@@ -18,6 +18,7 @@ import os
 import re
 import sqlite3
 import threading
+import weakref
 from array import array
 from collections import defaultdict
 from typing import Callable, Dict, List, Optional, Tuple
@@ -28,7 +29,7 @@ from .store import Store, version
 
 logger = logging.getLogger("memory_buckets")
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
 CHUNK_CHARS = 700
 RRF_K = 60
 CANDIDATES = 200
@@ -43,8 +44,9 @@ CREATE INDEX IF NOT EXISTS chunks_path ON chunks(path);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(text, heading, tokenize='porter unicode61');
 """
 
-_HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*#*\s*$")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
 _BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -53,7 +55,11 @@ _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 def _blocks(body: str) -> List[Tuple[str, str]]:
     """(heading, block) pairs: a block is one bullet (with its indented
     continuation lines) or one paragraph."""
-    heading, out, current = "", [], []
+    heading = ""
+    stack: List[Tuple[int, str]] = []
+    out: List[Tuple[str, str]] = []
+    current: List[str] = []
+    fence: Optional[str] = None
 
     def flush():
         if current:
@@ -61,10 +67,24 @@ def _blocks(body: str) -> List[Tuple[str, str]]:
             current.clear()
 
     for line in body.split("\n"):
+        fm = _FENCE_RE.match(line)
+        if fence is not None:
+            current.append(line)
+            if fm and fm.group(1).startswith(fence):
+                fence = None
+            continue
+        if fm:
+            fence = fm.group(1)
+            current.append(line)
+            continue
         m = _HEADING_RE.match(line)
         if m:
             flush()
-            heading = m.group(1)
+            level = len(m.group(1))
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, m.group(2)))
+            heading = " > ".join(h for _, h in stack)
         elif not line.strip():
             flush()
         elif _BULLET_RE.match(line) and not line[:1].isspace():
@@ -124,8 +144,9 @@ class Index:
         self.embedder = embedder
         self.path = store.root / ".index" / "memory.sqlite"
         self._local = threading.local()
-        self._conns: List[sqlite3.Connection] = []
+        self._conns: List[Tuple[weakref.ReferenceType[threading.Thread], sqlite3.Connection]] = []
         self._conns_lock = threading.Lock()
+        self._schema_ready: bool = False
         self._vec_cache: Tuple[Optional[str], List[Tuple[int, str, array]]] = (None, [])
         self._vec_lock = threading.Lock()
 
@@ -138,13 +159,35 @@ class Index:
             con = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA synchronous=NORMAL")
-            self._ensure_schema(con)
+            if not self._schema_ready:
+                self._ensure_schema(con)
+                self._schema_ready = True
             self._local.con = con
             with self._conns_lock:
-                self._conns.append(con)
+                alive: List[Tuple[weakref.ReferenceType[threading.Thread], sqlite3.Connection]] = []
+                for ref, old in self._conns:
+                    thread = ref()
+                    if thread is not None and thread.is_alive():
+                        alive.append((ref, old))
+                    else:
+                        try:
+                            old.close()
+                        except sqlite3.Error:
+                            pass
+                alive.append((weakref.ref(threading.current_thread()), con))
+                self._conns = alive
         return con
 
     def _ensure_schema(self, con: sqlite3.Connection) -> None:
+        has_meta = con.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone()
+        if has_meta:
+            current = con.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            if current and current[0] == SCHEMA_VERSION:
+                if self.embedder is None:
+                    return
+                row = con.execute("SELECT value FROM meta WHERE key='embed_identity'").fetchone()
+                if row is not None and row[0] == self.embedder.identity:
+                    return
         con.execute("BEGIN IMMEDIATE")
         try:
             has_meta = con.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone()
@@ -174,12 +217,13 @@ class Index:
 
     def close(self) -> None:
         with self._conns_lock:
-            for con in self._conns:
+            for _, con in self._conns:
                 try:
                     con.close()
                 except sqlite3.Error:
                     pass
             self._conns.clear()
+            self._schema_ready = False
         self._local = threading.local()
 
     def rebuild(self) -> None:
@@ -271,12 +315,13 @@ class Index:
             return 0
         con, done, batches = self._conn(), 0, 0
         while max_batches is None or batches < max_batches:
-            rows = con.execute("SELECT id, text FROM chunks WHERE vec IS NULL ORDER BY id LIMIT ?",
+            rows = con.execute("SELECT id, heading, text FROM chunks WHERE vec IS NULL ORDER BY id LIMIT ?",
                                (self.embedder.batch,)).fetchall()
             if not rows:
                 break
             try:
-                vectors = self.embedder.embed_documents([text for _, text in rows])
+                vectors = self.embedder.embed_documents([f"{heading}\n{text}" if heading else text
+                                                         for _, heading, text in rows])
             except EmbeddingError:
                 break
             con.execute("BEGIN IMMEDIATE")
@@ -287,7 +332,7 @@ class Index:
                 con.execute("INSERT OR REPLACE INTO meta VALUES('embed_dims', ?)", (str(len(vectors[0])),))
                 # Only fill chunks whose text is unchanged; ids are never reused (AUTOINCREMENT).
                 con.executemany("UPDATE chunks SET vec = ? WHERE id = ? AND text = ?",
-                                [(vec.tobytes(), cid, text) for (cid, text), vec in zip(rows, vectors)])
+                                [(vec.tobytes(), cid, text) for (cid, _, text), vec in zip(rows, vectors)])
                 self._bump(con)
                 con.execute("COMMIT")
             except BaseException:

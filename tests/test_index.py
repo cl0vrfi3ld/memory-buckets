@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 import unittest
 
@@ -28,6 +29,44 @@ class ChunkTest(unittest.TestCase):
         chunks = idx.chunk("p.md", "", [], body, limit=120)[1:]
         self.assertGreater(len(chunks), 5)
         self.assertTrue(all(len(t) <= 120 for _, t in chunks))
+
+    def test_fenced_code_blocks_ignore_headings_and_bullets(self):
+        body = (
+            "# Setup\n"
+            "```sh\n"
+            "# install packages\n"
+            "- not a markdown bullet\n"
+            "echo ok\n"
+            "```\n\n"
+            "~~~python\n"
+            "# tilde comment\n"
+            "x = 1\n"
+            "~~~\n"
+        )
+        self.assertEqual(
+            idx.chunk("p.md", "", [], body, limit=500)[1:],
+            [("Setup", "```sh\n# install packages\n- not a markdown bullet\necho ok\n```\n~~~python\n# tilde comment\n"
+                       "x = 1\n~~~")],
+        )
+
+    def test_nested_headings_preserve_parent_hierarchy(self):
+        body = (
+            "# Infrastructure\n"
+            "## Hetzner Storage Box\n"
+            "- mounted at /mnt/box\n\n"
+            "## Backups\n"
+            "- restic nightly\n\n"
+            "# Personal\n"
+            "- notes\n"
+        )
+        self.assertEqual(
+            idx.chunk("p.md", "", [], body)[1:],
+            [
+                ("Infrastructure > Hetzner Storage Box", "- mounted at /mnt/box"),
+                ("Infrastructure > Backups", "- restic nightly"),
+                ("Personal", "- notes"),
+            ],
+        )
 
 
 class IndexTest(StoreCase):
@@ -77,6 +116,34 @@ class IndexTest(StoreCase):
         index.rebuild()
         self.assertEqual(index.search("climbing", ALL)["results"][0]["path"], "global/people/sam.md")
 
+    def test_one_shot_worker_threads_do_not_leak_connections(self):
+        index = self.make()
+        for _ in range(8):
+            worker = threading.Thread(target=lambda: index.search("nix", ALL))
+            worker.start()
+            worker.join()
+        index.stats()
+        self.assertTrue(getattr(index, "_schema_ready"))
+        self.assertEqual(len(index._conns), 1)
+        index.close()
+        self.assertFalse(getattr(index, "_schema_ready"))
+        con = index._conn()
+        statements = []
+        con.set_trace_callback(statements.append)
+        index._ensure_schema(con)
+        self.assertFalse(any("BEGIN IMMEDIATE" in s for s in statements))
+
+    def test_parent_heading_without_immediate_body_is_searchable_via_fts(self):
+        self.put(
+            "global/topics/infra.md",
+            doc("infra", "Server notes", "# Infrastructure\n## Hetzner Storage Box\n- mounted at /mnt/box\n"),
+        )
+        index = self.make()
+        hits = list(index.search("Infrastructure", ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual(hits[0]["path"], "global/topics/infra.md")
+        self.assertEqual(hits[0]["heading"], "Infrastructure > Hetzner Storage Box")
+
 
 class EmbeddingIndexTest(IndexTest):
     def test_hybrid_search_and_backlog(self):
@@ -117,6 +184,21 @@ class EmbeddingIndexTest(IndexTest):
         self.assertEqual(index2.stats()["embedded"], 0)
         index2.embed_backlog(max_batches=None)
         self.assertEqual(index2.stats()["backlog"], 0)
+
+    def test_embed_backlog_includes_section_headings(self):
+        self.put(
+            "global/topics/infra.md",
+            doc("infra", "Server notes", "# Infrastructure\n## Hetzner Storage Box\n- mounted at /mnt/box\n"),
+        )
+        embedder = FakeEmbedder()
+        index = self.make(embedder)
+        index.reconcile()
+        embedder.calls.clear()
+        index.embed_backlog(max_batches=None)
+        embedded_texts = [text for batch in embedder.calls for text in batch]
+        self.assertIn("Infrastructure > Hetzner Storage Box\n- mounted at /mnt/box", embedded_texts)
+        hints = index.hints("Infrastructure", ALL, min_similarity=0.2)
+        self.assertEqual(hints[0][0], "global/topics/infra.md")
 
 
 
