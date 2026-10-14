@@ -21,7 +21,7 @@ import os
 import sqlite3
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -37,6 +37,7 @@ from .store import GLOBAL, Store, StoreError
 logger = logging.getLogger("memory_buckets")
 
 MAX_SESSIONS = 64
+HINT_COOLDOWN_TURNS = 5
 NUDGE = ("Memory check: has this conversation produced new durable facts about the user or their work? If yes, "
          "save them now with the memory tools, following your memory instructions. If no, do nothing. Do not "
          "mention this check to the user.")
@@ -71,6 +72,8 @@ class SessionState:
     agent_context: str = "primary"
     cwd: str = ""  # the workspace Hermes gave initialize(); projects.py prefers a live one
     turns: int = 0
+    prefetch_turns: int = 0
+    hint_seen: Dict[str, int] = field(default_factory=dict)  # path -> prefetch_turn when hinted or read/written
     nudge_due: bool = False
     snapshot: Optional[snapshot.Snapshot] = None
     status: Optional[Callable[..., Any]] = None  # status_callback from initialize: only the classic CLI gets one
@@ -199,7 +202,10 @@ class MemoryBucketsProvider(MemoryProvider):
         if rewound or not new_session_id:
             return
         if new_session_id == self._current:
-            self._state(new_session_id).snapshot = None
+            state = self._state(new_session_id)
+            state.snapshot = None
+            state.hint_seen.clear()
+            state.prefetch_turns = 0
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
@@ -243,19 +249,30 @@ class MemoryBucketsProvider(MemoryProvider):
         state = self._state(sid)
         scope = self._scope(sid)
         parts = []
-        try:
-            if state.snapshot is not None:
-                exclude = state.snapshot.paths
-            else:
-                exclude = {"global/profile.md", "global/preferences.md"} | (
-                    {f"{scope.project}/profile.md", f"{scope.project}/preferences.md"} if scope.project else set()
-                )
-            hints = self.index.hints(query, scope.reads_by_default, exclude=exclude,
-                                     min_similarity=min_similarity(self.config, self.index.embedder),
-                                     max_hints=self.config.prefetch_max_hints)
-        except Exception:
-            logger.warning("memory-buckets: prefetch hints failed", exc_info=True)
-            hints = []
+        hints = []
+        if query and query.strip() and self.index is not None and self.index.embedder is not None:
+            state.prefetch_turns += 1
+            turn = state.prefetch_turns
+            try:
+                if state.snapshot is not None:
+                    base_exclude = state.snapshot.paths
+                else:
+                    base_exclude = {"global/profile.md", "global/preferences.md"} | (
+                        {f"{scope.project}/profile.md", f"{scope.project}/preferences.md"} if scope.project else set()
+                    )
+                cooldown_exclude = {
+                    path for path, seen_turn in state.hint_seen.items()
+                    if turn - seen_turn < HINT_COOLDOWN_TURNS
+                }
+                exclude = base_exclude | cooldown_exclude
+                hints = self.index.hints(query, scope.reads_by_default, exclude=exclude,
+                                         min_similarity=min_similarity(self.config, self.index.embedder),
+                                         max_hints=self.config.prefetch_max_hints)
+                for path, _, _ in hints:
+                    state.hint_seen[path] = turn
+            except Exception:
+                logger.warning("memory-buckets: prefetch hints failed", exc_info=True)
+                hints = []
         if hints:
             self._last_recall = len(hints)
             lines = [f"- {path}: {desc}" if desc else f"- {path}" for path, desc, _ in hints]
@@ -295,7 +312,7 @@ class MemoryBucketsProvider(MemoryProvider):
         ctx = tools.Context(store=self.store, index=self.index, scope=self._scope(), config=self.config,
                             source=state.platform, on_write=self._after_write, notify=self._notifier(state))
         try:
-            return json.dumps(tools.handle(tool_name, args or {}, ctx), ensure_ascii=False)
+            res = tools.handle(tool_name, args or {}, ctx)
         except sqlite3.Error as err:
             # The index is only a cache: a corrupt SQLite file is rebuilt, never a crash.
             # Only sqlite3.Error: store writes never touch SQLite synchronously, so a retry here
@@ -304,12 +321,23 @@ class MemoryBucketsProvider(MemoryProvider):
             try:
                 if self.index is not None:
                     self.index.rebuild()
-                return json.dumps(tools.handle(tool_name, args or {}, ctx), ensure_ascii=False)
+                res = tools.handle(tool_name, args or {}, ctx)
             except sqlite3.Error as err2:
                 logger.warning("memory-buckets: index still failing after rebuild: %s", err2)
                 return json.dumps({"ok": False, "error": {"code": "index_error",
                                                           "message": f"the search index is broken and couldn't be rebuilt: {err2}"}},
                                   ensure_ascii=False)
+        if res.get("ok"):
+            effective_turn = max(state.prefetch_turns, 1)
+            if tool_name == "memory_read":
+                for entry in res.get("files", ()):
+                    if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                        state.hint_seen[entry["path"]] = effective_turn
+            elif tool_name in ("memory_write", "memory_append", "memory_str_replace") and isinstance(res.get("path"), str):
+                state.hint_seen[res["path"]] = effective_turn
+            elif tool_name == "memory_delete" and isinstance(res.get("path"), str):
+                state.hint_seen.pop(res["path"], None)
+        return json.dumps(res, ensure_ascii=False)
 
     @staticmethod
     def _hermes_buckets() -> Optional[List[str]]:

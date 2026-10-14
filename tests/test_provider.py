@@ -276,6 +276,92 @@ class ProviderTest(StoreCase):
         self.assertNotIn("global/profile.md", out)
         self.assertEqual(p.recall_status().count, 1)
 
+    def test_prefetch_hint_cooldown_suppresses_and_rehints_after_five_turns(self):
+        p = self.make(embedder=FakeEmbedder())
+        p.config.prefetch_min_similarity = 0.3
+        p.system_prompt_block()
+        p.queue_prefetch("x", session_id="s1")
+        out1 = p.prefetch("Sam likes climbing", session_id="s1")
+        self.assertIn("global/people/sam.md", out1)
+        self.assertEqual(p._state("s1").prefetch_turns, 1)
+        self.assertEqual(p._state("s1").hint_seen.get("global/people/sam.md"), 1)
+        # Suppressed for the next 4 turns (turns 2..5) in the same session.
+        for expected_turn in range(2, 1 + prov.HINT_COOLDOWN_TURNS):
+            self.assertEqual(p.prefetch("Sam likes climbing", session_id="s1"), "")
+            self.assertEqual(p._state("s1").prefetch_turns, expected_turn)
+            self.assertIsNone(p.recall_status())
+        # Another session is unaffected by s1's cooldown.
+        self.assertIn("global/people/sam.md", p.prefetch("Sam likes climbing", session_id="s2"))
+        # Turn 6 (1 + 5): cooldown has elapsed and the file can be hinted again.
+        out6 = p.prefetch("Sam likes climbing", session_id="s1")
+        self.assertIn("global/people/sam.md", out6)
+        self.assertEqual(p._state("s1").prefetch_turns, 1 + prov.HINT_COOLDOWN_TURNS)
+        self.assertEqual(p._state("s1").hint_seen.get("global/people/sam.md"), 1 + prov.HINT_COOLDOWN_TURNS)
+
+    def test_tool_calls_suppress_prefetch_hints_for_cooldown_and_delete_clears(self):
+        p = self.make(embedder=FakeEmbedder())
+        p.config.prefetch_min_similarity = 0.3
+        p.system_prompt_block()
+        p.queue_prefetch("x", session_id="s1")
+        # Reading a file before the first prefetch records seen_turn = 1.
+        self.assertTrue(self.call(p, "memory_read", paths=["global/people/sam.md"])["ok"])
+        self.assertEqual(p._state("s1").hint_seen.get("global/people/sam.md"), 1)
+        # Turns 1..5 are suppressed because seen_turn is 1.
+        for _ in range(prov.HINT_COOLDOWN_TURNS):
+            self.assertEqual(p.prefetch("Sam likes climbing", session_id="s1"), "")
+        # Turn 6 (1 + 5) hints the file again.
+        self.assertIn("global/people/sam.md", p.prefetch("Sam likes climbing", session_id="s1"))
+        self.assertEqual(p._state("s1").prefetch_turns, 6)
+        # Writing a new file at turn 6 records seen_turn = 6.
+        self.assertTrue(self.call(
+            p, "memory_write", path="global/topics/climbing.md",
+            description="Climbing notes", body="- Sam likes climbing\n", if_version="new",
+        )["ok"])
+        p.queue_prefetch("x", session_id="s1")
+        self.assertEqual(p._state("s1").hint_seen.get("global/topics/climbing.md"), 6)
+        # Turns 7..10: both sam.md and climbing.md are in cooldown.
+        for _ in range(prov.HINT_COOLDOWN_TURNS - 1):
+            self.assertEqual(p.prefetch("Sam likes climbing", session_id="s1"), "")
+        self.assertEqual(p._state("s1").prefetch_turns, 10)
+        # Appending to sam.md at turn 10 refreshes its cooldown while climbing.md reaches turn 6 + 5 = 11.
+        self.assertTrue(self.call(p, "memory_append", path="global/people/sam.md", lines=["indoor bouldering"])["ok"])
+        p.queue_prefetch("x", session_id="s1")
+        self.assertEqual(p._state("s1").hint_seen.get("global/people/sam.md"), 10)
+        out11 = p.prefetch("Sam likes climbing", session_id="s1")
+        self.assertIn("global/topics/climbing.md", out11)
+        self.assertNotIn("global/people/sam.md", out11)
+        # Editing sam.md with memory_str_replace at turn 11 refreshes its cooldown to turn 11.
+        self.assertTrue(self.call(
+            p, "memory_str_replace", path="global/people/sam.md",
+            old="- indoor bouldering", new="- outdoor bouldering",
+        )["ok"])
+        p.queue_prefetch("x", session_id="s1")
+        self.assertEqual(p._state("s1").hint_seen.get("global/people/sam.md"), 11)
+        for _ in range(prov.HINT_COOLDOWN_TURNS - 1):
+            self.assertEqual(p.prefetch("Sam likes climbing", session_id="s1"), "")
+        out16 = p.prefetch("Sam likes climbing", session_id="s1")
+        self.assertIn("global/people/sam.md", out16)
+        # Deleting climbing.md removes it from hint_seen.
+        ver = self.store.read("global/topics/climbing.md")["version"]
+        self.assertTrue(self.call(p, "memory_delete", path="global/topics/climbing.md", if_version=ver)["ok"])
+        self.assertNotIn("global/topics/climbing.md", p._state("s1").hint_seen)
+
+    def test_in_place_compaction_clears_hint_seen_while_rewind_keeps_it(self):
+        p = self.make(embedder=FakeEmbedder())
+        p.config.prefetch_min_similarity = 0.3
+        p.system_prompt_block()
+        p.queue_prefetch("x", session_id="s1")
+        self.assertIn("global/people/sam.md", p.prefetch("Sam likes climbing", session_id="s1"))
+        self.assertEqual(p.prefetch("Sam likes climbing", session_id="s1"), "")
+        # Rewind keeps hint_seen intact.
+        p.on_session_switch("s1", rewound=True)
+        self.assertEqual(p.prefetch("Sam likes climbing", session_id="s1"), "")
+        # In-place compaction clears hint_seen and resets prefetch_turns so hints can appear immediately.
+        p.on_session_switch("s1", parent_session_id="s1")
+        self.assertEqual(p._state("s1").hint_seen, {})
+        self.assertEqual(p._state("s1").prefetch_turns, 0)
+        self.assertIn("global/people/sam.md", p.prefetch("Sam likes climbing", session_id="s1"))
+
     def test_prefetch_excludes_inlined_files_when_snapshot_was_not_built(self):
         self.put("global/preferences.md", doc("preferences", "How to work", "- Ivy prefers concise answers\n"))
         self.put("proj-1/profile.md", doc("profile", "What proj-1 is", "- Ivy builds proj-1\n"))
