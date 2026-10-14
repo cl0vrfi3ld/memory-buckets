@@ -1,5 +1,7 @@
+import sys
 import types
 import unittest
+from unittest import mock
 
 from .helpers import fake_hermes
 from memory_buckets import projects
@@ -13,8 +15,18 @@ class ProjectsTest(unittest.TestCase):
             self.assertIsNone(projects.project_for_path("/home"))
             self.assertIsNone(projects.project_for_path(""))
 
-    def test_cwd_order_pinned_then_init_then_agent(self):
+    def test_cwd_order_live_then_pinned_then_init_then_agent(self):
+        term = types.ModuleType("tools.terminal_tool")
+        term.get_session_cwd = lambda: "  /live/proj  "
+        tools_pkg = types.ModuleType("tools")
+        tools_pkg.__path__, tools_pkg.terminal_tool = [], term
         with fake_hermes(pinned="/pinned", agent_cwd="/agent"):
+            with mock.patch.dict(sys.modules, {"tools": tools_pkg, "tools.terminal_tool": term}):
+                self.assertEqual(projects.session_cwd("/init"), "/live/proj")
+                term.get_session_cwd = lambda: "   "
+                self.assertEqual(projects.session_cwd("/init"), "/pinned")
+                term.get_session_cwd = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+                self.assertEqual(projects.session_cwd("/init"), "/pinned")
             self.assertEqual(projects.session_cwd("/init"), "/pinned")
         with fake_hermes(agent_cwd="/agent"):
             self.assertEqual(projects.session_cwd("/init"), "/init")

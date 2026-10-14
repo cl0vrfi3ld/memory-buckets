@@ -94,6 +94,17 @@ class ToolsTest(StoreCase):
                          body="- x", if_version="new")
         self.assertTrue(made["ok"], made)
         self.assertIn("sources:\n  - telegram@*\n", self.content("proj-1/topics/notes.md"))
+        # Creating over an existing file in another project's bucket directs the model to memory_append,
+        # not to a versioned overwrite that would fail with out_of_scope.
+        conflict = self.call("memory_write", path="proj-1/topics/deploy.md", description="Deploy",
+                             body="- x", if_version="new")
+        self.assertEqual(conflict["error"]["code"], "conflict")
+        self.assertEqual(
+            conflict["error"]["message"],
+            "proj-1/topics/deploy.md already exists and you may only add to proj-1/; "
+            "use memory_append to add new facts to it",
+        )
+        self.assertIn("- colmena", conflict["current"]["content"])
         # Edit and delete: refused; the error names both add tools and the add-only buckets.
         got = self.call("memory_str_replace", path="proj-1/topics/deploy.md", old="- colmena", new="- x")
         self.assertEqual(got["error"]["code"], "out_of_scope")
@@ -361,6 +372,12 @@ class ToolsTest(StoreCase):
     def test_bad_args(self):
         self.assertEqual(self.call("memory_write", path="global/topics/x.md")["error"]["code"], "invalid_args")
         self.assertEqual(self.call("memory_nope")["error"]["code"], "invalid_args")
+
+    def test_no_private_adr_references_in_source_comments(self):
+        from pathlib import Path
+        root = Path(tools.__file__).resolve().parent.parent
+        for py_file in sorted([*root.glob("memory_buckets/*.py"), *root.glob("tests/*.py")]):
+            self.assertNotRegex(py_file.read_text(), r"A" + r"DR-\d+", f"found private decision ref in {py_file.name}")
 
 
 if __name__ == "__main__":

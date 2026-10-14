@@ -85,7 +85,7 @@ class MemoryBucketsProvider(MemoryProvider):
         self._current = ""
         self._last_recall = 0
         self._lock = threading.Lock()
-        self._embed_running = False
+        self._embed_running = threading.Lock()
         self._embed_again = False
         self._embed_thread = None
         self._shut = False
@@ -103,12 +103,16 @@ class MemoryBucketsProvider(MemoryProvider):
     def unavailable_reason(self) -> str:
         return "" if _sqlite_has_fts5() else "Python's sqlite3 lacks FTS5"
 
+    def backup_paths(self) -> List[str]:
+        cfg = self.config if self.store is not None and self.config is not None else config_mod.load()
+        return [str(Path(cfg.store_path).expanduser())] if cfg.store_path else []
+
     # -- lifecycle -----------------------------------------------------------------
 
     @_traced
     def initialize(self, session_id: str, **kwargs) -> None:
         self.config = config_mod.load()
-        root = Path(self.config.store_path) if self.config.store_path else Path(kwargs["hermes_home"]) / "memory-buckets"
+        root = Path(self.config.store_path).expanduser() if self.config.store_path else Path(kwargs["hermes_home"]) / "memory-buckets"
         self.store = Store(root)
         # Create the store up front (not just on first write), so it exists as soon as the
         # provider is active and the log says where it went (profiles move HERMES_HOME).
@@ -192,7 +196,10 @@ class MemoryBucketsProvider(MemoryProvider):
     @_traced
     def on_session_switch(self, new_session_id: str, *, parent_session_id: str = "", reset: bool = False,
                           rewound: bool = False, **kwargs) -> None:
-        if rewound or not new_session_id or new_session_id == self._current:
+        if rewound or not new_session_id:
+            return
+        if new_session_id == self._current:
+            self._state(new_session_id).snapshot = None
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
@@ -237,7 +244,12 @@ class MemoryBucketsProvider(MemoryProvider):
         scope = self._scope(sid)
         parts = []
         try:
-            exclude = state.snapshot.paths if state.snapshot else set()
+            if state.snapshot is not None:
+                exclude = state.snapshot.paths
+            else:
+                exclude = {"global/profile.md", "global/preferences.md"} | (
+                    {f"{scope.project}/profile.md", f"{scope.project}/preferences.md"} if scope.project else set()
+                )
             hints = self.index.hints(query, scope.reads_by_default, exclude=exclude,
                                      min_similarity=min_similarity(self.config, self.index.embedder),
                                      max_hints=self.config.prefetch_max_hints)
@@ -259,7 +271,11 @@ class MemoryBucketsProvider(MemoryProvider):
         if self.index is not None and self.index.embedder is not None:
             try:
                 self.index.reconcile()
-                self.index.embed_backlog(max_batches=4)
+                if self._embed_running.acquire(blocking=False):
+                    try:
+                        self.index.embed_backlog(max_batches=4)
+                    finally:
+                        self._embed_running.release()
             except Exception:
                 logger.warning("memory-buckets: background embedding failed", exc_info=True)
 
@@ -336,10 +352,9 @@ class MemoryBucketsProvider(MemoryProvider):
         if self.index.embedder.down_reason():  # the model isn't here yet
             return
         with self._lock:
-            if self._embed_running:
+            if not self._embed_running.acquire(blocking=False):
                 self._embed_again = True
                 return
-            self._embed_running = True
 
         def run():
             while True:
@@ -353,7 +368,7 @@ class MemoryBucketsProvider(MemoryProvider):
                     if self._embed_again and not self._shut:
                         self._embed_again = False
                         continue
-                    self._embed_running = False
+                    self._embed_running.release()
                     return
 
         self._embed_thread = spawn_context_thread(run, name="memory-buckets-embed")

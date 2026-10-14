@@ -94,7 +94,7 @@ GLOBAL_ROUTES_IN_PROJECT = _GLOBAL_ROUTES.format(
     people=" Their role in a project goes in that project's people/ file."
 )
 
-# D3 (ADR-0015): every session reads global/, so a misplaced global fact is still found.
+# D3: every session reads global/, so a misplaced global fact is still found.
 UNSURE = "- When you are not sure where a fact goes, save it under global/."
 
 UNSCOPED = (
@@ -125,7 +125,7 @@ This session is in the project {p}. Save each fact once, in one place:
     + GLOBAL_ROUTES_IN_PROJECT
 )
 
-# D1 and D2 (ADR-0015): add to another project's bucket, never edit it; a project
+# D1 and D2: add to another project's bucket, never edit it; a project
 # with no bucket and no Hermes project gets a global topic.
 ELSEWHERE = """\
 ### Facts for another project

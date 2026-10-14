@@ -8,7 +8,7 @@ Every result carries ``ok``. Errors are ``{"ok": false, "error": {"code", "messa
 The contract codes come from ``store.py``. The tool layer adds ``out_of_scope``,
 ``read_only`` and ``invalid_args``.
 
-Write rights (ADR-0015): a session writes fully inside ``scope.write_prefixes``.
+Write rights: a session writes fully inside ``scope.write_prefixes``.
 Into another known bucket it may only append to existing files
 (``memory_append``) and create new ones (``memory_write`` with ``if_version``
 "new"); edits and deletes there are refused with an error naming both add tools.
@@ -147,10 +147,16 @@ def _str_list(args: Dict[str, Any], key: str, required: bool = True) -> Optional
     return value
 
 
-def error(err: StoreError, path: Optional[str] = None) -> Dict[str, Any]:
+def error(err: StoreError, path: Optional[str] = None, scope: Optional[Scope] = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {"ok": False, "error": {"code": err.code, "message": err.message}}
     if err.code == "conflict":
-        out["error"]["message"] += "; merge with the current content and retry with its version"
+        if scope is not None and path and scope.cross_project_write(path):
+            out["error"]["message"] = (
+                f"{path} already exists and you may only add to {path.split('/', 1)[0]}/; "
+                "use memory_append to add new facts to it"
+            )
+        else:
+            out["error"]["message"] += "; merge with the current content and retry with its version"
         out["current"] = {"path": path, "version": err.fields.get("current_version"),
                           "content": err.fields.get("current_content")}
     elif err.fields:
@@ -169,7 +175,7 @@ def handle(name: str, args: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
     except ArgError as err:
         return {"ok": False, "error": {"code": "invalid_args", "message": str(err)}}
     except StoreError as err:
-        return error(err, args.get("path") if isinstance(args.get("path"), str) else None)
+        return error(err, args.get("path") if isinstance(args.get("path"), str) else None, ctx.scope)
 
 
 # -- reads -----------------------------------------------------------------------

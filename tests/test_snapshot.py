@@ -56,7 +56,7 @@ class SnapshotTest(StoreCase):
         self.assertNotIn("Their role in a project", where)
 
     def test_no_rule_sends_facts_to_the_inbox(self):
-        # ADR-0015: the inbox only holds imported memory. The Inbox note may name it; no rule may.
+        # The inbox only holds imported memory. The Inbox note may name it; no rule may.
         self.put("global/inbox.md", doc("inbox", "Imported memory waiting to be sorted"))
         self.index.reconcile()
         for kw in ({}, {"project": "proj-1"}):

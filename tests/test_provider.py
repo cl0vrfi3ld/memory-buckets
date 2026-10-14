@@ -44,6 +44,33 @@ class ProviderTest(StoreCase):
         p.on_session_switch("s2", parent_session_id="s1", reset=True)
         self.assertIn("global/topics/nix.md", p.system_prompt_block(), "new session: fresh snapshot")
 
+    def test_in_place_compression_refreshes_snapshot_while_rewind_keeps_it(self):
+        p = self.make()
+        first = p.system_prompt_block()
+        self.call(p, "memory_write", path="global/topics/nix.md", description="Nix", body="- x", if_version="new")
+        p.on_session_switch("s1", rewound=True)
+        self.assertEqual(p.system_prompt_block(), first, "rewind keeps the cached snapshot")
+        p.on_session_switch("s1", parent_session_id="s1")
+        self.assertIsNone(p._state("s1").snapshot)
+        self.assertIn("global/topics/nix.md", p.system_prompt_block(), "in-place compression rebuilds snapshot")
+
+    def test_initialize_expands_tilde_in_store_path_and_backup_paths(self):
+        with mock.patch.dict(os.environ, {**self.env, "HOME": str(self.home)}):
+            uninit = prov.MemoryBucketsProvider()
+            self.assertEqual(uninit.backup_paths(), [])
+            with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_STORE": "~/custom-store"}):
+                self.assertEqual(uninit.backup_paths(), [str(self.home / "custom-store")])
+                p = prov.MemoryBucketsProvider()
+                p.initialize("s1", hermes_home=str(self.home), platform="cli")
+                self.addCleanup(p.shutdown)
+                self.assertEqual(p.store.root, self.home / "custom-store")
+                self.assertTrue((self.home / "custom-store/memories/global").is_dir())
+                self.assertEqual(p.backup_paths(), [str(self.home / "custom-store")])
+            # Once initialised, backup_paths reads self.config without reloading env.
+            self.assertEqual(p.backup_paths(), [str(self.home / "custom-store")])
+            p.config.store_path = ""
+            self.assertEqual(p.backup_paths(), [])
+
     def test_project_comes_from_the_hermes_project_owning_the_cwd(self):
         with fake_hermes({"proj-1": "/src/proj-1"}):
             p = self.make(cwd="/src/proj-1/app")
@@ -92,7 +119,7 @@ class ProviderTest(StoreCase):
 
     def test_a_create_in_a_hermes_project_with_no_bucket_yet_is_allowed(self):
         # The known buckets are on-disk ∪ Hermes's: a project Hermes knows but
-        # that has no memory files yet is still addable (ADR-0015, D2).
+        # that has no memory files yet is still addable (D2).
         with fake_hermes({"fresh-proj": "/src/fresh"}):
             p = self.make()  # unscoped: the session's cwd is nowhere
             result = self.call(p, "memory_write", path="fresh-proj/topics/x.md",
@@ -248,6 +275,38 @@ class ProviderTest(StoreCase):
         self.assertIn("- global/people/sam.md: Who Sam is", out)
         self.assertNotIn("global/profile.md", out)
         self.assertEqual(p.recall_status().count, 1)
+
+    def test_prefetch_excludes_inlined_files_when_snapshot_was_not_built(self):
+        self.put("global/preferences.md", doc("preferences", "How to work", "- Ivy prefers concise answers\n"))
+        self.put("proj-1/profile.md", doc("profile", "What proj-1 is", "- Ivy builds proj-1\n"))
+        self.put("proj-1/preferences.md", doc("preferences", "Proj-1 conventions", "- Ivy pins Python\n"))
+        self.put("proj-1/topics/arch.md", doc("arch", "Proj-1 architecture", "- Ivy uses SQLite\n"))
+        with fake_hermes({"proj-1": "/src/proj-1"}):
+            p = self.make(embedder=FakeEmbedder(), cwd="/src/proj-1")
+            p.config.prefetch_min_similarity = 0.1
+            p.queue_prefetch("x", session_id="s1")
+            self.assertIsNone(p._state("s1").snapshot)
+            out = p.prefetch("Ivy", session_id="s1")
+        self.assertIn("proj-1/topics/arch.md", out)
+        for inlined in ("global/profile.md", "global/preferences.md", "proj-1/profile.md", "proj-1/preferences.md"):
+            self.assertNotIn(inlined, out)
+
+    def test_queue_prefetch_skips_embed_backlog_while_after_write_embeds(self):
+        p = self.make(embedder=FakeEmbedder())
+        self.assertTrue(p._embed_running.acquire(blocking=False))
+        try:
+            with mock.patch.object(p.index, "reconcile", wraps=p.index.reconcile) as reconcile, \
+                    mock.patch.object(p.index, "embed_backlog") as embed_backlog:
+                p.queue_prefetch("x", session_id="s1")
+            self.assertEqual(reconcile.call_count, 1)
+            embed_backlog.assert_not_called()
+        finally:
+            p._embed_running.release()
+        with mock.patch.object(p.index, "embed_backlog", return_value=0) as embed_backlog:
+            p.queue_prefetch("x", session_id="s1")
+        embed_backlog.assert_called_once_with(max_batches=4)
+        self.assertTrue(p._embed_running.acquire(blocking=False))
+        p._embed_running.release()
 
     def test_shutdown_waits_for_the_embedding_worker(self):
         # Regression: shutdown closed SQLite under a running worker thread and segfaulted.

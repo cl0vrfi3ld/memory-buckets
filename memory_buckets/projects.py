@@ -64,6 +64,13 @@ def _to_project(proj) -> Optional[Project]:
 
 def session_cwd(init_cwd: str = "") -> str:
     try:
+        from tools.terminal_tool import get_session_cwd
+        live = str(get_session_cwd() or "").strip()
+        if live:
+            return live
+    except Exception:
+        pass
+    try:
         from agent.runtime_cwd import resolve_agent_cwd, scoped_session_cwd
     except ImportError:
         return init_cwd or ""

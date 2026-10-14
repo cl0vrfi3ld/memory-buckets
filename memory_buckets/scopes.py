@@ -8,7 +8,7 @@ Reads: explicit paths anywhere are allowed ("project subtrees on request").
 Default reads (listing, search, snapshot) are ``global/`` plus the session's
 project.
 
-Writes (ADR-0015): unscoped ⇒ ``global/``. Project-scoped ⇒ the project plus
+Writes: unscoped ⇒ ``global/``. Project-scoped ⇒ the project plus
 all of ``global/``. Any writable session may also append to existing files and
 create new ones in another project's bucket; overwriting, ``str_replace`` and
 deletes there stay with that project's own sessions. cron/subagent/flush
