@@ -38,6 +38,20 @@ class CliTest(StoreCase):
         self.assertIn("not ready", out.getvalue())
         self.assertIn("fetch-model", out.getvalue())
 
+    def test_status_does_not_spawn_download_or_create_models_dir_when_auto_download_enabled(self):
+        out = io.StringIO()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("MEMORY_BUCKETS_")}
+        env.update(MEMORY_BUCKETS_MODEL_DIR=str(self.home / "nowhere"), HERMES_HOME=str(self.home))
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch("memory_buckets.static_model.BUNDLED_DIR", self.home / "none"), \
+                mock.patch("memory_buckets.static_model.fetch_in_background") as bg_fetch, \
+                contextlib.redirect_stdout(out):
+            code = run_hermes_cli("status")
+        self.assertEqual(code, 0, out.getvalue())
+        self.assertIn("not ready", out.getvalue())
+        bg_fetch.assert_not_called()
+        self.assertFalse((self.store.root / ".models").exists())
+
     def test_import_builtin_into_inbox(self):
         (self.home / "memories").mkdir()
         (self.home / "memories/USER.md").write_text("Name is Ivy\n§\nUses they/them\n§\n")
@@ -172,6 +186,20 @@ class CliTest(StoreCase):
         self.assertNotIn(".obsidian", out)
         self.assertNotIn("[[proj-1/profile]]", out)
 
+    def test_lint_rejects_slash_links_to_symlinks_invalid_paths_and_traversals(self):
+        (self.store.root / "outside.md").write_text(doc("outside", "Outside"))
+        self.put("global/Stray.md", doc("Stray", "Invalid path"))
+        self.put("global/topics/real.md", doc("real", "Real"))
+        os.symlink(self.store.memories / "global/topics/real.md", self.store.memories / "global/topics/sym.md")
+        self.put(
+            "global/topics/nix.md",
+            doc("nix", "Nix", "- see [[../outside]] and [[global/Stray]] and [[global/topics/sym]]\n"),
+        )
+        problems = cli.lint(self.store)
+        self.assertIn("global/topics/nix.md: broken link [[../outside]]", problems)
+        self.assertIn("global/topics/nix.md: broken link [[global/Stray]]", problems)
+        self.assertIn("global/topics/nix.md: broken link [[global/topics/sym]]", problems)
+
     def test_lint_only_sends_real_leftovers_to_migrate(self):
         # migrate ignores global/ and directories that aren't project ids.
         self.put("global/index.md", doc("index", "x"))
@@ -269,7 +297,59 @@ class CliTest(StoreCase):
         (self.store.root / "_pending").mkdir()
         self.assertIn("_pending/ left over from 0.1.0 (0 proposals)", self.run_cli("status")[1])
         code, out = self.run_cli("migrate")
-        self.assertEqual((code, out.splitlines()[0]), (0, "_pending/ removed: it was empty"))
+        self.assertEqual((code, out.splitlines()), (0, ["_pending/ removed: it was empty"]))
+        self.assertNotIn("originals kept", out)
+
+    def test_skill_guidance_depends_on_plugin_dir_or_external_dirs(self):
+        import sys
+        import tempfile
+        import types
+        from pathlib import Path
+
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported\n- a\n"))
+        with tempfile.TemporaryDirectory() as tmp:
+            skills_dir = Path(tmp) / "skills"
+            (skills_dir / "sort-imports").mkdir(parents=True)
+            (skills_dir / "sort-imports/SKILL.md").write_text("---\nname: sort-imports\n---\n# Sort\n")
+
+            sc_mod = types.SimpleNamespace(scan_skill_commands=lambda: {})
+            su_mod = types.SimpleNamespace(
+                get_external_skills_dirs=lambda: [],
+                get_skills_dir=lambda: Path(tmp) / "local-skills",
+            )
+            pm_mod = types.SimpleNamespace(find_provider_dir=lambda _name: None)
+
+            fakes = {
+                "agent.skill_commands": sc_mod,
+                "agent.skill_utils": su_mod,
+                "plugins.memory": pm_mod,
+            }
+            with mock.patch.dict(sys.modules, fakes), mock.patch.object(cli, "SKILLS_DIR", skills_dir):
+                diag_out = io.StringIO()
+                with contextlib.redirect_stdout(diag_out):
+                    cli._diagnose_skill(skills_dir, lambda ok, msg: None)
+                self.assertIn("hermes memory-buckets import-prompt", diag_out.getvalue())
+                self.assertIn("external_dirs", diag_out.getvalue())
+                self.assertNotIn("Asking the agent to sort your imported memory still works", diag_out.getvalue())
+
+                _, prompt_out = self.run_cli("import-prompt")
+                self.assertIn("hermes memory-buckets import-prompt", prompt_out)
+                self.assertIn("external_dirs", prompt_out)
+                self.assertNotIn("(it uses memory-buckets's sort-imports skill)", prompt_out)
+
+                pm_mod.find_provider_dir = lambda _name: Path(tmp) / "plugin-dir"
+                diag_out = io.StringIO()
+                with contextlib.redirect_stdout(diag_out):
+                    cli._diagnose_skill(skills_dir, lambda ok, msg: None)
+                self.assertIn("Asking the agent to sort your imported memory still works", diag_out.getvalue())
+
+                _, prompt_out = self.run_cli("import-prompt")
+                self.assertIn("(it uses memory-buckets's sort-imports skill)", prompt_out)
+
+                pm_mod.find_provider_dir = lambda _name: None
+                su_mod.get_external_skills_dirs = lambda: [skills_dir]
+                _, prompt_out = self.run_cli("import-prompt")
+                self.assertIn("(it uses memory-buckets's sort-imports skill)", prompt_out)
 
     def test_reindex_and_search(self):
         self.put("global/topics/nix.md", doc("nix", "Nix", "- flakes pin inputs\n"))

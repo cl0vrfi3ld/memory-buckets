@@ -38,6 +38,25 @@ class FrontmatterTest(unittest.TestCase):
         parsed, _ = fmm.parse(fmm.render(fm, ""))
         self.assertEqual(parsed.get("aliases"), ["a: b", "plain", "yes"])
 
+    def test_inline_list_handles_escaped_quotes_and_commas(self):
+        text = '---\naliases: ["a \\"b, c\\"", "d\\\\", "plain"]\n---\n'
+        fm, _ = fmm.parse(text)
+        self.assertEqual(fm.get("aliases"), ['a "b, c"', "d\\", "plain"])
+
+    def test_outer_quotes_not_stripped_when_inner_unescaped_quotes_exist(self):
+        text = (
+            "---\n"
+            "name: nix\n"
+            'description: "a" and "b"\n'
+            "single: 'x' and 'y'\n"
+            'escaped: "a \\"b\\" and \\\\c"\n'
+            "---\n"
+        )
+        fm, _ = fmm.parse(text)
+        self.assertEqual(fm.get("description"), '"a" and "b"')
+        self.assertEqual(fm.get("single"), "'x' and 'y'")
+        self.assertEqual(fm.get("escaped"), 'a "b" and \\c')
+
     def test_no_frontmatter(self):
         fm, body = fmm.parse("just text\n")
         self.assertEqual(fm.entries, [])

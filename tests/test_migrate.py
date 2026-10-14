@@ -237,6 +237,26 @@ class IndexMigrationTest(StoreCase):
         self.assertEqual(migrate.run(self.store, dry_run=True), [])
         self.assertEqual(self.store.read("global/inbox.md")["content"], text)
 
+    def test_headings_only_tidy_fills_missing_inbox_name(self):
+        self.put("global/inbox.md", f"---\ndescription: {inbox.DESCRIPTION}\n---\n## a\n- x\n\n## empty\n")
+        dry = migrate.run(self.store, dry_run=True)
+        self.assertEqual([(s.action, s.detail) for s in dry], [("tidy", "## empty")])
+        steps = migrate.run(self.store)
+        self.assertEqual([(s.action, s.detail) for s in steps], [("tidy", "## empty")])
+        text = self.store.read("global/inbox.md")["content"]
+        self.assertIn("name: inbox\n", text)
+        self.assertNotIn("## empty", text)
+
+    def test_dry_run_and_apply_agree_when_tidied_inbox_fails_validation(self):
+        oversized = doc("inbox", inbox.DESCRIPTION, "## a\n" + ("- " + "x" * 100 + "\n") * 500 + "\n## empty\n")
+        self.put("global/inbox.md", oversized)
+        dry = migrate.run(self.store, dry_run=True)
+        real = migrate.run(self.store)
+        self.assertEqual([(s.project, s.action, s.detail) for s in dry],
+                         [(s.project, s.action, s.detail) for s in real])
+        self.assertEqual(real[0].action, "skip")
+        self.assertIn("over the", real[0].detail)
+
     def test_a_0_1_0_inbox_gets_the_description_and_the_cleanup_in_one_run(self):
         old = doc("inbox", OLD_INBOX_DESCRIPTION,
                   "## imported USER.md\n"

@@ -197,10 +197,10 @@ def _inbox_change(text: str) -> _InboxChange:
     headings = inbox.empty_headings(body)
     if not desc_changed and not headings:
         return _InboxChange(text, shown, False, False, [])
+    if not fm.get("name"):
+        fm.set("name", "inbox")
     if desc_changed:
         fm.set("description", inbox.DESCRIPTION)
-        if not fm.get("name"):
-            fm.set("name", "inbox")
         _add_source(fm)
     stamp(fm)
     return _InboxChange(frontmatter.render(fm, inbox.without_empty_sections(body)),
@@ -230,11 +230,10 @@ def _inbox_plan(store: Store) -> Optional[Step]:
         return None  # lint reports it, and appends refuse it until it's fixed by hand
     if not change.changed:
         return None
-    if change.desc_changed:
-        try:
-            check_content(inbox.PATH, change.text)
-        except StoreError as err:
-            return Step(GLOBAL, "skip", err.message)
+    try:
+        check_content(inbox.PATH, change.text)
+    except StoreError as err:
+        return Step(GLOBAL, "skip", err.message)
     return _inbox_step(change)
 
 

@@ -83,6 +83,32 @@ class StoreTest(StoreCase):
         (self.store.memories / "Bad_Slug").mkdir()
         self.assertEqual(self.store.projects(), ["proj-1", "proj-2"])
 
+    def test_projects_ignores_symlinked_bucket_directories(self):
+        outside = self.home / "outside-proj"
+        outside.mkdir()
+        os.symlink(outside, self.store.memories / "sym-proj")
+        self.put("proj-1/profile.md", doc("profile", "P"))
+        self.assertEqual(self.store.projects(), ["proj-1"])
+
+    def test_delete_removes_empty_parent_and_project_directories(self):
+        v1 = self.store.write("proj-1/topics/nix.md", doc("nix", "Nix"), "new")["version"]
+        v2 = self.store.write("proj-1/topics/rust.md", doc("rust", "Rust"), "new")["version"]
+        v3 = self.store.write("proj-2/profile.md", doc("profile", "Proj 2"), "new")["version"]
+
+        self.store.delete("proj-1/topics/nix.md", v1)
+        self.assertTrue((self.store.memories / "proj-1/topics").is_dir())
+        self.assertEqual(self.store.projects(), ["proj-1", "proj-2"])
+
+        self.store.delete("proj-1/topics/rust.md", v2)
+        self.assertFalse((self.store.memories / "proj-1/topics").exists())
+        self.assertFalse((self.store.memories / "proj-1").exists())
+        self.assertEqual(self.store.projects(), ["proj-2"])
+
+        self.store.delete("proj-2/profile.md", v3)
+        self.assertFalse((self.store.memories / "proj-2").exists())
+        self.assertEqual(self.store.projects(), [])
+        self.assertTrue(self.store.memories.is_dir())
+
     def test_project_index_is_not_a_memory_path(self):
         # The project index is generated into the prompt; no file holds it.
         with self.assertRaises(st.StoreError) as caught:

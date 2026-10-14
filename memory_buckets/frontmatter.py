@@ -66,20 +66,38 @@ class Frontmatter:
         return [(e.key, e.value) for e in self.entries]
 
 
+def _has_unescaped_quote(inner: str, quote: str) -> bool:
+    if quote == "'":
+        return "'" in inner.replace("''", "")
+    escape = False
+    for ch in inner:
+        if escape:
+            escape = False
+        elif ch == "\\":
+            escape = True
+        elif ch == '"':
+            return True
+    return escape
+
+
 def _unquote(text: str) -> str:
-    if len(text) >= 2 and text[0] == text[-1] == '"':
+    if len(text) >= 2 and text[0] == text[-1] == '"' and not _has_unescaped_quote(text[1:-1], '"'):
         return re.sub(r'\\(["\\])', r"\1", text[1:-1])
-    if len(text) >= 2 and text[0] == text[-1] == "'":
+    if len(text) >= 2 and text[0] == text[-1] == "'" and not _has_unescaped_quote(text[1:-1], "'"):
         return text[1:-1].replace("''", "'")
     return text
 
 
 def _split_inline(inner: str) -> Optional[List[str]]:
-    items, buf, quote = [], "", None
+    items, buf, quote, escape = [], "", None, False
     for ch in inner:
         if quote:
             buf += ch
-            if ch == quote:
+            if escape:
+                escape = False
+            elif quote == '"' and ch == "\\":
+                escape = True
+            elif ch == quote:
                 quote = None
         elif ch in "\"'":
             quote = ch

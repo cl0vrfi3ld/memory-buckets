@@ -54,6 +54,7 @@ def _hermes_home() -> Path:
 
 def _open(args):
     cfg = config_mod.load()
+    cfg.embeddings.auto_download = False
     home = _hermes_home()
     root = Path(cfg.store_path or home / "memory-buckets").expanduser()
     embedder = make_embedder(cfg, root)
@@ -230,6 +231,23 @@ def cmd_diagnose(args) -> int:
     return 1 if problems else 0
 
 
+def _is_plugin_dir_install() -> bool:
+    try:
+        from plugins.memory import find_provider_dir
+        return find_provider_dir("memory-buckets") is not None
+    except ImportError:
+        return (_hermes_home() / "plugins" / "memory-buckets").is_dir()
+
+
+def _has_external_skill(skills_dir: Path = SKILLS_DIR) -> bool:
+    try:
+        from agent.skill_utils import get_external_skills_dirs
+        target = skills_dir.resolve()
+        return any(d.resolve() == target for d in get_external_skills_dirs())
+    except ImportError:
+        return False
+
+
 def _diagnose_skill(skills_dir: Path, say) -> None:
     """The sort-imports skill and its /sort-imports command (README: Importing built-in memory)."""
     skill_md = skills_dir / "sort-imports" / "SKILL.md"
@@ -247,9 +265,13 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
     external = [d.resolve() for d in get_external_skills_dirs()]
     if skills_dir in external:
         _out(f"ok    skills.external_dirs includes {skills_dir}")
-    else:
+    elif _is_plugin_dir_install():
         _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
         _out("      Asking the agent to sort your imported memory still works. To get /sort-imports, add to config.yaml:")
+        _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
+    else:
+        _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
+        _out("      To sort imported memory, paste the prompt from `hermes memory-buckets import-prompt`, or add to config.yaml:")
         _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
     entry = scan_skill_commands().get("/sort-imports")
     if entry is None:
@@ -330,7 +352,7 @@ def lint(store: Store) -> List[str]:
         for target in LINK_RE.findall(body):
             target = target.strip().removesuffix(".md")
             if "/" in target:
-                ok = (store.memories / f"{target}.md").exists()
+                ok = f"{target}.md" in texts
             else:
                 ok = target in stems[scope] or target in stems[GLOBAL]
             if not ok:
@@ -390,8 +412,9 @@ def cmd_migrate(args) -> int:
         return 0
     for step in steps:
         _out(("would: " if args.dry_run else "") + step.describe())
-    if not args.dry_run and any(s.action not in ("skip", "tidy") for s in steps):
-        _out(f"originals kept in {store.root / migrate.BACKUP_DIR}")
+    backup = store.root / migrate.BACKUP_DIR
+    if not args.dry_run and backup.exists() and any(s.action not in ("skip", "tidy", "remove") for s in steps):
+        _out(f"originals kept in {backup}")
     return 1 if any(s.action == "skip" for s in steps) else 0
 
 
@@ -504,8 +527,12 @@ def _print_import_prompt(store: Store) -> None:
     _out()
     _out("Next:")
     _out(f"  1. Back up the store first: cp -a {store.root} {store.root}.before-sort")
-    _out("  2. In a new chat, ask the agent to sort your imported memory")
-    _out("     (it uses memory-buckets's sort-imports skill), or paste the prompt below.")
+    if _is_plugin_dir_install() or _has_external_skill(SKILLS_DIR):
+        _out("  2. In a new chat, ask the agent to sort your imported memory")
+        _out("     (it uses memory-buckets's sort-imports skill), or paste the prompt below.")
+    else:
+        _out("  2. In a new chat, paste the prompt below (from `hermes memory-buckets import-prompt`),")
+        _out(f"     or add {SKILLS_DIR} to skills.external_dirs so the agent can use the sort-imports skill.")
     _out("  3. It files every fact itself, and removes each line from the inbox as it goes.")
     _out(f"  4. Review with: diff -ru {store.root}.before-sort/memories {store.memories}")
     _out("     (Print this again with: hermes memory-buckets import-prompt)")

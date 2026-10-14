@@ -190,7 +190,7 @@ class Store:
         """The project buckets that exist on disk, sorted."""
         if not self.memories.is_dir():
             return []
-        return sorted(p.name for p in self.memories.iterdir() if p.is_dir() and is_project_id(p.name))
+        return sorted(p.name for p in self.memories.iterdir() if p.is_dir() and not p.is_symlink() and is_project_id(p.name))
 
     def list(self, prefix: str = "") -> List[Dict[str, object]]:
         out = []
@@ -284,7 +284,15 @@ class Store:
                     current_content=current.decode("utf-8", errors="replace"),
                 )
             target.unlink()
-            _fsync_dir(target.parent)
+            surviving = target.parent
+            for parent in (target.parent, target.parent.parent):
+                if parent != self.memories and parent.is_dir():
+                    try:
+                        parent.rmdir()
+                        surviving = parent.parent
+                    except OSError:
+                        pass
+            _fsync_dir(surviving)
         return {"path": path}
 
 
