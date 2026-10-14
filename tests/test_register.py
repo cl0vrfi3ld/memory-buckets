@@ -2,12 +2,19 @@ import tempfile
 import unittest
 
 from . import PLUGIN_DIR, memory_buckets
-from memory_buckets import _compat, tools
+from memory_buckets import _compat, frontmatter, snapshot, tools
 
 
 class _Ctx:
-    def __init__(self):
+    def __init__(self, name=None, register_skill=None, register_command=None):
+        self.name = name
         self.providers = []
+        self.skills = []
+        self.commands = {}
+        if register_skill is not None:
+            self.register_skill = register_skill
+        if register_command is not None:
+            self.register_command = register_command
 
     def register_memory_provider(self, provider):
         self.providers.append(provider)
@@ -42,15 +49,57 @@ class RegisterTest(unittest.TestCase):
             provider.shutdown()
 
     def test_registers_the_skill_and_no_slash_commands(self):
+        skill_md = PLUGIN_DIR / "skills/sort-imports/SKILL.md"
+        fm, _ = frontmatter.parse(skill_md.read_text(encoding="utf-8"))
+        as_dict = getattr(fm, "as_dict", None)
+        expected_fm = as_dict() if callable(as_dict) else dict(fm.pairs())
+        expected_desc = str(fm.get("description") or "")
+        for namespace in (None, "memory-buckets"):
+            with self.subTest(namespace=namespace):
+                ctx = _Ctx()
+                if namespace is not None:
+                    ctx.name = namespace
+                ctx.skills, ctx.commands = [], {}
+                ctx.register_skill = (
+                    lambda name, path, description="", frontmatter=None, skills=ctx.skills:
+                    skills.append((name, path, description, frontmatter))
+                )
+                ctx.register_command = (
+                    lambda name, handler, description="", args_hint="", commands=ctx.commands:
+                    commands.__setitem__(name, handler)
+                )
+                memory_buckets.register(ctx)
+                [(name, path, description, fm_dict)] = ctx.skills
+                self.assertEqual(name, "sort-imports")
+                self.assertEqual(path, skill_md)
+                self.assertTrue(path.is_file())
+                self.assertEqual(description, expected_desc)
+                self.assertTrue(description)
+                self.assertEqual(fm_dict, expected_fm)
+                self.assertEqual(fm_dict["name"], "sort-imports")
+                self.assertEqual(fm_dict["description"], expected_desc)
+                self.assertEqual(snapshot.SORT_SKILL, "memory-buckets:sort-imports")
+                self.assertEqual(ctx.commands, {}, "the skill is the only slash command; the plugin registers none")
+
+    def test_register_skill_falls_back_to_two_arg_stub(self):
         ctx = _Ctx()
-        ctx.skills, ctx.commands = [], {}
+        ctx.skills = []
         ctx.register_skill = lambda name, path: ctx.skills.append((name, path))
-        ctx.register_command = lambda name, handler, description="", args_hint="": ctx.commands.__setitem__(name, handler)
         memory_buckets.register(ctx)
         [(name, path)] = ctx.skills
         self.assertEqual(name, "sort-imports")
         self.assertTrue(path.is_file())
-        self.assertEqual(ctx.commands, {}, "the skill is the only slash command; the plugin registers none")
+        self.assertEqual(snapshot.SORT_SKILL, "memory-buckets:sort-imports")
+
+    def test_entry_point_namespace_skips_register_skill(self):
+        self.addCleanup(setattr, snapshot, "SORT_SKILL", "memory-buckets:sort-imports")
+        ctx = _Ctx()
+        ctx.name = "memory_buckets"
+        ctx.skills = []
+        ctx.register_skill = lambda *args, **kwargs: ctx.skills.append((args, kwargs))
+        memory_buckets.register(ctx)
+        self.assertEqual(ctx.skills, [], "entry-point installs must not register a skill Hermes will prune")
+        self.assertIsNone(snapshot.SORT_SKILL)
 
     def test_hermes_discovery_heuristic_matches(self):
         # plugins/memory/__init__.py::_is_memory_provider_dir greps __init__.py.
