@@ -215,16 +215,40 @@ class ToolsTest(StoreCase):
         )
 
     def test_str_replace_deletes_whole_bullet_line_and_preserves_trailing_newline(self):
-        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "- Ivy\n- Ivy studies film\n"))
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "- Ivy\n- Ivy studies film\n- Ivy drinks tea\n"))
+        got = self.call("memory_str_replace", path="global/inbox.md", old="- Ivy studies film", new="")
+        self.assertTrue(got["ok"], got)
+        _, body = frontmatter.parse(self.content("global/inbox.md"))
+        self.assertEqual(body, "- Ivy\n- Ivy drinks tea\n")
         got = self.call("memory_str_replace", path="global/inbox.md", old="- Ivy", new="")
         self.assertTrue(got["ok"], got)
         _, body = frontmatter.parse(self.content("global/inbox.md"))
-        self.assertEqual(body, "- Ivy studies film\n")
+        self.assertEqual(body, "- Ivy drinks tea\n")
         got = self.call("memory_str_replace", path="global/inbox.md",
-                        old="- Ivy studies film\n", new="- Ivy studies film and photography")
+                        old="- Ivy drinks tea\n", new="- Ivy studies film and photography")
         self.assertTrue(got["ok"], got)
         text = self.content("global/inbox.md")
         self.assertTrue(text.endswith("- Ivy studies film and photography\n"), text)
+
+    def test_str_replace_suffix_deletion_keeps_newline_and_checks_ambiguity(self):
+        self.put(
+            "global/profile.md",
+            doc("profile", "Who the user is", "- Speaks English, French, and a bit of German\n- Taking GERM1100B\n"),
+        )
+        got = self.call("memory_str_replace", path="global/profile.md", old=", and a bit of German", new="")
+        self.assertTrue(got["ok"], got)
+        _, body = frontmatter.parse(self.content("global/profile.md"))
+        self.assertEqual(body, "- Speaks English, French\n- Taking GERM1100B\n")
+
+        self.put(
+            "global/topics/nix.md",
+            doc("nix", "Read for Nix", "- Uses flakes\n- Uses flakes for servers\n"),
+        )
+        ambiguous = self.call("memory_str_replace", path="global/topics/nix.md", old="flakes", new="")
+        self.assertFalse(ambiguous["ok"])
+        self.assertEqual(ambiguous["error"]["code"], "ambiguous_match")
+        _, nix_body = frontmatter.parse(self.content("global/topics/nix.md"))
+        self.assertEqual(nix_body, "- Uses flakes\n- Uses flakes for servers\n")
 
     def test_append(self):
         self.assertTrue(self.call("memory_append", path="global/topics/nix.md", lines=["a", "- b", "multi\nline"])["ok"])

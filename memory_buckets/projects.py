@@ -9,10 +9,13 @@ innermost project folder containing it). The project's slug names its bucket,
 
 The working directory, first found wins:
 
-1. the session's pinned cwd for this turn (``runtime_cwd.scoped_session_cwd``,
+1. the session's workspace override (``tools.terminal_tool.resolve_task_overrides``
+   with ``cwd_source == "session"``, updated mid-turn by ``desktop_project`` and
+   sidebar workspace moves, never by ``cd``),
+2. the session's pinned cwd for this turn (``runtime_cwd.scoped_session_cwd``,
    set by multi-session gateways),
-2. the ``cwd`` Hermes passed to ``initialize`` (the session's workspace),
-3. the agent's working directory (``runtime_cwd.resolve_agent_cwd``: the
+3. the ``cwd`` Hermes passed to ``initialize`` (the session's workspace),
+4. the agent's working directory (``runtime_cwd.resolve_agent_cwd``: the
    configured ``terminal.cwd``, else where Hermes was started).
 
 Outside Hermes (tests, a broken ``projects.db``) every lookup answers "no project",
@@ -62,12 +65,21 @@ def _to_project(proj) -> Optional[Project]:
                    folders=folders)
 
 
-def session_cwd(init_cwd: str = "") -> str:
+def session_cwd(init_cwd: str = "", session_id: str = "") -> str:
     try:
-        from tools.terminal_tool import get_session_cwd
-        live = str(get_session_cwd() or "").strip()
-        if live:
-            return live
+        from tools.terminal_tool import resolve_task_overrides
+        skey = ""
+        try:
+            from gateway.session_context import get_session_env
+            skey = str(get_session_env("HERMES_SESSION_KEY", "") or "").strip()
+        except Exception:
+            pass
+        for key in dict.fromkeys(k for k in (skey, session_id) if k):
+            overrides = resolve_task_overrides(key)
+            if isinstance(overrides, dict) and overrides.get("cwd_source") == "session":
+                workspace = str(overrides.get("cwd") or "").strip()
+                if workspace:
+                    return workspace
     except Exception:
         pass
     try:
@@ -102,9 +114,9 @@ def project_for_path(path: str) -> Optional[Project]:
     return _to_project(proj) if proj is not None else None
 
 
-def session_project(init_cwd: str = "") -> Optional[Project]:
+def session_project(init_cwd: str = "", session_id: str = "") -> Optional[Project]:
     """The Hermes project the current session is working in, or None."""
-    return project_for_path(session_cwd(init_cwd))
+    return project_for_path(session_cwd(init_cwd, session_id=session_id))
 
 
 def list_projects() -> Optional[List[Project]]:

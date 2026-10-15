@@ -96,6 +96,27 @@ class ProviderTest(StoreCase):
         with fake_hermes({"proj-1": "/src/proj-1"}, pinned="/src/proj-1"):
             self.assertEqual(p._scope().project, "proj-1")
 
+    def test_workspace_override_uses_session_id_and_prefetch_skips_project_list(self):
+        import sys
+        import types
+        term = types.SimpleNamespace(
+            get_session_cwd=lambda session_key=None: "/tmp/terminal-cd-ignored",
+            resolve_task_overrides=lambda task_id: (
+                {"cwd": "/src/proj-1", "cwd_source": "session"} if task_id == "s1" else {}
+            ),
+        )
+        tools_pkg = types.SimpleNamespace(__path__=[], terminal_tool=term)
+        with fake_hermes({"proj-1": "/src/proj-1"}):
+            with mock.patch.dict(sys.modules, {"tools": tools_pkg, "tools.terminal_tool": term}):
+                p = self.make(session="s1", cwd="/elsewhere")
+                self.assertEqual(p._scope("s1").project, "proj-1")
+                with mock.patch("memory_buckets.projects.list_projects",
+                                side_effect=projects.list_projects) as list_reads, \
+                        mock.patch.object(p.store, "projects", wraps=p.store.projects) as store_reads:
+                    p.prefetch("anything", session_id="s1")
+                self.assertEqual(list_reads.call_count, 0, "prefetch must not list all Hermes projects")
+                self.assertEqual(store_reads.call_count, 0, "prefetch must not scan store project dirs")
+
     def test_without_hermes_nothing_is_scoped(self):
         self.assertIsNone(self.make(cwd="/src/proj-1")._scope().project)
 
@@ -275,6 +296,27 @@ class ProviderTest(StoreCase):
         self.assertIn("- global/people/sam.md: Who Sam is", out)
         self.assertNotIn("global/profile.md", out)
         self.assertEqual(p.recall_status().count, 1)
+
+    def test_prefetch_embeds_backlog_on_turn_one_and_after_external_edit(self):
+        p = self.make(embedder=FakeEmbedder())
+        p.config.prefetch_min_similarity = 0.3
+        p.system_prompt_block()
+        # Turn 1: no prior queue_prefetch call.
+        out1 = p.prefetch("Sam likes climbing", session_id="s1")
+        self.assertIn("- global/people/sam.md: Who Sam is", out1)
+        # External file edit on disk without queue_prefetch or tool calls.
+        self.put("global/topics/gardening.md", doc("gardening", "Gardening notes", "- grows heirloom tomatoes\n"))
+        out2 = p.prefetch("grows heirloom tomatoes", session_id="s1")
+        self.assertIn("- global/topics/gardening.md: Gardening notes", out2)
+        # When _embed_running is held by a background worker, prefetch skips embedding the backlog.
+        self.put("global/topics/baking.md", doc("baking", "Baking notes", "- bakes sourdough bread\n"))
+        self.assertTrue(p._embed_running.acquire(blocking=False))
+        try:
+            self.assertEqual(p.prefetch("bakes sourdough bread", session_id="s1"), "")
+        finally:
+            p._embed_running.release()
+        self.assertIn("- global/topics/baking.md: Baking notes",
+                      p.prefetch("bakes sourdough bread", session_id="s1"))
 
     def test_prefetch_hint_cooldown_suppresses_and_rehints_after_five_turns(self):
         p = self.make(embedder=FakeEmbedder())

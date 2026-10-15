@@ -185,8 +185,8 @@ def cmd_diagnose(args) -> int:
         "not in plugins.disabled" if "memory-buckets" not in (disabled or []) else "memory-buckets is in plugins.disabled")
 
     where = find_provider_dir("memory-buckets")
-    ep = None if where else find_provider_entry_point("memory-buckets")
-    say(bool(where or ep), f"found at {where}" if where else (f"found by entry point {ep.value}" if ep else "not found in any plugin dir or entry point"))
+    ep = None if (where is not None and where.name == "memory-buckets") else find_provider_entry_point("memory-buckets")
+    say(bool(where or ep), f"found by entry point {ep.value}" if ep else (f"found at {where}" if where else "not found in any plugin dir or entry point"))
     instance = load_memory_provider("memory-buckets", register_skills=False) if (where or ep) else None
     say(instance is not None, "loads and registers" if instance is not None else "failed to load (see Hermes's log for the traceback)")
     if instance is not None:
@@ -234,7 +234,8 @@ def cmd_diagnose(args) -> int:
 def _is_plugin_dir_install() -> bool:
     try:
         from plugins.memory import find_provider_dir
-        return find_provider_dir("memory-buckets") is not None
+        d = find_provider_dir("memory-buckets")
+        return d is not None and d.name == "memory-buckets"
     except ImportError:
         return (_hermes_home() / "plugins" / "memory-buckets").is_dir()
 
@@ -349,14 +350,15 @@ def lint(store: Store) -> List[str]:
             problems.append(f"{scope}/: name '{name}' is used by {', '.join(paths)}; [[{name}]] is ambiguous")
     for rel, body in sorted(texts.items()):
         scope = rel.split("/", 1)[0]
-        for target in LINK_RE.findall(body):
-            target = target.strip().removesuffix(".md")
-            if "/" in target:
-                ok = f"{target}.md" in texts
-            else:
-                ok = target in stems[scope] or target in stems[GLOBAL]
-            if not ok:
-                problems.append(f"{rel}: broken link [[{target}]]")
+        for line in inbox._outside_fences(body):
+            for target in LINK_RE.findall(re.sub(r"`[^`\n]+`", "", line)):
+                target = target.strip().removesuffix(".md")
+                if "/" in target:
+                    ok = f"{target}.md" in texts
+                else:
+                    ok = target in stems[scope] or target in stems[GLOBAL]
+                if not ok:
+                    problems.append(f"{rel}: broken link [[{target}]]")
     return problems
 
 

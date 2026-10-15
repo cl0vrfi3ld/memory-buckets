@@ -313,8 +313,8 @@ def _str_replace(args, ctx: Context):
         if current is None:
             raise StoreError("not_found", f"{path} doesn't exist")
         fm, body = _existing(path, current)
-        if new == "" and "\n" not in old and body.count(f"{old}\n") == 1:
-            replaced = body.replace(f"{old}\n", "", 1)
+        if new == "" and "\n" not in old and f"\n{body}".count(f"\n{old}\n") == 1:
+            replaced = body[len(old) + 1:] if body.startswith(f"{old}\n") else body.replace(f"\n{old}\n", "\n", 1)
         else:
             count = body.count(old)
             if count == 0:

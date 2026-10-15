@@ -174,6 +174,18 @@ class IndexTest(StoreCase):
         self.assertEqual(hits[0]["heading"], "Steeping")
         self.assertEqual(hits[0]["snippet"], "- steep for three minutes")
 
+    def test_fts_ignores_chunk_zero_path_and_description_boilerplate(self):
+        self.put("global/topics/nix.md", doc("nix", "Read when working on Nix and NixOS", "- flakes pin inputs\n"))
+        self.put("global/topics/tea.md", doc("tea", "Read when helping Ivy with oolong", "- steep leaves\n"))
+        index = self.make()
+        for query in ("working on kubernetes", "read about terraform", "global topics"):
+            with self.subTest(query=query):
+                self.assertEqual(index.search(query, ALL)["results"], [])
+        proj_hits = list(index.search("proj-1", ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual(proj_hits[0]["path"], "proj-1/topics/deploy.md")
+        tea_hits = list(index.search("oolong", ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual(tea_hits[0]["path"], "global/topics/tea.md")
+
 
 class EmbeddingIndexTest(IndexTest):
     def test_hybrid_search_and_backlog(self):
@@ -193,6 +205,28 @@ class EmbeddingIndexTest(IndexTest):
         excluded = index.hints("Sam likes climbing", ALL, exclude={"global/people/sam.md"}, min_similarity=0.3)
         self.assertNotIn("global/people/sam.md", [h[0] for h in excluded])
         self.assertEqual(index.hints("quantum chromodynamics lecture", ALL, min_similarity=0.9), [])
+
+    def test_hints_embeds_cold_and_reconciled_backlog(self):
+        index = self.make(FakeEmbedder())
+        hints = index.hints("Sam likes climbing", ALL, min_similarity=0.3)
+        self.assertEqual(hints[0][0], "global/people/sam.md")
+        target = self.put("global/people/sam.md", doc("sam", "Who Sam is", "- Sam practices archery\n"))
+        os.utime(target, ns=(time.time_ns(), time.time_ns() + 10**9))
+        updated = index.hints("Sam practices archery", ALL, min_similarity=0.3)
+        self.assertEqual(updated[0][0], "global/people/sam.md")
+
+    def test_file_level_rrf_fuses_identity_fts_with_body_vector_hit(self):
+        for i in range(3):
+            self.put(
+                f"global/topics/filler-{i}.md",
+                doc(f"filler-{i}", "Unrelated notes", f"- kestrel alpha beta gamma delta epsilon zeta{i}\n"),
+            )
+        self.put("global/topics/target.md", doc("target", "Read for kestrel", "# Birds\n- kite buzzard sky\n"))
+        index = self.make(FakeEmbedder())
+        hits = list(index.search("kestrel raptor avian", ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual(hits[0]["path"], "global/topics/target.md")
+        self.assertEqual(hits[0]["heading"], "Birds")
+        self.assertEqual(hits[0]["snippet"], "- kite buzzard sky")
 
     def test_model_unavailable_falls_back_to_fts(self):
         embedder = FakeEmbedder()

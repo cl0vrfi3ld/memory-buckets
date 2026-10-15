@@ -183,13 +183,21 @@ class MemoryBucketsProvider(MemoryProvider):
     def _scope(self, session_id: str = "") -> scopes.Scope:
         return self._scope_and_project(session_id)[0]
 
+    def _read_scope(self, session_id: str = "") -> scopes.Scope:
+        """The session's read scope (project and read_only), resolved without
+        listing every Hermes project or scanning on-disk project buckets."""
+        sid = session_id or self._current
+        state = self._state(sid)
+        project = projects.session_project(state.cwd, session_id=sid)
+        return scopes.resolve(self.config, project.bucket if project else None, state.agent_context)
+
     def _scope_and_project(self, session_id: str = "") \
             -> "tuple[scopes.Scope, Optional[projects.Project], Optional[List[str]]]":
         """The session's scope, its Hermes project (or None), and the buckets of
-        every Hermes project (None outside Hermes) — from one project-list read."""
+        every Hermes project (None outside Hermes), from one project-list read."""
         sid = session_id or self._current
         state = self._state(sid)
-        project = projects.session_project(state.cwd)
+        project = projects.session_project(state.cwd, session_id=sid)
         hermes_buckets = self._hermes_buckets()
         scope = scopes.resolve(self.config, project.bucket if project else None, state.agent_context,
                                buckets=scopes.known_buckets(
@@ -247,10 +255,10 @@ class MemoryBucketsProvider(MemoryProvider):
             return ""
         sid = session_id or self._current
         state = self._state(sid)
-        scope = self._scope(sid)
+        scope = self._read_scope(sid)
         parts = []
         hints = []
-        if query and query.strip() and self.index is not None and self.index.embedder is not None:
+        if query and query.strip() and self.index is not None and self.index.embedder is not None and self.config is not None:
             state.prefetch_turns += 1
             turn = state.prefetch_turns
             try:
@@ -265,9 +273,15 @@ class MemoryBucketsProvider(MemoryProvider):
                     if turn - seen_turn < HINT_COOLDOWN_TURNS
                 }
                 exclude = base_exclude | cooldown_exclude
-                hints = self.index.hints(query, scope.reads_by_default, exclude=exclude,
-                                         min_similarity=min_similarity(self.config, self.index.embedder),
-                                         max_hints=self.config.prefetch_max_hints)
+                acquired = self._embed_running.acquire(blocking=False)
+                try:
+                    hints = self.index.hints(query, scope.reads_by_default, exclude=exclude,
+                                             min_similarity=min_similarity(self.config, self.index.embedder),
+                                             max_hints=self.config.prefetch_max_hints,
+                                             embed_backlog=acquired)
+                finally:
+                    if acquired:
+                        self._embed_running.release()
                 for path, _, _ in hints:
                     state.hint_seen[path] = turn
             except Exception:

@@ -201,6 +201,19 @@ class CliTest(StoreCase):
         self.assertIn("global/topics/nix.md: broken link [[global/Stray]]", problems)
         self.assertIn("global/topics/nix.md: broken link [[global/topics/sym]]", problems)
 
+    def test_lint_ignores_wikilinks_in_code_fences_and_inline_code(self):
+        body = (
+            "```bash\n"
+            "if [[ -f /etc/NIXOS ]]; then echo nix; fi\n"
+            "```\n"
+            "~~~\n"
+            "if [[ -f /etc/NIXOS ]]; then echo tilde; fi\n"
+            "~~~\n"
+            "- inline `[[inline]]` and broken [[nope]]\n"
+        )
+        self.put("global/topics/nix.md", doc("nix", "Nix", body))
+        self.assertEqual(cli.lint(self.store), ["global/topics/nix.md: broken link [[nope]]"])
+
     def test_lint_only_sends_real_leftovers_to_migrate(self):
         # migrate ignores global/ and directories that aren't project ids.
         self.put("global/index.md", doc("index", "x"))
@@ -318,14 +331,27 @@ class CliTest(StoreCase):
                 get_external_skills_dirs=lambda: [],
                 get_skills_dir=lambda: Path(tmp) / "local-skills",
             )
-            pm_mod = types.SimpleNamespace(find_provider_dir=lambda _name: None)
+            pm_mod = types.SimpleNamespace(
+                find_provider_dir=lambda _name: Path(tmp) / "site-packages" / "memory_buckets",
+                find_provider_entry_point=lambda _name: types.SimpleNamespace(value="memory_buckets:register"),
+                load_memory_provider=lambda *a, **k: None,
+            )
+            hc_mod = types.SimpleNamespace(
+                load_config_readonly=lambda: {},
+                cfg_get=lambda _cfg, *keys: "memory-buckets" if keys == ("memory", "provider") else None,
+            )
+            mm_mod = types.SimpleNamespace(memory_provider_tools_enabled=lambda *a, **k: True)
 
             fakes = {
+                "agent.memory_manager": mm_mod,
                 "agent.skill_commands": sc_mod,
                 "agent.skill_utils": su_mod,
+                "hermes_cli.config": hc_mod,
                 "plugins.memory": pm_mod,
             }
             with mock.patch.dict(sys.modules, fakes), mock.patch.object(cli, "SKILLS_DIR", skills_dir):
+                self.assertFalse(cli._is_plugin_dir_install())
+
                 diag_out = io.StringIO()
                 with contextlib.redirect_stdout(diag_out):
                     cli._diagnose_skill(skills_dir, lambda ok, msg: None)
@@ -333,12 +359,17 @@ class CliTest(StoreCase):
                 self.assertIn("external_dirs", diag_out.getvalue())
                 self.assertNotIn("Asking the agent to sort your imported memory still works", diag_out.getvalue())
 
+                _, full_diag_out = self.run_cli("diagnose")
+                self.assertIn("found by entry point memory_buckets:register", full_diag_out)
+                self.assertNotIn("found at ", full_diag_out)
+
                 _, prompt_out = self.run_cli("import-prompt")
                 self.assertIn("hermes memory-buckets import-prompt", prompt_out)
                 self.assertIn("external_dirs", prompt_out)
                 self.assertNotIn("(it uses memory-buckets's sort-imports skill)", prompt_out)
 
-                pm_mod.find_provider_dir = lambda _name: Path(tmp) / "plugin-dir"
+                pm_mod.find_provider_dir = lambda _name: Path(tmp) / "plugins" / "memory-buckets"
+                self.assertTrue(cli._is_plugin_dir_install())
                 diag_out = io.StringIO()
                 with contextlib.redirect_stdout(diag_out):
                     cli._diagnose_skill(skills_dir, lambda ok, msg: None)
@@ -347,7 +378,7 @@ class CliTest(StoreCase):
                 _, prompt_out = self.run_cli("import-prompt")
                 self.assertIn("(it uses memory-buckets's sort-imports skill)", prompt_out)
 
-                pm_mod.find_provider_dir = lambda _name: None
+                pm_mod.find_provider_dir = lambda _name: Path(tmp) / "site-packages" / "memory_buckets"
                 su_mod.get_external_skills_dirs = lambda: [skills_dir]
                 _, prompt_out = self.run_cli("import-prompt")
                 self.assertIn("(it uses memory-buckets's sort-imports skill)", prompt_out)

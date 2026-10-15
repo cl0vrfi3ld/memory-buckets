@@ -25,23 +25,34 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from . import frontmatter
 from .embeddings import EmbeddingError, StaticEmbedder, dot
-from .store import Store, version
+from .store import GLOBAL, Store, scope_of, stem, version
 
 logger = logging.getLogger("memory_buckets")
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 CHUNK_CHARS = 700
 RRF_K = 60
 CANDIDATES = 200
 SEARCH_MIN_SIMILARITY = 0.20
 
 _STOPWORDS = frozenset({
-    "a", "an", "and", "are", "as", "at", "be", "by", "did", "do", "does",
-    "for", "from", "had", "has", "have", "how", "i", "in", "is", "it", "its",
-    "me", "my", "of", "on", "or", "our", "that", "the", "their", "them",
-    "they", "this", "to", "was", "we", "what", "when", "where", "which",
-    "who", "whom", "why", "will", "with", "you", "your",
+    "a", "about", "also", "an", "and", "are", "as", "at", "be", "by", "can",
+    "could", "did", "do", "does", "for", "from", "get", "got", "had", "has",
+    "have", "help", "helping", "how", "i", "in", "into", "is", "it", "its",
+    "just", "know", "like", "make", "may", "me", "might", "more", "most",
+    "much", "must", "my", "need", "now", "of", "on", "only", "or", "other",
+    "our", "out", "over", "read", "reading", "should", "some", "such", "tell",
+    "than", "that", "the", "their", "them", "then", "there", "these", "they",
+    "thin", "think", "this", "those", "through", "to", "too", "under", "up",
+    "use", "using", "very", "want", "was", "we", "what", "when", "where",
+    "which", "who", "whom", "why", "will", "with", "work", "working", "would",
+    "you", "your",
 })
+
+_DESC_PREFIX_RE = re.compile(
+    r"^(?:read\s+(?:when\s+(?:working\s+on|helping\s+(?:\S+\s+)?with|touching)|for)\s+)",
+    re.IGNORECASE,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -143,6 +154,17 @@ def chunk(path: str, description: str, aliases: List[str], body: str, limit: int
     if buf:
         chunks.append((heading or "", buf))
     return chunks
+
+
+def _fts_identity(rel: str, description: str, aliases: List[str]) -> str:
+    bucket = scope_of(rel)
+    clean_desc = _DESC_PREFIX_RE.sub("", description).strip()
+    return "\n".join(filter(None, [
+        bucket if bucket != GLOBAL else "",
+        stem(rel),
+        clean_desc,
+        ", ".join(aliases),
+    ]))
 
 
 # -- the index -----------------------------------------------------------------
@@ -302,13 +324,17 @@ class Index:
             fm, body = frontmatter.parse(text)
         except frontmatter.FrontmatterError:
             fm, body = frontmatter.Frontmatter(), text
-        description = fm.get("description") if isinstance(fm.get("description"), str) else ""
-        aliases = [a for a in (fm.get("aliases") or []) if isinstance(a, str)] if isinstance(fm.get("aliases"), list) else []
+        raw_desc = fm.get("description")
+        description = raw_desc if isinstance(raw_desc, str) else ""
+        raw_aliases = fm.get("aliases")
+        aliases = [a for a in raw_aliases if isinstance(a, str)] if isinstance(raw_aliases, list) else []
         self._drop(con, rel)
         for ord_, (heading, chunk_text) in enumerate(chunk(rel, description, aliases, body)):
             cur = con.execute("INSERT INTO chunks(path, ord, heading, text, vec) VALUES(?, ?, ?, ?, NULL)",
                               (rel, ord_, heading, chunk_text))
-            con.execute("INSERT INTO chunks_fts(rowid, text, heading) VALUES(?, ?, ?)", (cur.lastrowid, chunk_text, heading))
+            fts_text = _fts_identity(rel, description, aliases) if ord_ == 0 else chunk_text
+            con.execute("INSERT INTO chunks_fts(rowid, text, heading) VALUES(?, ?, ?)",
+                        (cur.lastrowid, fts_text, heading))
         con.execute("INSERT INTO files VALUES(?, ?, ?, ?, ?, ?)",
                     (rel, version(data), mtime, size, description, ", ".join(aliases)))
 
@@ -426,16 +452,16 @@ class Index:
             if pending:
                 note = f"{pending} chunk(s) not embedded yet; those match by keyword only"
 
-        scores: Dict[int, float] = defaultdict(float)
+        chunk_scores: Dict[int, float] = defaultdict(float)
         for rank, cid in enumerate(fts_ids):
-            scores[cid] += 1.0 / (RRF_K + rank + 1)
+            chunk_scores[cid] += 1.0 / (RRF_K + rank + 1)
         for rank, (cid, _, _) in enumerate(vec_hits):
-            scores[cid] += 1.0 / (RRF_K + rank + 1)
-        if not scores:
+            chunk_scores[cid] += 1.0 / (RRF_K + rank + 1)
+        if not chunk_scores:
             return {"mode": mode, "note": note, "results": []}
 
         con = self._conn()
-        ids = list(scores)
+        ids = list(chunk_scores)
         info = {}
         for start in range(0, len(ids), 500):
             part = ids[start:start + 500]
@@ -443,18 +469,36 @@ class Index:
             for cid, path, ord_, heading, text in con.execute(
                     f"SELECT id, path, ord, heading, text FROM chunks WHERE id IN ({marks})", part):
                 info[cid] = (path, ord_, heading, text)
-        best_for_path: Dict[str, Tuple[float, int]] = {}
+        best_fts_rrf: Dict[str, float] = defaultdict(float)
+        for rank, cid in enumerate(fts_ids):
+            if cid in info:
+                path = info[cid][0]
+                rrf = 1.0 / (RRF_K + rank + 1)
+                if rrf > best_fts_rrf[path]:
+                    best_fts_rrf[path] = rrf
+        best_vec_rrf: Dict[str, float] = defaultdict(float)
+        for rank, (cid, _, _) in enumerate(vec_hits):
+            if cid in info:
+                path = info[cid][0]
+                rrf = 1.0 / (RRF_K + rank + 1)
+                if rrf > best_vec_rrf[path]:
+                    best_vec_rrf[path] = rrf
+        best_chunk_for_path: Dict[str, Tuple[float, int]] = {}
         best_body_for_path: Dict[str, Tuple[float, int]] = {}
-        for cid, score in scores.items():
+        for cid, cscore in chunk_scores.items():
             if cid not in info:
                 continue
             path, ord_, _, _ = info[cid]
-            if project and path.startswith(f"{project}/"):
-                score *= boost
-            if path not in best_for_path or score > best_for_path[path][0]:
-                best_for_path[path] = (score, cid)
-            if ord_ > 0 and (path not in best_body_for_path or score > best_body_for_path[path][0]):
-                best_body_for_path[path] = (score, cid)
+            if path not in best_chunk_for_path or cscore > best_chunk_for_path[path][0]:
+                best_chunk_for_path[path] = (cscore, cid)
+            if ord_ > 0 and (path not in best_body_for_path or cscore > best_body_for_path[path][0]):
+                best_body_for_path[path] = (cscore, cid)
+        best_for_path: Dict[str, Tuple[float, int]] = {}
+        for path, (_, cid) in best_chunk_for_path.items():
+            file_score = (best_fts_rrf[path] + best_vec_rrf[path]) * (
+                boost if project and path.startswith(f"{project}/") else 1.0
+            )
+            best_for_path[path] = (file_score, cid)
         ranked = sorted(best_for_path.items(), key=lambda kv: kv[1][0], reverse=True)[:limit]
         descriptions = self.descriptions([p for p, _ in ranked])
         results = []
@@ -482,12 +526,16 @@ class Index:
         return {"mode": mode, "note": note, "results": results}
 
     def hints(self, query: str, read_ok: Callable[[str], bool], *, exclude: Optional[set] = None,
-              min_similarity: float = 0.45, max_hints: int = 4) -> List[Tuple[str, str, float]]:
+              min_similarity: float = 0.45, max_hints: int = 4,
+              embed_backlog: bool = True) -> List[Tuple[str, str, float]]:
         """(path, description, similarity) for files worth reading, by vectors
-        only. Empty when embeddings are off or down. Never embeds backlog."""
+        only. Empty when embeddings are off or down. Embeds one batch of
+        backlog by default."""
         if self.embedder is None or self.embedder.down_reason():
             return []
         self.reconcile()
+        if embed_backlog:
+            self.embed_backlog(max_batches=1)
         qvec, _ = self._query_vector(query)
         if qvec is None:
             return []
