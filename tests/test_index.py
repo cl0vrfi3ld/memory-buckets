@@ -72,7 +72,7 @@ class ChunkTest(unittest.TestCase):
 class IndexTest(StoreCase):
     def setUp(self):
         super().setUp()
-        self.put("global/topics/nix.md", doc("nix", "Read for Nix and NixOS", "- flakes pin inputs\n- nixpkgs maintainer\n"))
+        self.put("global/topics/nix.md", doc("nix", "Read for Nix and NixOS", "- flakes pin inputs\n- deploys with colmena\n"))
         self.put("global/people/sam.md", doc("sam", "Who Sam is", "- Sam likes climbing\n"))
         self.put("proj-1/topics/deploy.md", doc("deploy", "How proj-1 deploys", "- deploys with colmena\n"))
 
@@ -176,7 +176,7 @@ class IndexTest(StoreCase):
 
     def test_fts_ignores_chunk_zero_path_and_description_boilerplate(self):
         self.put("global/topics/nix.md", doc("nix", "Read when working on Nix and NixOS", "- flakes pin inputs\n"))
-        self.put("global/topics/tea.md", doc("tea", "Read when helping Ivy with oolong", "- steep leaves\n"))
+        self.put("global/topics/tea.md", doc("tea", "Read when helping Sam with oolong", "- steep leaves\n"))
         index = self.make()
         for query in ("working on kubernetes", "read about terraform", "global topics"):
             with self.subTest(query=query):
@@ -274,6 +274,111 @@ class EmbeddingIndexTest(IndexTest):
         hits = list(index.search("climbing", ALL)["results"])  # type: ignore[arg-type]
         self.assertEqual([h["path"] for h in hits], ["global/people/sam.md"])
 
+
+
+class CleanEmbeddingTest(StoreCase):
+    """embed_backlog feeds the model a clean identity for chunk 0 and a subject
+    stem for headingless body chunks, instead of the raw path and boilerplate."""
+
+    def setUp(self):
+        super().setUp()
+        self.put("global/topics/nix.md",
+                 doc("nix", "Read when working on Nix and NixOS", "- flakes pin inputs\n- deploys with colmena\n"))
+        self.put("global/topics/tailscale.md", doc("tailscale", "Mesh VPN", "- tailnet lock is on\n"))
+        self.put("global/topics/infra.md", doc("infra", "Server notes", "# Infrastructure\n- mounted at /mnt/box\n"))
+        self.put("global/profile.md", doc("profile", "Who the user is", "- Sam\n"))
+
+    def embedded(self):
+        embedder = FakeEmbedder()
+        index = idx.Index(self.store, embedder)
+        self.addCleanup(index.close)
+        index.reconcile()
+        embedder.calls.clear()
+        index.embed_backlog(max_batches=None)
+        return [text for batch in embedder.calls for text in batch]
+
+    def test_chunk_zero_embeds_the_clean_identity_not_the_raw_path(self):
+        texts = self.embedded()
+        self.assertIn("nix\nNix and NixOS", texts)
+        self.assertTrue(all("global/topics/" not in t for t in texts))
+        self.assertTrue(all(".md" not in t for t in texts))
+        self.assertTrue(all("Read when working on" not in t for t in texts))
+
+    def test_headingless_body_chunks_carry_the_stem_but_generic_stems_do_not(self):
+        texts = self.embedded()
+        self.assertIn("tailscale\n- tailnet lock is on", texts)
+        self.assertIn("- Sam", texts)
+        self.assertNotIn("profile\n- Sam", texts)
+
+    def test_headed_body_chunk_keeps_its_heading_and_the_identity_stays_clean(self):
+        texts = self.embedded()
+        self.assertIn("Infrastructure\n- mounted at /mnt/box", texts)
+        self.assertIn("infra\nServer notes", texts)
+
+
+class FileRankAndCoverageTest(StoreCase):
+    """search() ranks files, not raw chunks, and keeps FTS score proportional to
+    how much of the query a file actually covers."""
+
+    def make(self, embedder=None):
+        index = idx.Index(self.store, embedder)
+        self.addCleanup(index.close)
+        return index
+
+    def test_file_rank_deduplication_uses_the_file_rank_not_the_chunk_rank(self):
+        # spread.md splits into five chunks that all outrank rival.md, so a raw
+        # chunk rank would leave rival.md at rank 5 (1 / (RRF_K + 6)); the file
+        # rank must stay 1 (1 / (RRF_K + 2)).
+        self.put("global/topics/spread.md", doc("spread", "Spreading notes",
+                 "".join(f"## alpha {i}\n- point {i}\n\n" for i in range(5))))
+        self.put("global/topics/rival.md", doc("rival", "Rival notes", "- alpha note\n"))
+        results = list(self.make().search("alpha", ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual([r["path"] for r in results],
+                         ["global/topics/spread.md", "global/topics/rival.md"])
+        self.assertEqual(results[1]["score"], round(1.0 / (idx.RRF_K + 2), 5))
+
+    def test_low_coverage_multichunk_file_does_not_outrank_full_coverage_file(self):
+        self.put("global/topics/spread.md", doc("spread", "Spreading notes",
+                 "".join(f"## Section {i}\n- alpha alpha alpha point {i}\n\n" for i in range(5))))
+        self.put("global/topics/full.md", doc("full", "Full coverage notes", "- alpha beta gamma note\n"))
+        for i in range(20):
+            self.put(f"global/topics/filler-{i}.md", doc(f"filler-{i}", "Filler", "- beta gamma stuff\n"))
+        paths = [r["path"] for r in self.make().search("alpha beta gamma", ALL, limit=40)["results"]]  # type: ignore[arg-type]
+        self.assertIn("global/topics/full.md", paths)
+        self.assertIn("global/topics/spread.md", paths)
+        self.assertLess(paths.index("global/topics/full.md"), paths.index("global/topics/spread.md"))
+
+
+class HintsProjectAndRescueTest(StoreCase):
+    """hints() boosts the session project and rescues files named exactly by a
+    stem or alias even when their embedding similarity is weak."""
+
+    def make(self):
+        index = idx.Index(self.store, FakeEmbedder())
+        self.addCleanup(index.close)
+        index.reconcile()
+        index.embed_backlog(max_batches=None)
+        return index
+
+    def test_alias_named_in_a_noisy_query_rescues_the_hint(self):
+        self.put("global/topics/storage.md", doc("storage", "Backup conventions",
+                 "- restic runs nightly\n", extra="aliases:\n  - hetznerbox\n"))
+        hints = self.make().hints("can you check the hetznerbox thing", ALL, min_similarity=0.45)
+        self.assertIn("global/topics/storage.md", [h[0] for h in hints])
+
+    def test_hyphenated_stem_named_in_a_noisy_query_rescues_the_hint(self):
+        self.put("global/topics/hetzner-box.md", doc("hetzner-box", "Storage server", "- restic runs nightly\n"))
+        hints = self.make().hints("please look at the hetzner box setup", ALL, min_similarity=0.45)
+        self.assertEqual(hints[0][0], "global/topics/hetzner-box.md")
+
+    def test_project_boost_ranks_the_project_file_over_an_equal_similarity_global(self):
+        body = "- identical duplicated line entry\n"
+        self.put("global/topics/shared.md", doc("shared", "identical duplicated line", body))
+        self.put("proj-1/topics/shared.md", doc("shared", "identical duplicated line", body))
+        hints = self.make().hints("identical duplicated line", ALL,
+                                  min_similarity=0.1, project="proj-1", boost=1.3)
+        self.assertEqual([h[0] for h in hints][:2],
+                         ["proj-1/topics/shared.md", "global/topics/shared.md"])
 
 
 if __name__ == "__main__":

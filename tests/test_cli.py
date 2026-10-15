@@ -54,7 +54,7 @@ class CliTest(StoreCase):
 
     def test_import_builtin_into_inbox(self):
         (self.home / "memories").mkdir()
-        (self.home / "memories/USER.md").write_text("Name is Ivy\n§\nUses they/them\n§\n")
+        (self.home / "memories/USER.md").write_text("Name is Sam\n§\nUses they/them\n§\n")
         (self.home / "memories/MEMORY.md").write_text("Host runs NixOS\nwith flakes")
         code, out = self.run_cli("import", "--dry-run")
         self.assertIn("would import 2 entries", out)
@@ -63,7 +63,7 @@ class CliTest(StoreCase):
         self.assertEqual(code, 0, out)
         text = self.store.read("global/inbox.md")["content"]
         self.assertIn(f"description: {inbox.DESCRIPTION}\n", text)
-        self.assertIn("- Name is Ivy\n- Uses they/them\n", text)
+        self.assertIn("- Name is Sam\n- Uses they/them\n", text)
         self.assertIn("- Host runs NixOS with flakes\n", text)
         self.assertIn("  - cli:import", text)
         self.assertEqual(text.count("## imported"), 2)
@@ -76,14 +76,14 @@ class CliTest(StoreCase):
 
     def test_import_recreates_a_deleted_inbox(self):
         (self.home / "memories").mkdir()
-        (self.home / "memories/USER.md").write_text("Name is Ivy\n")
+        (self.home / "memories/USER.md").write_text("Name is Sam\n")
         self.put("global/inbox.md", doc("inbox", "Old description", "## imported\n- a\n"))
         (self.store.memories / "global/inbox.md").unlink()
         code, out = self.run_cli("import")
         self.assertEqual(code, 0, out)
         text = self.store.read("global/inbox.md")["content"]
         self.assertIn(f"description: {inbox.DESCRIPTION}\n", text)
-        self.assertIn("- Name is Ivy\n", text)
+        self.assertIn("- Name is Sam\n", text)
         self.assertNotIn("- a\n", text)
 
     def test_import_prompt_needs_an_inbox(self):

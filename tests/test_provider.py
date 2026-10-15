@@ -11,7 +11,7 @@ from memory_buckets import provider as prov
 class ProviderTest(StoreCase):
     def setUp(self):
         super().setUp()
-        self.put("global/profile.md", doc("profile", "Who the user is", "- Ivy\n"))
+        self.put("global/profile.md", doc("profile", "Who the user is", "- Alex\n"))
         self.put("global/people/sam.md", doc("sam", "Who Sam is", "- Sam likes climbing\n"))
         # Embeddings off unless a test opts in (a bundled model would otherwise switch them on).
         self.env = {"MEMORY_BUCKETS_EMBEDDINGS_BACKEND": "off"}
@@ -38,7 +38,7 @@ class ProviderTest(StoreCase):
     def test_snapshot_is_frozen_per_session(self):
         p = self.make()
         first = p.system_prompt_block()
-        self.assertIn("- Ivy", first)
+        self.assertIn("- Alex", first)
         self.call(p, "memory_write", path="global/topics/nix.md", description="Nix", body="- x", if_version="new")
         self.assertEqual(p.system_prompt_block(), first, "same session: frozen for prefix caching")
         p.on_session_switch("s2", parent_session_id="s1", reset=True)
@@ -84,7 +84,7 @@ class ProviderTest(StoreCase):
             self.assertEqual(p._current, "s3")
 
     def test_outside_every_project_is_unscoped(self):
-        with fake_hermes({"proj-1": "/src/proj-1"}, agent_cwd="/home/ivy"):
+        with fake_hermes({"proj-1": "/src/proj-1"}, agent_cwd="/home/user"):
             self.assertIsNone(self.make()._scope().project)
             self.assertIsNone(self.make(cwd="/src/proj-10")._scope().project)
 
@@ -162,16 +162,16 @@ class ProviderTest(StoreCase):
 
     def cross_write(self, p, line="a"):
         """An unscoped session adds to another project's bucket: the one write that shows a status line."""
-        if not (self.store.memories / "clogpt/topics/x.md").exists():
-            self.put("clogpt/topics/x.md", doc("x", "X", "- first\n"))
-        return self.call(p, "memory_append", path="clogpt/topics/x.md", lines=[line])
+        if not (self.store.memories / "addon-2/topics/x.md").exists():
+            self.put("addon-2/topics/x.md", doc("x", "X", "- first\n"))
+        return self.call(p, "memory_append", path="addon-2/topics/x.md", lines=[line])
 
     def test_status_callback_shows_cross_project_writes(self):
         shown = []
         p = self.make(platform="cli", status_callback=shown.append)
         result = self.cross_write(p)
         self.assertTrue(result["ok"], result)
-        self.assertEqual(shown, ["📝 Saved to clogpt/topics/x.md"])
+        self.assertEqual(shown, ["📝 Saved to addon-2/topics/x.md"])
         self.assertNotIn("next", result)
         p.on_session_switch("s2", reset=True)  # /new keeps the channel
         self.cross_write(p, "another")
@@ -202,7 +202,7 @@ class ProviderTest(StoreCase):
         p = self.make(platform="tui")
         with self.fake_tui(p, lambda kind, text=None: shown.append((kind, text))):
             result = self.cross_write(p)
-        self.assertEqual(shown, [("lifecycle", "📝 Saved to clogpt/topics/x.md")])
+        self.assertEqual(shown, [("lifecycle", "📝 Saved to addon-2/topics/x.md")])
         self.assertNotIn("next", result)
 
     def test_tui_without_a_status_line_stays_quiet(self):
@@ -248,7 +248,7 @@ class ProviderTest(StoreCase):
                 self.assertNotIn("next", result)
                 setattr(agent, flag, False)  # read live: a muted turn ends, notices resume
                 self.assertNotIn("next", self.cross_write(p, "y"))
-                self.assertEqual(agent.printed, ["📝 Saved to clogpt/topics/x.md"])
+                self.assertEqual(agent.printed, ["📝 Saved to addon-2/topics/x.md"])
         # The TUI agent's flags count too.
         p = self.make(session="q-tui", platform="tui")
         with self.fake_tui(p, lambda kind, text=None: self.fail("a muted turn showed a notice"),
@@ -296,6 +296,25 @@ class ProviderTest(StoreCase):
         self.assertIn("- global/people/sam.md: Who Sam is", out)
         self.assertNotIn("global/profile.md", out)
         self.assertEqual(p.recall_status().count, 1)
+
+    def test_prefetch_forwards_project_and_boost_to_hints(self):
+        with fake_hermes({"proj-1": "/src/proj-1"}):
+            p = self.make(embedder=FakeEmbedder(), cwd="/src/proj-1")
+            p.config.project_boost = 1.75
+            with mock.patch.object(p.index, "hints",
+                                   return_value=[("proj-1/topics/arch.md", "Proj-1 architecture", 0.5)]) as hints:
+                out = p.prefetch("architecture", session_id="s1")
+            self.assertIn("- proj-1/topics/arch.md: Proj-1 architecture", out)
+            hints.assert_called_once()
+            self.assertEqual(hints.call_args.kwargs.get("project"), "proj-1")
+            self.assertEqual(hints.call_args.kwargs.get("boost"), 1.75)
+            unscoped = self.make(session="s2", embedder=FakeEmbedder(), cwd="/elsewhere")
+            with mock.patch.object(unscoped.index, "hints", return_value=[]) as unscoped_hints:
+                unscoped.prefetch("architecture", session_id="s2")
+            unscoped_hints.assert_called_once()
+            self.assertIn("project", unscoped_hints.call_args.kwargs)
+            self.assertIsNone(unscoped_hints.call_args.kwargs["project"])
+            self.assertEqual(unscoped_hints.call_args.kwargs.get("boost"), unscoped.config.project_boost)
 
     def test_prefetch_embeds_backlog_on_turn_one_and_after_external_edit(self):
         p = self.make(embedder=FakeEmbedder())
@@ -405,16 +424,16 @@ class ProviderTest(StoreCase):
         self.assertIn("global/people/sam.md", p.prefetch("Sam likes climbing", session_id="s1"))
 
     def test_prefetch_excludes_inlined_files_when_snapshot_was_not_built(self):
-        self.put("global/preferences.md", doc("preferences", "How to work", "- Ivy prefers concise answers\n"))
-        self.put("proj-1/profile.md", doc("profile", "What proj-1 is", "- Ivy builds proj-1\n"))
-        self.put("proj-1/preferences.md", doc("preferences", "Proj-1 conventions", "- Ivy pins Python\n"))
-        self.put("proj-1/topics/arch.md", doc("arch", "Proj-1 architecture", "- Ivy uses SQLite\n"))
+        self.put("global/preferences.md", doc("preferences", "How to work", "- Alex prefers concise answers\n"))
+        self.put("proj-1/profile.md", doc("profile", "What proj-1 is", "- Alex builds proj-1\n"))
+        self.put("proj-1/preferences.md", doc("preferences", "Proj-1 conventions", "- Alex pins Python\n"))
+        self.put("proj-1/topics/arch.md", doc("arch", "Proj-1 architecture", "- Alex uses SQLite\n"))
         with fake_hermes({"proj-1": "/src/proj-1"}):
             p = self.make(embedder=FakeEmbedder(), cwd="/src/proj-1")
             p.config.prefetch_min_similarity = 0.1
             p.queue_prefetch("x", session_id="s1")
             self.assertIsNone(p._state("s1").snapshot)
-            out = p.prefetch("Ivy", session_id="s1")
+            out = p.prefetch("Alex", session_id="s1")
         self.assertIn("proj-1/topics/arch.md", out)
         for inlined in ("global/profile.md", "global/preferences.md", "proj-1/profile.md", "proj-1/preferences.md"):
             self.assertNotIn(inlined, out)

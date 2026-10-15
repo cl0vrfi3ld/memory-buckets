@@ -29,11 +29,13 @@ from .store import GLOBAL, Store, scope_of, stem, version
 
 logger = logging.getLogger("memory_buckets")
 
-SCHEMA_VERSION = "3"
-CHUNK_CHARS = 700
+SCHEMA_VERSION = "4"
+CHUNK_CHARS = 300
 RRF_K = 60
 CANDIDATES = 200
 SEARCH_MIN_SIMILARITY = 0.20
+
+_GENERIC_STEMS = frozenset({"profile", "preferences", "inbox"})
 
 _STOPWORDS = frozenset({
     "a", "about", "also", "an", "and", "are", "as", "at", "be", "by", "can",
@@ -165,6 +167,27 @@ def _fts_identity(rel: str, description: str, aliases: List[str]) -> str:
         clean_desc,
         ", ".join(aliases),
     ]))
+
+
+def _embed_text(rel: str, ord_: int, heading: str, text: str, description: str, aliases: List[str]) -> str:
+    if ord_ == 0:
+        return _fts_identity(rel, description, aliases)
+    if heading:
+        return f"{heading}\n{text}"
+    if stem(rel) not in _GENERIC_STEMS:
+        return f"{stem(rel).replace('-', ' ')}\n{text}"
+    return text
+
+
+def _active_tokens(query: str) -> List[str]:
+    """Query tokens worth matching on: stopwords dropped, bare single-digit
+    numbers dropped from anything multi-word, order-preserving dedupe."""
+    tokens = re.findall(r"\w+", query.lower())[:32]
+    if not tokens:
+        return []
+    content_tokens = [t for t in tokens if t not in _STOPWORDS]
+    active = [t for t in content_tokens if len(t) > 1 or not t.isdigit()] or content_tokens or tokens
+    return list(dict.fromkeys(active))
 
 
 # -- the index -----------------------------------------------------------------
@@ -350,13 +373,20 @@ class Index:
             return 0
         con, done, batches = self._conn(), 0, 0
         while max_batches is None or batches < max_batches:
-            rows = con.execute("SELECT id, heading, text FROM chunks WHERE vec IS NULL ORDER BY id LIMIT ?",
-                               (self.embedder.batch,)).fetchall()
+            rows = con.execute(
+                "SELECT c.id, c.path, c.ord, c.heading, c.text, "
+                "COALESCE(f.description, ''), COALESCE(f.aliases, '') "
+                "FROM chunks c LEFT JOIN files f ON f.path = c.path "
+                "WHERE c.vec IS NULL ORDER BY c.id LIMIT ?",
+                (self.embedder.batch,),
+            ).fetchall()
             if not rows:
                 break
             try:
-                vectors = self.embedder.embed_documents([f"{heading}\n{text}" if heading else text
-                                                         for _, heading, text in rows])
+                vectors = self.embedder.embed_documents([
+                    _embed_text(path, ord_, heading, text, desc, aliases.split(", ") if aliases else [])
+                    for _, path, ord_, heading, text, desc, aliases in rows
+                ])
             except EmbeddingError:
                 break
             con.execute("BEGIN IMMEDIATE")
@@ -367,7 +397,7 @@ class Index:
                 con.execute("INSERT OR REPLACE INTO meta VALUES('embed_dims', ?)", (str(len(vectors[0])),))
                 # Only fill chunks whose text is unchanged; ids are never reused (AUTOINCREMENT).
                 con.executemany("UPDATE chunks SET vec = ? WHERE id = ? AND text = ?",
-                                [(vec.tobytes(), cid, text) for (cid, _, text), vec in zip(rows, vectors)])
+                                [(vec.tobytes(), cid, text) for (cid, _, _, _, text, _, _), vec in zip(rows, vectors)])
                 self._bump(con)
                 con.execute("COMMIT")
             except BaseException:
@@ -408,16 +438,14 @@ class Index:
     # -- search ----------------------------------------------------------------
 
     def _fts(self, query: str, read_ok: Callable[[str], bool]) -> List[int]:
-        tokens = re.findall(r"\w+", query.lower())[:32]
-        if not tokens:
+        active = _active_tokens(query)
+        if not active:
             return []
-        content_tokens = [t for t in tokens if t not in _STOPWORDS]
-        active = content_tokens or tokens
         match = " OR ".join(f'"{t}"' for t in active)
         out: List[int] = []
         cursor = self._conn().execute(
             "SELECT chunks.id, chunks.path FROM chunks_fts JOIN chunks ON chunks.id = chunks_fts.rowid "
-            "WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts)", (match,))
+            "WHERE chunks_fts MATCH ? ORDER BY bm25(chunks_fts, 1.0, 2.0)", (match,))
         for cid, path in cursor:
             if read_ok(path):
                 out.append(cid)
@@ -469,20 +497,52 @@ class Index:
             for cid, path, ord_, heading, text in con.execute(
                     f"SELECT id, path, ord, heading, text FROM chunks WHERE id IN ({marks})", part):
                 info[cid] = (path, ord_, heading, text)
-        best_fts_rrf: Dict[str, float] = defaultdict(float)
-        for rank, cid in enumerate(fts_ids):
-            if cid in info:
-                path = info[cid][0]
-                rrf = 1.0 / (RRF_K + rank + 1)
-                if rrf > best_fts_rrf[path]:
-                    best_fts_rrf[path] = rrf
-        best_vec_rrf: Dict[str, float] = defaultdict(float)
-        for rank, (cid, _, _) in enumerate(vec_hits):
-            if cid in info:
-                path = info[cid][0]
-                rrf = 1.0 / (RRF_K + rank + 1)
-                if rrf > best_vec_rrf[path]:
-                    best_vec_rrf[path] = rrf
+
+        active = _active_tokens(query)
+        # File-rank deduplication: RRF ranks count distinct files, not raw chunk
+        # positions, so a file split into many chunks cannot push another file
+        # several ranks down. Each path takes the rank of its first appearance.
+        best_fts_rrf: Dict[str, float] = {}
+        fts_matched: Dict[str, List[Tuple[str, str, str]]] = defaultdict(list)
+        fts_file_rank = 0
+        for cid in fts_ids:
+            if cid not in info:
+                continue
+            path, _, heading, text = info[cid]
+            if path not in best_fts_rrf:
+                best_fts_rrf[path] = 1.0 / (RRF_K + fts_file_rank + 1)
+                fts_file_rank += 1
+            fts_matched[path].append((heading, text, path))
+        best_vec_rrf: Dict[str, float] = {}
+        best_sim: Dict[str, float] = defaultdict(float)
+        vec_file_rank = 0
+        for cid, path, sim in vec_hits:
+            if cid not in info:
+                continue
+            if sim > best_sim[path]:
+                best_sim[path] = sim
+            if path not in best_vec_rrf:
+                best_vec_rrf[path] = 1.0 / (RRF_K + vec_file_rank + 1)
+                vec_file_rank += 1
+        # Lexical coverage: a file whose matched chunks cover more of the query's
+        # active tokens keeps more of its FTS score.
+        descriptions = self.descriptions(list(fts_matched))
+        for path, matched_chunks in fts_matched.items():
+            if not active:
+                coverage = 1.0
+            else:
+                haystack = " ".join(f"{h} {t} {p}" for h, t, p in matched_chunks)
+                htokens = set(re.findall(r"\w+", f"{haystack} {descriptions.get(path, '')}".lower()))
+                matched = sum(
+                    1 for token in active
+                    if token in htokens or (len(token) >= 4 and any(ht.startswith(token[:4]) for ht in htokens))
+                )
+                coverage = max(1, matched) / len(active)
+            best_fts_rrf[path] *= 0.5 + 0.5 * coverage
+        # Similarity calibration: a strong semantic match keeps more of its vector
+        # score than a match scraping the floor at an adjacent rank.
+        for path in best_vec_rrf:
+            best_vec_rrf[path] *= 0.75 + 0.5 * best_sim[path]
         best_chunk_for_path: Dict[str, Tuple[float, int]] = {}
         best_body_for_path: Dict[str, Tuple[float, int]] = {}
         for cid, cscore in chunk_scores.items():
@@ -495,7 +555,7 @@ class Index:
                 best_body_for_path[path] = (cscore, cid)
         best_for_path: Dict[str, Tuple[float, int]] = {}
         for path, (_, cid) in best_chunk_for_path.items():
-            file_score = (best_fts_rrf[path] + best_vec_rrf[path]) * (
+            file_score = (best_fts_rrf.get(path, 0.0) + best_vec_rrf.get(path, 0.0)) * (
                 boost if project and path.startswith(f"{project}/") else 1.0
             )
             best_for_path[path] = (file_score, cid)
@@ -526,11 +586,12 @@ class Index:
         return {"mode": mode, "note": note, "results": results}
 
     def hints(self, query: str, read_ok: Callable[[str], bool], *, exclude: Optional[set] = None,
-              min_similarity: float = 0.45, max_hints: int = 4,
-              embed_backlog: bool = True) -> List[Tuple[str, str, float]]:
+              min_similarity: float = 0.45, max_hints: int = 4, project: Optional[str] = None,
+              boost: float = 1.3, embed_backlog: bool = True) -> List[Tuple[str, str, float]]:
         """(path, description, similarity) for files worth reading, by vectors
         only. Empty when embeddings are off or down. Embeds one batch of
-        backlog by default."""
+        backlog by default. ``project`` files get ``boost``; a file whose exact
+        stem or alias is named in the query is rescued above the threshold."""
         if self.embedder is None or self.embedder.down_reason():
             return []
         self.reconcile()
@@ -542,8 +603,30 @@ class Index:
         exclude = exclude or set()
         best: Dict[str, float] = {}
         for _, path, sim in self._cosine(qvec, lambda p: read_ok(p) and p not in exclude, min_similarity):
-            if sim >= min_similarity and sim > best.get(path, -1.0):
-                best[path] = sim
+            if sim >= min_similarity:
+                project_boost = boost if (project and path.startswith(f"{project}/")) else 1.0
+                score = sim * project_boost
+                if score > best.get(path, -1.0):
+                    best[path] = score
+        # Exact stem or alias match: a topic named in a noisy turn should surface
+        # even when the weak embedding misses it.
+        lowered = query.lower()
+        for path, _description, aliases in self._conn().execute("SELECT path, description, aliases FROM files"):
+            if path in exclude or not read_ok(path):
+                continue
+            stem_ = stem(path)
+            terms: List[str] = []
+            if stem_ not in _GENERIC_STEMS and stem_ not in _STOPWORDS and len(stem_) >= 3:
+                terms.append(stem_.replace("-", " "))
+                terms.append(stem_)
+            terms.extend(
+                a for a in (t.strip() for t in (aliases or "").split(","))
+                if len(a) >= 3 and a.lower() not in _STOPWORDS
+            )
+            if not any(re.search(r"(?<!\w)" + re.escape(t.lower()) + r"(?!\w)", lowered) for t in terms):
+                continue
+            project_boost = boost if (project and path.startswith(f"{project}/")) else 1.0
+            best[path] = max(best.get(path, 0.0), min_similarity) * project_boost + 0.15
         ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)[:max_hints]
         descriptions = self.descriptions([p for p, _ in ranked])
         return [(p, descriptions.get(p, ""), s) for p, s in ranked]

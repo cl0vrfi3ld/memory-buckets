@@ -87,6 +87,50 @@ class StaticModelTest(unittest.TestCase):
         drink, coffee, sam = model.encode("drink"), model.encode("coffee"), model.encode("sam")
         self.assertGreater(sum(a * b for a, b in zip(drink, coffee)), sum(a * b for a, b in zip(drink, sam)))
 
+    def test_word_and_row_caches_populate_and_preserve_vectors(self):
+        model = sm.StaticModel(write_model(self.root / "m"))
+        self.assertEqual(model.tokenizer._word_cache, {})
+        self.assertEqual(model._row_cache, {})
+        vec = model.encode("climbing tea climbing sam")
+        self.assertEqual(model.tokenizer._word_cache["climbing"], [model.vocab["climb"], model.vocab["##ing"]])
+        self.assertEqual(model.tokenizer._word_cache["tea"], [model.vocab["tea"]])
+        for tok in ("climb", "##ing", "tea", "sam"):
+            tid = model.vocab[tok]
+            self.assertIn(tid, model._row_cache)
+            self.assertIsInstance(model._row_cache[tid], tuple)
+            self.assertEqual(len(model._row_cache[tid]), model.dims)
+        self.assertEqual(list(model.encode("tea tea tea")), list(model.encode("tea")))
+        # Manual un-deduplicated sum for "climbing tea climbing sam" (6 token occurrences).
+        ids = [model.vocab[t] for t in ("climb", "##ing", "tea", "climb", "##ing", "sam")]
+        acc = [0.0] * model.dims
+        for i in ids:
+            row = model.weights[i * model.dims:(i + 1) * model.dims]
+            for j in range(model.dims):
+                acc[j] += row[j]
+        norm = math.sqrt(sum(x * x for x in acc))
+        expected = sm.array("f", [x / norm for x in acc])
+        for got, want in zip(vec, expected):
+            self.assertAlmostEqual(got, want, delta=1e-6)
+        self.assertAlmostEqual(embeddings.dot(vec, expected), 1.0, places=5)
+        self.assertEqual(embeddings.dot(vec, sm.array("f", [1.0])), 0.0)
+
+    def test_query_windowing_preserves_tail_tokens_for_long_prompts(self):
+        model_dir = write_model(self.root / "m")
+        model = sm.StaticModel(model_dir)
+        self.assertEqual(sm.QUERY_HEAD_TOKENS, 352)
+        self.assertEqual(sm.QUERY_TAIL_TOKENS, sm.MAX_TOKENS - sm.QUERY_HEAD_TOKENS)
+        long_text = ("tea " * 600) + ("sam " * 80)
+        self.assertGreater(len(long_text), sm.MAX_TOKENS * model.median_token_length)
+        sam_vec = model.encode("sam")
+        doc_vec = model.encode(long_text, query=False)
+        query_vec = model.encode(long_text, query=True)
+        self.assertEqual(list(doc_vec), list(model.encode("tea")))
+        self.assertAlmostEqual(embeddings.dot(doc_vec, sam_vec), 0.0, places=5)
+        self.assertGreater(embeddings.dot(query_vec, sam_vec), 0.2)
+        emb = embeddings.StaticEmbedder(self.root / "store", model_dir=str(model_dir), auto_download=False)
+        self.assertEqual(list(emb.embed_query(long_text)), list(query_vec))
+        self.assertEqual(list(emb.embed_documents([long_text])[0]), list(doc_vec))
+
     def test_f16_matches_f32(self):
         f32 = sm.StaticModel(write_model(self.root / "a"))
         f16 = sm.StaticModel(write_model(self.root / "b", dtype="F16"))

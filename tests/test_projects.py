@@ -68,7 +68,7 @@ class ProjectsTest(unittest.TestCase):
 
     def test_slug_to_bucket(self):
         self.assertEqual(projects.bucket_for_slug("home_server"), "home-server")
-        self.assertEqual(projects.bucket_for_slug("codojo"), "codojo")
+        self.assertEqual(projects.bucket_for_slug("webapp"), "webapp")
         self.assertIsNone(projects.bucket_for_slug("global"))
         self.assertIsNone(projects.bucket_for_slug("-x"))
         with fake_hermes({"global": "/g", "ok": "/ok"}):

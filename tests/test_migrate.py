@@ -158,14 +158,14 @@ class IndexMigrationTest(StoreCase):
         self.assertIn(second, [(migrate.backup_dir(self.store) / "proj-1" / n).read_text() for n in kept])
 
     def test_old_inbox_description_is_replaced(self):
-        old = doc("inbox", OLD_INBOX_DESCRIPTION, "## imported USER.md\n- Ivy\n")
+        old = doc("inbox", OLD_INBOX_DESCRIPTION, "## imported USER.md\n- Sam\n")
         self.put("global/inbox.md", old)
         self.assertTrue(migrate.inbox_needs_migrating(self.store))
         self.assertEqual([s.action for s in migrate.run(self.store, dry_run=True)], ["inbox"])
         self.assertEqual([s.action for s in migrate.run(self.store)], ["inbox"])
         text = self.store.read("global/inbox.md")["content"]
         self.assertIn(f"description: {inbox.DESCRIPTION}\n", text)
-        self.assertTrue(text.endswith("## imported USER.md\n- Ivy\n"))
+        self.assertTrue(text.endswith("## imported USER.md\n- Sam\n"))
         self.assertEqual(self.kept_020("global", "inbox.md"), old)
         self.assertEqual(migrate.run(self.store), [])
 
@@ -195,12 +195,12 @@ class IndexMigrationTest(StoreCase):
 
     def test_empty_headings_are_removed_but_filled_sections_are_kept(self):
         body = ("## imported USER.md\n"
-                "- Ivy\n"
+                "- Sam\n"
                 "\n"
                 "## imported PROJECTS.md\n"
                 "\n"
                 "## added in conversation (cli)\n"
-                "- Likes pasta\n"
+                "- Likes tea\n"
                 "\n"
                 "## added in conversation (telegram)\n")
         self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, body))
@@ -213,7 +213,7 @@ class IndexMigrationTest(StoreCase):
         self.assertEqual([(s.action, s.detail) for s in steps],
                          [("tidy", "## imported PROJECTS.md; ## added in conversation (telegram)")])
         text = self.store.read("global/inbox.md")["content"]
-        self.assertIn("## imported USER.md\n- Ivy\n\n## added in conversation (cli)\n- Likes pasta\n", text)
+        self.assertIn("## imported USER.md\n- Sam\n\n## added in conversation (cli)\n- Likes tea\n", text)
         self.assertNotIn("## imported PROJECTS.md", text)
         self.assertNotIn("## added in conversation (telegram)", text)
         self.assertFalse((migrate.backup_dir(self.store, migrate.INBOX_MIGRATION) / "global/inbox.md").exists(),
@@ -260,12 +260,12 @@ class IndexMigrationTest(StoreCase):
     def test_a_0_1_0_inbox_gets_the_description_and_the_cleanup_in_one_run(self):
         old = doc("inbox", OLD_INBOX_DESCRIPTION,
                   "## imported USER.md\n"
-                  "- Ivy studies film at UVM\n"
+                  "- Sam studies botany\n"
                   "\n"
                   "## added in conversation 2026-10-02 (cli)\n"
                   "\n"
                   "## added in conversation 2026-10-05 (telegram)\n"
-                  "- Likes pasta\n")
+                  "- Likes tea\n")
         self.put("global/inbox.md", old)
         dry = migrate.run(self.store, dry_run=True)
         self.assertEqual(len(dry), 1, dry)
@@ -280,7 +280,7 @@ class IndexMigrationTest(StoreCase):
         text = self.store.read("global/inbox.md")["content"]
         self.assertIn(f"description: {inbox.DESCRIPTION}\n", text)
         self.assertNotIn("## added in conversation 2026-10-02", text)
-        self.assertIn("## added in conversation 2026-10-05 (telegram)\n- Likes pasta\n", text,
+        self.assertIn("## added in conversation 2026-10-05 (telegram)\n- Likes tea\n", text,
                       "the section with an entry stays")
         self.assertEqual(self.kept_020("global", "inbox.md"), old, "the description change is backed up, once")
         self.assertEqual(len(list((migrate.backup_dir(self.store, migrate.INBOX_MIGRATION) / "global").iterdir())), 1)
@@ -326,16 +326,16 @@ class IndexMigrationTest(StoreCase):
 
 OLD_DESCRIPTION_0_1_0 = "Memory waiting to be sorted, from imports and facts with no clear home yet"
 INBOX_0_1_0_BODY = (
-    "## imported USER.md from /home/ivy/.hermes (2026-09-30)\n"
-    "- Ivy studies film at UVM\n"
-    "- ex-luna deploys with colmena\n"
+    "## imported USER.md from /home/sam/.hermes (2026-09-30)\n"
+    "- Sam studies botany\n"
+    "- proj-2 deploys with colmena\n"
     "\n"
     "## added in conversation 2026-10-02 (cli)\n"
     "- Prefers British spelling\n"
     "- nixos-config pins nixpkgs unstable\n"
     "\n"
     "## added in conversation 2026-10-05 (telegram)\n"
-    "- Likes pasta\n"
+    "- Likes tea\n"
 )
 
 
@@ -355,7 +355,7 @@ class PendingMigrationTest(StoreCase):
         self.pending = self.store.root / migrate.PENDING_DIR
         self.kept_dir = migrate.backup_dir(self.store, migrate.PENDING_MIGRATION) / migrate.PENDING_DIR
         self.proposals = {
-            "a1b2c3.json": proposal_0_1_0("a1b2c3", "ex-luna", ["- ex-luna deploys with colmena"]),
+            "a1b2c3.json": proposal_0_1_0("a1b2c3", "proj-2", ["- proj-2 deploys with colmena"]),
             "d4e5f6.json": proposal_0_1_0("d4e5f6", "nixos-config", ["- nixos-config pins nixpkgs unstable"]),
             "0f0f0f.json": b"{ not json, but still copied\n",
         }
@@ -363,7 +363,7 @@ class PendingMigrationTest(StoreCase):
         for name, data in self.proposals.items():
             (self.pending / name).write_bytes(data)
         self.put("global/inbox.md", doc("inbox", OLD_DESCRIPTION_0_1_0, INBOX_0_1_0_BODY))
-        self.put("ex-luna/profile.md", doc("profile", "What ex-luna is", "- a web app\n"))
+        self.put("proj-2/profile.md", doc("profile", "What proj-2 is", "- a web app\n"))
 
     def tree(self, root):
         return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
@@ -388,7 +388,7 @@ class PendingMigrationTest(StoreCase):
         lines = [s.describe() for s in migrate.run(self.store, dry_run=True)]
         self.assertEqual(lines[1:], [
             "_pending/0f0f0f.json kept in _backup/0.2.0/_pending/ and removed",
-            "_pending/a1b2c3.json (a proposal for ex-luna) kept in _backup/0.2.0/_pending/ and removed",
+            "_pending/a1b2c3.json (a proposal for proj-2) kept in _backup/0.2.0/_pending/ and removed",
             "_pending/d4e5f6.json (a proposal for nixos-config) kept in _backup/0.2.0/_pending/ and removed",
             "_pending/ removed: its proposals weren't applied. Their lines are still in global/inbox.md; "
             "/sort-imports files them",

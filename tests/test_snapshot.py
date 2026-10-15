@@ -15,7 +15,7 @@ def header_of(text, bucket):
 class SnapshotTest(StoreCase):
     def setUp(self):
         super().setUp()
-        self.put("global/profile.md", doc("profile", "Who the user is", "- Ivy, they/them\n"))
+        self.put("global/profile.md", doc("profile", "Who the user is", "- Sam, they/them\n"))
         self.put("global/preferences.md", doc("preferences", "How to behave", "- British spelling\n"))
         self.put("global/topics/nix.md", doc("nix", "Read for Nix"))
         self.put("proj-1/profile.md", doc("profile", "What proj-1 is", "- a web app\n"))
@@ -36,7 +36,7 @@ class SnapshotTest(StoreCase):
 
     def test_unscoped(self):
         snap = self.build()
-        self.assertIn("- Ivy, they/them", snap.text)
+        self.assertIn("- Sam, they/them", snap.text)
         self.assertIn("- British spelling", snap.text)
         self.assertIn("- global/topics/nix.md: Read for Nix", snap.text)
         self.assertNotIn("proj-1/topics/deploy.md", snap.text)
@@ -232,7 +232,7 @@ class SnapshotTest(StoreCase):
         self.put("global/preferences.md", doc("preferences", "How to behave", "- x\n" * 1500))
         self.index.reconcile()
         snap = self.build(snapshot_max_chars=5500)
-        self.assertIn("- Ivy, they/them", snap.text)
+        self.assertIn("- Sam, they/them", snap.text)
         self.assertIn("memory_read when they are relevant: global/preferences.md", snap.text)
         self.assertNotIn("global/preferences.md", snap.paths)
 

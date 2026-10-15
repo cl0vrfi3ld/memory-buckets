@@ -6,6 +6,82 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [0.3.0] - 2026-10-15
+
+Retrieval and prefetch matching rework. The index schema is now v4; existing
+`.index/memory.sqlite` caches rebuild automatically on startup.
+
+### Changed
+
+- **Finer chunks (index schema v4).** `CHUNK_CHARS` drops from 700 to 300, so a
+  flat bullet note packs two or three facts per chunk instead of averaging
+  eight to twelve unrelated bullets into one vector. Mean pooling a long mixed
+  chunk divides a single fact's signal by roughly the square root of the number
+  of bullets, which is why specific questions about a `profile.md`-style file
+  used to miss the similarity threshold entirely.
+- **Cleaner and contextualised chunk embeddings.** A chunk's vector no longer
+  carries the raw `global/topics/foo.md` path or the `Read when working on...`
+  description boilerplate:
+  - Chunk 0 (the file's identity) embeds the stripped identity: bucket, stem,
+    de-boilerplated description and aliases.
+  - A body chunk under a heading keeps `heading\ntext`.
+  - A body chunk with no heading is prefixed with its file's stem
+    (`hetzner-box\n- ...`), except for the generic `profile`, `preferences`
+    and `inbox` stems.
+  Measured on `potion-retrieval-32M`, two unrelated topic files previously sat
+  at `0.2994` cosine on their identity chunks, right on the `0.30` prefetch
+  threshold; stripping the path and boilerplate drops that to `0.1177` and widens
+  the true-positive margin by up to `+0.07`.
+- **File-level rank fusion in hybrid search.** RRF ranks now count distinct
+  files rather than raw chunk positions, so a file split into many chunks can
+  no longer push another file several ranks down the curve.
+- **Query-term coverage and similarity calibration on top of RRF.**
+  - A file's keyword score is scaled by how much of the query's active tokens
+    its matched chunks actually cover (`0.5 + 0.5 * coverage`), so a four-of-four
+    keyword match beats a one-of-four stray `OR` match by a wide margin instead
+    of by `1/61` against `1/62`.
+  - A file's vector score is scaled by `0.75 + 0.5 * best similarity`, so a
+    strong semantic match outranks a match scraping the relevance floor at an
+    adjacent rank.
+  - Section headings carry double weight in `bm25`.
+  - Bare single-digit tokens are dropped from multi-word queries, so `clo-gpt-2`
+    no longer matches on `2` alone.
+- **Prefetch hints: project boost and exact stem or alias rescue.** `hints()`
+  takes the session's `project` and `project_boost` (forwarded from `prefetch`)
+  and, separately, rescues a file whose exact stem or frontmatter alias is named
+  in the message. A topic named inside a noisy paste now surfaces even when the
+  weak embedding misses it, and mentioning a topic's name in a turn about
+  something else no longer produces a false-positive hint.
+- **Head plus tail query windowing.** A user message longer than 512 tokens is
+  embedded from its first 352 and last 160 tokens with duplicate token IDs
+  removed, instead of a strict head truncation. A pasted build log with the
+  actual question at the bottom no longer drowns that question out: measured
+  cosine against the right file went from `0.0957` to `0.5306` on a
+  180-line log followed by one question.
+
+### Added
+
+- **`tests/bench_retrieval.py`**: a synthetic retrieval and hint benchmark over
+  a fictional corpus, reporting `search_top1`, `search_mrr`, `hint_top1`,
+  `hint_fp_rate`, and embed and search latency, so a retrieval change can be
+  checked with numbers rather than by feel.
+
+### Performance
+
+- **`StaticModel.encode` is 6.5x faster** on a 100-chunk batch: token IDs are
+  deduplicated with `Counter`, unpacked token rows and WordPiece word splits are
+  cached, and the vector sum uses `map(sum, zip(*rows))`.
+- **Cosine scans are about 3x faster** via `math.sumprod` (with a
+  `sum(map(float.__mul__, ...))` fallback on older Pythons), which also speeds
+  up `dot`.
+
+### Fixed
+
+- A query whose only overlap with a file was a number or a bare stopword could
+  outrank a genuine multi-keyword match.
+- Prefetch could hint a topic the user had merely mentioned in passing, because
+  a stem or alias match had no path into the hint list.
+
 ## [0.2.1] - 2026-10-14
 
 ### Added
@@ -109,7 +185,7 @@ buckets. The setting is ignored, with a warning in the log.
 
 - **Provenance on cross-project writes.** A write into another project's
   bucket adds `<platform>@<project>` to the file's `sources`, or
-  `<platform>@*` from an unscoped session: `tui@ex-luna`, `tui@*`. Nothing
+  `<platform>@*` from an unscoped session: `tui@proj-2`, `tui@*`. Nothing
   undoes these writes yet; the tag is there to trace them.
 - **A status line on cross-project writes:** `📝 Saved to <path>`. The
   classic CLI and the terminal TUI show it. Elsewhere it isn't shown, and the
@@ -264,6 +340,7 @@ will do.
 
 Initial release.
 
+[0.3.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.2.1...v0.3.0
 [0.2.1]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.2.0...v0.2.1
 [0.2.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.1.0...v0.2.0
 [0.1.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.0.1...v0.1.0

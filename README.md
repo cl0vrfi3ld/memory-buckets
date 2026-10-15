@@ -173,8 +173,8 @@ ones with no memory yet. A write anywhere else is refused; the agent is told
 to save a fact about any other project in `global/topics/<name>.md`.
 
 A write into another project's bucket records where it came from in the
-file's `sources` frontmatter, as `<platform>@<project>`. `tui@ex-luna` is a
-TUI session in the `ex-luna` project; `tui@*` is an unscoped TUI session (`*`
+file's `sources` frontmatter, as `<platform>@<project>`. `tui@proj-2` is a
+TUI session in the `proj-2` project; `tui@*` is an unscoped TUI session (`*`
 can't be a project slug). Writes inside a session's own scope record only the
 platform. Nothing undoes a cross-project write; the tag is there so you can
 find what another session added.

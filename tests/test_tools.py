@@ -18,7 +18,7 @@ class ToolsTest(StoreCase):
     def call(self, name, project=None, context="primary", **args):
         c = config.Config()
         ctx = tools.Context(self.store, self.index,
-                            scopes.resolve(c, project, context, buckets=["clogpt", "proj-1"]), c,
+                            scopes.resolve(c, project, context, buckets=["addon-2", "proj-1"]), c,
                             source="telegram", on_write=self.written.append)
         result = tools.handle(name, args, ctx)
         json.dumps(result)  # always serialisable
@@ -123,7 +123,7 @@ class ToolsTest(StoreCase):
         self.assertIn("memory_append", got["error"]["message"])
         self.assertIn('memory_write with if_version "new"', got["error"]["message"])
         self.assertEqual(got["allowed_prefixes"], ["global/"])
-        self.assertEqual(got["add_only_buckets"], ["clogpt", "proj-1"])
+        self.assertEqual(got["add_only_buckets"], ["addon-2", "proj-1"])
         got = self.call("memory_write", path="proj-1/topics/deploy.md", description="x", body="- y",
                         if_version=version(self.content("proj-1/topics/deploy.md").encode()))
         self.assertEqual(got["error"]["code"], "out_of_scope")
@@ -138,18 +138,18 @@ class ToolsTest(StoreCase):
         self.assertTrue(self.call("memory_write", project="proj-1", path="global/people/sam.md", description="Sam",
                                   body="- x", if_version="new")["ok"])
         self.assertTrue(self.call("memory_append", project="proj-1", path="global/topics/nix.md", lines=["x"])["ok"])
-        self.assertEqual(self.call("memory_append", project="proj-1", path="clogpt/topics/x.md",
+        self.assertEqual(self.call("memory_append", project="proj-1", path="addon-2/topics/x.md",
                                    lines=["x"])["error"]["code"],
-                         "not_found", "clogpt is not a bucket in this store")
+                         "not_found", "addon-2 is not a bucket in this store")
 
     def test_cross_project_write_from_a_project_session(self):
-        self.put("clogpt/topics/x.md", doc("x", "X", "- a\n"))
+        self.put("addon-2/topics/x.md", doc("x", "X", "- a\n"))
         self.index.reconcile()
         got, seen = self.call_notified("memory_append", True, project="proj-1",
-                                       path="clogpt/topics/x.md", lines=["b"])
+                                       path="addon-2/topics/x.md", lines=["b"])
         self.assertTrue(got["ok"], got)
-        self.assertEqual(seen, ["📝 Saved to clogpt/topics/x.md"])
-        self.assertIn("sources:\n  - cli@proj-1\n", self.content("clogpt/topics/x.md"))
+        self.assertEqual(seen, ["📝 Saved to addon-2/topics/x.md"])
+        self.assertIn("sources:\n  - cli@proj-1\n", self.content("addon-2/topics/x.md"))
         # A write inside the session's own scope stays quiet and unadorned.
         got, seen = self.call_notified("memory_append", True, project="proj-1",
                                        path="proj-1/topics/deploy.md", lines=["x"])
@@ -160,11 +160,11 @@ class ToolsTest(StoreCase):
     def test_cross_project_status_line_without_a_channel_adds_no_next(self):
         # D5: the status line is best-effort; unlike the inbox notice it never
         # falls back to asking the agent to relay it.
-        self.put("clogpt/topics/x.md", doc("x", "X", "- a\n"))
+        self.put("addon-2/topics/x.md", doc("x", "X", "- a\n"))
         self.index.reconcile()
         for notify in (None, False):
             got, _ = self.call_notified("memory_append", notify, project="proj-1",
-                                        path="clogpt/topics/x.md", lines=["x"])
+                                        path="addon-2/topics/x.md", lines=["x"])
             self.assertTrue(got["ok"], got)
             self.assertNotIn("next", got)
 
@@ -215,30 +215,30 @@ class ToolsTest(StoreCase):
         )
 
     def test_str_replace_deletes_whole_bullet_line_and_preserves_trailing_newline(self):
-        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "- Ivy\n- Ivy studies film\n- Ivy drinks tea\n"))
-        got = self.call("memory_str_replace", path="global/inbox.md", old="- Ivy studies film", new="")
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "- Sam\n- Sam studies botany\n- Sam drinks tea\n"))
+        got = self.call("memory_str_replace", path="global/inbox.md", old="- Sam studies botany", new="")
         self.assertTrue(got["ok"], got)
         _, body = frontmatter.parse(self.content("global/inbox.md"))
-        self.assertEqual(body, "- Ivy\n- Ivy drinks tea\n")
-        got = self.call("memory_str_replace", path="global/inbox.md", old="- Ivy", new="")
+        self.assertEqual(body, "- Sam\n- Sam drinks tea\n")
+        got = self.call("memory_str_replace", path="global/inbox.md", old="- Sam", new="")
         self.assertTrue(got["ok"], got)
         _, body = frontmatter.parse(self.content("global/inbox.md"))
-        self.assertEqual(body, "- Ivy drinks tea\n")
+        self.assertEqual(body, "- Sam drinks tea\n")
         got = self.call("memory_str_replace", path="global/inbox.md",
-                        old="- Ivy drinks tea\n", new="- Ivy studies film and photography")
+                        old="- Sam drinks tea\n", new="- Sam studies botany and photography")
         self.assertTrue(got["ok"], got)
         text = self.content("global/inbox.md")
-        self.assertTrue(text.endswith("- Ivy studies film and photography\n"), text)
+        self.assertTrue(text.endswith("- Sam studies botany and photography\n"), text)
 
     def test_str_replace_suffix_deletion_keeps_newline_and_checks_ambiguity(self):
         self.put(
             "global/profile.md",
-            doc("profile", "Who the user is", "- Speaks English, French, and a bit of German\n- Taking GERM1100B\n"),
+            doc("profile", "Who the user is", "- Speaks English, Spanish, and a bit of Italian\n- Taking MAND204B\n"),
         )
-        got = self.call("memory_str_replace", path="global/profile.md", old=", and a bit of German", new="")
+        got = self.call("memory_str_replace", path="global/profile.md", old=", and a bit of Italian", new="")
         self.assertTrue(got["ok"], got)
         _, body = frontmatter.parse(self.content("global/profile.md"))
-        self.assertEqual(body, "- Speaks English, French\n- Taking GERM1100B\n")
+        self.assertEqual(body, "- Speaks English, Spanish\n- Taking MAND204B\n")
 
         self.put(
             "global/topics/nix.md",
@@ -276,7 +276,7 @@ class ToolsTest(StoreCase):
         c = config.Config.from_dict(args.pop("cfg", {}))
         seen = []
         ctx = tools.Context(self.store, self.index,
-                            scopes.resolve(c, project, buckets=["clogpt", "proj-1"]), c, source="cli",
+                            scopes.resolve(c, project, buckets=["addon-2", "proj-1"]), c, source="cli",
                             notify=(lambda m: seen.append(m) or shown) if shown is not None else None)
         return tools.handle(name, args, ctx), seen
 
@@ -284,10 +284,10 @@ class ToolsTest(StoreCase):
         refusal = "the inbox only holds imported memory; save the fact where it belongs."
         for project in (None, "proj-1"):
             with self.subTest(project=project, inbox="missing"):
-                got = self.call("memory_append", project=project, path="global/inbox.md", lines=["ex-luna: uses a SID"])
+                got = self.call("memory_append", project=project, path="global/inbox.md", lines=["proj-2: uses a cache"])
                 self.assertEqual(got["error"], {"code": "out_of_scope", "message": refusal})
                 self.assertFalse((self.store.memories / "global/inbox.md").exists(), "refusing must not create it")
-        original = doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Ivy\n")
+        original = doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Sam\n")
         self.put("global/inbox.md", original)
         for project in (None, "proj-1"):
             with self.subTest(project=project, inbox="present"):
@@ -303,23 +303,23 @@ class ToolsTest(StoreCase):
 
     def test_inbox_lines_can_be_removed_with_str_replace(self):
         # What the sort-imports skill does for every entry it files or drops.
-        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Ivy\n- Uses tea\n"))
-        got = self.call("memory_str_replace", path="global/inbox.md", old="- Ivy\n", new="")
+        self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Sam\n- Uses tea\n"))
+        got = self.call("memory_str_replace", path="global/inbox.md", old="- Sam\n", new="")
         self.assertTrue(got["ok"], got)
         text = self.content("global/inbox.md")
         self.assertTrue(text.endswith("## imported USER.md\n- Uses tea\n"), text)
-        self.assertNotIn("- Ivy", text)
+        self.assertNotIn("- Sam", text)
         self.assertEqual(inbox.count_entries(text.split("\n---\n", 1)[1]), 1)
         # Project sessions write global/ in full, so they can sort too.
         self.assertTrue(self.call("memory_str_replace", project="proj-1", path="global/inbox.md",
                                   old="- Uses tea\n", new="")["ok"])
 
     def test_inbox_can_be_rewritten_and_deleted_from_a_writable_session(self):
-        # Ivy's decision, 2026-10-11: only memory_append is refused on the inbox.
+        # Only memory_append is refused on the inbox.
         refusal = "the inbox only holds imported memory; save the fact where it belongs."
         for project in (None, "proj-1"):
             with self.subTest(project=project, tool="memory_write"):
-                self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Ivy\n- Uses tea\n"))
+                self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported USER.md\n- Sam\n- Uses tea\n"))
                 v = version(self.content("global/inbox.md").encode())
                 got = self.call("memory_write", project=project, path="global/inbox.md",
                                 description=inbox.DESCRIPTION, body="## imported USER.md\n- Uses tea\n", if_version=v)
@@ -327,7 +327,7 @@ class ToolsTest(StoreCase):
                 text = self.content("global/inbox.md")
                 self.assertTrue(text.startswith(f"---\nname: inbox\ndescription: {inbox.DESCRIPTION}\n"), text)
                 self.assertTrue(text.endswith("---\n## imported USER.md\n- Uses tea\n"), text)
-                self.assertNotIn("- Ivy", text)
+                self.assertNotIn("- Sam", text)
                 self.assertEqual(self.call("memory_append", project=project, path="global/inbox.md",
                                            lines=["x"])["error"]["code"], "out_of_scope")
             with self.subTest(project=project, tool="memory_delete"):
@@ -401,12 +401,12 @@ class ToolsTest(StoreCase):
         self.assertTrue(got["error"]["message"].endswith("; tell the user to fix it by hand"), got)
 
     def test_a_broken_status_channel_never_fails_the_write(self):
-        self.put("clogpt/topics/x.md", doc("x", "X", "- a\n"))
+        self.put("addon-2/topics/x.md", doc("x", "X", "- a\n"))
         self.index.reconcile()
         c = config.Config()
-        ctx = tools.Context(self.store, self.index, scopes.resolve(c, buckets=["clogpt", "proj-1"]), c, source="cli",
+        ctx = tools.Context(self.store, self.index, scopes.resolve(c, buckets=["addon-2", "proj-1"]), c, source="cli",
                             notify=lambda m: bool(1 / 0))
-        got = tools.handle("memory_append", {"path": "clogpt/topics/x.md", "lines": ["x"]}, ctx)
+        got = tools.handle("memory_append", {"path": "addon-2/topics/x.md", "lines": ["x"]}, ctx)
         self.assertTrue(got["ok"], got)
         self.assertNotIn("next", got)
 

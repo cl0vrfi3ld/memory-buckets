@@ -4,7 +4,7 @@ from .helpers import StoreCase
 from memory_buckets import config, scopes
 from memory_buckets.store import StoreError
 
-BUCKETS = ["clogpt", "proj-1"]
+BUCKETS = ["addon-2", "proj-1"]
 
 
 class ScopeTest(StoreCase):
@@ -23,7 +23,7 @@ class ScopeTest(StoreCase):
         scope = self.resolve("proj-1")
         self.assertEqual((scope.project, scope.source), ("proj-1", "hermes-project"))
         self.assertEqual(scope.read_prefixes, ["global/", "proj-1/"])
-        self.assertEqual(scope.other_buckets, ["clogpt"], "the session's own bucket is not 'other'")
+        self.assertEqual(scope.other_buckets, ["addon-2"], "the session's own bucket is not 'other'")
         self.assertIsNone(self.resolve("global").project, "global is never a project")
         self.assertIsNone(self.resolve("../etc").project)
 
@@ -43,25 +43,25 @@ class ScopeTest(StoreCase):
         scoped = self.resolve("proj-1")
         for path in ("proj-1/topics/deploy.md", "global/inbox.md"):
             scoped.check_write(path)
-        scoped.check_write("clogpt/topics/deploy.md", append=True)
+        scoped.check_write("addon-2/topics/deploy.md", append=True)
         with self.assertRaises(StoreError):
-            scoped.check_write("clogpt/topics/deploy.md")
-        scoped.check_write("clogpt/profile.md", create=True)
+            scoped.check_write("addon-2/topics/deploy.md")
+        scoped.check_write("addon-2/profile.md", create=True)
         with self.assertRaises(StoreError):
-            scoped.check_write("clogpt/profile.md")
+            scoped.check_write("addon-2/profile.md")
 
     def test_refused_edit_names_both_add_tools(self):
         scoped = self.resolve("proj-1")
         for check in ({"append": False}, {}):
             with self.assertRaises(StoreError) as caught:
-                scoped.check_write("clogpt/topics/deploy.md", **check)
+                scoped.check_write("addon-2/topics/deploy.md", **check)
             self.assertEqual(caught.exception.code, "out_of_scope")
-            self.assertIn("you may only add to clogpt/", caught.exception.message)
+            self.assertIn("you may only add to addon-2/", caught.exception.message)
             self.assertIn("memory_append", caught.exception.message)
             self.assertIn("memory_write", caught.exception.message)
             self.assertEqual(caught.exception.fields,
                              {"allowed_prefixes": ["proj-1/", "global/"],
-                              "add_only_buckets": ["clogpt"]})
+                              "add_only_buckets": ["addon-2"]})
 
     def test_read_only_contexts(self):
         for context in ("cron", "subagent", "flush"):
@@ -69,7 +69,7 @@ class ScopeTest(StoreCase):
                 self.resolve(context=context).check_write("global/profile.md")
             self.assertEqual(caught.exception.code, "read_only")
             with self.assertRaises(StoreError):
-                self.resolve(context=context).check_write("clogpt/topics/deploy.md", append=True)
+                self.resolve(context=context).check_write("addon-2/topics/deploy.md", append=True)
         self.resolve(context="cron", cron_writes=True).check_write("global/profile.md")
         self.assertTrue(self.resolve(readonly=True).read_only)
 

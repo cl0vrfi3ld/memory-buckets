@@ -41,10 +41,13 @@ import threading
 import unicodedata
 import urllib.request
 from array import array
+from collections import Counter
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("memory_buckets")
+
+_sumprod = getattr(math, "sumprod", None)
 
 MODEL_NAME = "potion-retrieval-32M"
 MODEL_REPO = "minishlab/potion-retrieval-32M"
@@ -56,6 +59,8 @@ MODEL_FILES = {  # name -> sha256 of the upstream file at MODEL_REVISION
 DOWNLOAD_BASE = "https://huggingface.co"
 BUNDLED_DIR = Path(__file__).resolve().parent / "model"
 MAX_TOKENS = 512
+QUERY_HEAD_TOKENS = 352
+QUERY_TAIL_TOKENS = MAX_TOKENS - QUERY_HEAD_TOKENS
 UNK = "[UNK]"
 MAX_WORD_CHARS = 100
 
@@ -132,10 +137,16 @@ class WordPiece:
         self.vocab = vocab
         self.unk_id = vocab.get(UNK)
         self.special = {t: vocab[t] for t in SPECIAL_TOKENS if t in vocab}
+        self._word_cache: Dict[str, List[int]] = {}
 
     def word_ids(self, word: str) -> List[int]:
+        cached = self._word_cache.get(word)
+        if cached is not None:
+            return cached
         if len(word) > MAX_WORD_CHARS:
-            return [self.unk_id] if self.unk_id is not None else []
+            res = [self.unk_id] if self.unk_id is not None else []
+            self._word_cache[word] = res
+            return res
         ids, start = [], 0
         while start < len(word):
             end, found = len(word), None
@@ -146,9 +157,12 @@ class WordPiece:
                     break
                 end -= 1
             if found is None:
-                return [self.unk_id] if self.unk_id is not None else []
+                res = [self.unk_id] if self.unk_id is not None else []
+                self._word_cache[word] = res
+                return res
             ids.append(found)
             start = end
+        self._word_cache[word] = ids
         return ids
 
     def tokens(self, text: str) -> List[str]:
@@ -193,25 +207,40 @@ class StaticModel:
             data = memoryview(swapped.tobytes())
         self.weights = data.cast(fmt)
         self.rows = rows
+        self._row_cache: Dict[int, Tuple[float, ...]] = {}
         if len(self.weights) != rows * self.dims or rows != len(vocab_lines):
             raise ModelUnavailable(f"model shape {rows}x{self.dims} doesn't match vocab of {len(vocab_lines)}")
 
-    def encode(self, text: str) -> array:
-        text = text[: MAX_TOKENS * self.median_token_length]
+    def encode(self, text: str, *, query: bool = False) -> array:
         unk = self.tokenizer.unk_id
-        ids = [i for i in self.tokenizer.ids(text) if i != unk][:MAX_TOKENS]
-        dims, w = self.dims, self.weights
-        acc = [0.0] * dims
-        for i in ids:
-            row = w[i * dims:(i + 1) * dims]
-            for j in range(dims):
-                acc[j] += row[j]
-        vec = array("f", acc)
-        norm = math.sqrt(sum(x * x for x in acc))
+        max_chars = MAX_TOKENS * self.median_token_length
+        if query:
+            if len(text) > max_chars:
+                head_chars = QUERY_HEAD_TOKENS * self.median_token_length
+                tail_chars = QUERY_TAIL_TOKENS * self.median_token_length
+                text = f"{text[:head_chars]} {text[-tail_chars:]}"
+            ids = [i for i in self.tokenizer.ids(text) if i != unk]
+            if len(ids) > MAX_TOKENS:
+                ids = list(dict.fromkeys(ids[:QUERY_HEAD_TOKENS] + ids[-QUERY_TAIL_TOKENS:]))
+        else:
+            text = text[:max_chars]
+            ids = [i for i in self.tokenizer.ids(text) if i != unk][:MAX_TOKENS]
+        dims, w, row_cache = self.dims, self.weights, self._row_cache
+        if not ids:
+            return array("f", [0.0] * dims)
+        rows = []
+        for i, count in Counter(ids).items():
+            row = row_cache.get(i)
+            if row is None:
+                row = tuple(w[i * dims:(i + 1) * dims])
+                row_cache[i] = row
+            rows.append([x * count for x in row] if count > 1 else row)
+        acc = list(map(sum, zip(*rows)))
+        norm_sq = _sumprod(acc, acc) if _sumprod is not None else sum(x * x for x in acc)
+        norm = math.sqrt(norm_sq)
         if norm > 0:
-            for j in range(dims):
-                vec[j] /= norm
-        return vec
+            return array("f", [x / norm for x in acc])
+        return array("f", acc)
 
 
 # -- locating, caching and fetching -----------------------------------------------------------------

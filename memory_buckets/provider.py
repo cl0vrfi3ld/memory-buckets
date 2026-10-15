@@ -278,6 +278,7 @@ class MemoryBucketsProvider(MemoryProvider):
                     hints = self.index.hints(query, scope.reads_by_default, exclude=exclude,
                                              min_similarity=min_similarity(self.config, self.index.embedder),
                                              max_hints=self.config.prefetch_max_hints,
+                                             project=scope.project, boost=self.config.project_boost,
                                              embed_backlog=acquired)
                 finally:
                     if acquired:

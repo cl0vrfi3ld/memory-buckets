@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "memory-buckets"
-version = "0.2.1"
+version = "0.3.0"
 description = "Markdown-based memory provider with hybrid search (FTS keyword + static embeddings), inspired by Claude memory."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -10,6 +10,7 @@ cosine similarity is a dot product.
 from __future__ import annotations
 
 import logging
+import math
 import struct
 import threading
 from array import array
@@ -20,13 +21,17 @@ from . import static_model
 
 logger = logging.getLogger("memory_buckets")
 
+_sumprod = getattr(math, "sumprod", None)
+
 
 class EmbeddingError(Exception):
     pass
 
 
 def dot(a: array, b: array) -> float:
-    return sum(map(float.__mul__, a, b)) if len(a) == len(b) else 0.0
+    if len(a) != len(b):
+        return 0.0
+    return _sumprod(a, b) if _sumprod is not None else sum(map(float.__mul__, a, b))
 
 
 class StaticEmbedder:
@@ -91,7 +96,11 @@ class StaticEmbedder:
         return self.embed(texts)
 
     def embed_query(self, text: str) -> array:
-        return self.embed([text])[0]
+        try:
+            model = self._load()
+        except static_model.ModelUnavailable as err:
+            raise EmbeddingError(str(err)) from None
+        return model.encode(text, query=True)
 
 
 def make_embedder(cfg, store_root: Path, *, spawn: Optional[Callable[..., threading.Thread]] = None):
