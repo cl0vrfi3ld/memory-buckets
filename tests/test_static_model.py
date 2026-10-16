@@ -149,6 +149,16 @@ class StaticModelTest(unittest.TestCase):
             a, b = f32.encode(text), f16.encode(text)
             self.assertAlmostEqual(sum(x * y for x, y in zip(a, b)), 1.0, places=3)
 
+    def test_f16_loads_where_memoryview_cannot_cast_half(self):
+        # Python 3.10 and 3.11: the bundled (float16) model must still load, and encode the same.
+        d = write_model(self.root / "m", dtype="F16")
+        native = sm.StaticModel(d)
+        with mock.patch.object(sm, "_MEMORYVIEW_CASTS_HALF", False):
+            fallback = sm.StaticModel(d)
+        self.assertIsInstance(fallback.weights, sm._HalfRows)
+        for text in ("tea coffee", "climbing sam", "morning drinks", "日本 cafe!"):
+            self.assertEqual(list(fallback.encode(text)), list(native.encode(text)))
+
     def test_shape_mismatch_is_refused(self):
         d = write_model(self.root / "m")
         (d / "vocab.txt").write_text("\n".join(VOCAB[:-1]) + "\n", encoding="utf-8")

@@ -29,6 +29,11 @@ change the store's layout; the plugin migrates the store itself (see
 
 ### Fixed
 
+- On Python 3.10 and 3.11, the bundled embedding model (float16, in pip and Nix
+  installs) failed to load, because `memoryview` only casts to float16 from 3.12.
+  Search quietly fell back to keywords only. Float16 weights now decode with
+  `struct` on those versions, and the float16 converter uses `struct` too (its
+  output is byte-identical).
 - An index connection that failed to open (a corrupt `memory.sqlite`) was left
   open instead of closed. Harmless on Linux; on Windows it kept the rebuild from
   deleting the broken file.

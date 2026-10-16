@@ -182,6 +182,32 @@ class WordPiece:
 
 # -- the model ---------------------------------------------------------------------------------
 
+def _memoryview_casts_half() -> bool:
+    try:
+        memoryview(bytearray(2)).cast("e")
+    except ValueError:  # Python 3.10 and 3.11: memoryview learned "e" in 3.12
+        return False
+    return True
+
+
+_MEMORYVIEW_CASTS_HALF = _memoryview_casts_half()
+
+
+class _HalfRows:
+    """Float16 weights where memoryview can't cast to "e". Slicing decodes just that
+    slice; encode() reads one row at a time and caches it, so each row decodes once."""
+
+    def __init__(self, data: memoryview) -> None:
+        self._data = data
+
+    def __len__(self) -> int:
+        return len(self._data) // 2
+
+    def __getitem__(self, index: slice) -> Tuple[float, ...]:
+        start, stop, _ = index.indices(len(self))
+        return struct.unpack_from(f"<{stop - start}e", self._data, start * 2)
+
+
 class StaticModel:
     def __init__(self, directory: Path) -> None:
         self.directory = Path(directory)
@@ -201,11 +227,14 @@ class StaticModel:
             raise ModelUnavailable(f"unsupported dtype {meta['dtype']}")
         start, end = meta["data_offsets"]
         data = memoryview(self._mmap)[8 + header_len + start: 8 + header_len + end]
-        if sys.byteorder != "little":  # safetensors is little-endian; copy and swap once
-            swapped = array("f" if fmt == "f" else "H", bytes(data))
-            swapped.byteswap()
-            data = memoryview(swapped.tobytes())
-        self.weights = data.cast(fmt)
+        if fmt == "e" and not _MEMORYVIEW_CASTS_HALF:
+            self.weights = _HalfRows(data)  # decodes "<e" itself, so it's right on any host
+        else:
+            if sys.byteorder != "little":  # safetensors is little-endian; copy and swap once
+                swapped = array("f" if fmt == "f" else "H", bytes(data))
+                swapped.byteswap()
+                data = memoryview(swapped.tobytes())
+            self.weights = data.cast(fmt)
         self.rows = rows
         self._row_cache: Dict[int, Tuple[float, ...]] = {}
         if len(self.weights) != rows * self.dims or rows != len(vocab_lines):
@@ -386,10 +415,11 @@ def convert_to_f16(src: Path, dst: Path) -> None:
         values.frombytes(f.read(end - start))
     if sys.byteorder != "little":
         values.byteswap()
-    halves = memoryview(bytearray(len(values) * 2)).cast("e")
-    for i, v in enumerate(values):
-        halves[i] = v
-    payload = halves.cast("B").tobytes()
+    # struct, not memoryview.cast("e"): Python 3.10 and 3.11 can't cast to "e". "<" also
+    # keeps the output little-endian, as safetensors requires, on any host.
+    chunk = 1 << 16
+    payload = b"".join(struct.pack(f"<{len(part)}e", *part)
+                       for part in (values[i:i + chunk] for i in range(0, len(values), chunk)))
     new_header = {**{k: v for k, v in header.items() if k != "embeddings"},
                   "embeddings": {**meta, "dtype": "F16", "data_offsets": [0, len(payload)]}}
     blob = json.dumps(new_header, separators=(",", ":")).encode()
