@@ -7,6 +7,7 @@ MEMORY_BUCKETS_REFERENCE_TOKENIZER (tokenizer.json). The float16 test needs
 MEMORY_BUCKETS_MODEL_F32 (the upstream float32 file).
 """
 
+import gc
 import hashlib
 import importlib.util
 import json
@@ -23,13 +24,15 @@ from unittest import mock
 from . import memory_buckets  # noqa: F401
 from memory_buckets import config, embeddings, static_model as sm
 
+from .helpers import symlink_or_skip
+
 VOCAB = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "tea", "coffee", "drink", "##s", "morning", "climb", "##ing",
          "sam", ",", "!", "cafe", "日", "本", "##x"]
 
 
 def write_model(directory: Path, dims=4, dtype="F32"):
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "vocab.txt").write_text("\n".join(VOCAB) + "\n")
+    (directory / "vocab.txt").write_text("\n".join(VOCAB) + "\n", encoding="utf-8")
     values = []
     for i in range(len(VOCAB)):  # deterministic rows; tea/coffee/drink point the same way
         base = [1.0, 0.2, 0.0, 0.0] if VOCAB[i] in ("tea", "coffee", "drink", "##s", "morning") else [0.0, 0.0, 1.0, float(i) / 10]
@@ -44,6 +47,13 @@ def write_model(directory: Path, dims=4, dtype="F32"):
         sm.convert_to_f16(tmp, f32)
         tmp.unlink()
     return directory
+
+
+def forget_loaded_models():
+    """Drop models that load() cached for the process. Each one keeps its file mmapped,
+    and Windows can't delete a mapped file, so a test's temp dir couldn't be cleaned up."""
+    sm._cache.clear()
+    gc.collect()
 
 
 class TokenizerTest(unittest.TestCase):
@@ -76,6 +86,7 @@ class StaticModelTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(forget_loaded_models)  # runs first: cleanups are last in, first out
         self.root = Path(self.tmp.name)
 
     def test_encode_is_normalised_mean_and_drops_unk(self):
@@ -140,7 +151,7 @@ class StaticModelTest(unittest.TestCase):
 
     def test_shape_mismatch_is_refused(self):
         d = write_model(self.root / "m")
-        (d / "vocab.txt").write_text("\n".join(VOCAB[:-1]) + "\n")
+        (d / "vocab.txt").write_text("\n".join(VOCAB[:-1]) + "\n", encoding="utf-8")
         with self.assertRaises(sm.ModelUnavailable):
             sm.StaticModel(d)
 
@@ -160,6 +171,7 @@ class FetchTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(forget_loaded_models)
         root = Path(self.tmp.name)
         src = write_model(root / "srv" / sm.MODEL_REPO / "resolve" / sm.MODEL_REVISION)
         self.hashes = {n: hashlib.sha256((src / n).read_bytes()).hexdigest() for n in sm.MODEL_FILES}
@@ -193,7 +205,7 @@ class FetchTest(unittest.TestCase):
         # A corrupt file already at the destination must not be accepted as complete.
         dest = sm.download_dir(self.store)
         dest.mkdir(parents=True)
-        (dest / "vocab.txt").write_text("garbage")
+        (dest / "vocab.txt").write_text("garbage", encoding="utf-8")
         (dest / "model.safetensors").write_bytes(b"garbage")
         sm.fetch(self.store)
         self.assertTrue(sm.is_complete(dest))
@@ -226,7 +238,7 @@ class FetchTest(unittest.TestCase):
         # the embedder must report the model down, not let it escape (review finding).
         dest = sm.download_dir(self.store)
         dest.mkdir(parents=True)
-        (dest / "vocab.txt").write_text("[UNK]\ntea\n")
+        (dest / "vocab.txt").write_text("[UNK]\ntea\n", encoding="utf-8")
         (dest / "model.safetensors").write_bytes(b"\x00\x01")  # truncated header
         sm._cache.pop(str(dest.resolve()), None)
         emb = embeddings.StaticEmbedder(self.store, auto_download=False)
@@ -310,18 +322,19 @@ class RealModelTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             ref_dir = Path(tmp)
             (ref_dir / "vocab.txt").write_bytes((Path(REAL) / "vocab.txt").read_bytes())
-            (ref_dir / "model.safetensors").symlink_to(os.environ["MEMORY_BUCKETS_MODEL_F32"])
+            symlink_or_skip(self, os.environ["MEMORY_BUCKETS_MODEL_F32"], ref_dir / "model.safetensors")
             ref = sm.StaticModel(ref_dir)
             for text in list(self.DOCS.values())[:4]:
                 a, b = ref.encode(text), self.model.encode(text)
                 self.assertGreater(sum(x * y for x, y in zip(a, b)), 0.9999)
+            del ref  # unmap before the directory goes: Windows can't delete a mapped file
 
     @unittest.skipUnless(importlib.util.find_spec("tokenizers") and os.environ.get("MEMORY_BUCKETS_REFERENCE_TOKENIZER"),
                          "needs HF tokenizers and MEMORY_BUCKETS_REFERENCE_TOKENIZER")
     def test_tokenizer_matches_reference(self):
         from tokenizers import Tokenizer
         ref = Tokenizer.from_file(os.environ["MEMORY_BUCKETS_REFERENCE_TOKENIZER"])
-        corpus = [line for p in Path(__file__).resolve().parents[1].rglob("*.py") for line in p.read_text().splitlines() if line.strip()]
+        corpus = [line for p in Path(__file__).resolve().parents[1].rglob("*.py") for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
         corpus += list(self.DOCS.values()) + list(self.QUERIES) + [
             "Café naïve résumé Ångström", "日本語のテキストと中文", "emoji 🎉🚀 ok", "ﬁ ligature ＦＵＬＬＷＩＤＴＨ",
             "tab\there\u00a0nbsp\u200bzwsp", "x" * 150, "don't-stop... (really?!) [[wiki|links]] `code_ident`",

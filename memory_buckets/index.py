@@ -192,6 +192,12 @@ def _active_tokens(query: str) -> List[str]:
 
 # -- the index -----------------------------------------------------------------
 
+class IndexInUse(sqlite3.OperationalError):
+    """``rebuild()`` couldn't delete the cache because another process has it open.
+    Only Windows refuses to delete an open file. A ``sqlite3.Error``, so callers that
+    already handle a broken index report this one the same way."""
+
+
 class Index:
     def __init__(self, store: Store, embedder: Optional[StaticEmbedder] = None) -> None:
         self.store = store
@@ -211,11 +217,17 @@ class Index:
         if con is None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             con = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
-            con.execute("PRAGMA journal_mode=WAL")
-            con.execute("PRAGMA synchronous=NORMAL")
-            if not self._schema_ready:
-                self._ensure_schema(con)
-                self._schema_ready = True
+            try:
+                con.execute("PRAGMA journal_mode=WAL")
+                con.execute("PRAGMA synchronous=NORMAL")
+                if not self._schema_ready:
+                    self._ensure_schema(con)
+                    self._schema_ready = True
+            except BaseException:
+                # A corrupt file fails here. close() can't reach a connection it never saw,
+                # and on Windows an open one stops rebuild() from deleting the file.
+                con.close()
+                raise
             self._local.con = con
             with self._conns_lock:
                 alive: List[Tuple[weakref.ReferenceType[threading.Thread], sqlite3.Connection]] = []
@@ -283,11 +295,16 @@ class Index:
     def rebuild(self) -> None:
         """Delete the cache; the next call rebuilds it from the files."""
         self.close()
-        for suffix in ("", "-wal", "-shm"):
+        # WAL and shm first: if another process holds the database, they're held too, so
+        # nothing is deleted. Deleting the database alone would leave a stale WAL behind.
+        for suffix in ("-wal", "-shm", ""):
             try:
                 os.unlink(f"{self.path}{suffix}")
             except FileNotFoundError:
                 pass
+            except PermissionError as err:
+                raise IndexInUse(f"the search index ({self.path}) is open in another process, probably a gateway "
+                                 "or another Hermes session; close it and try again") from err
         self._vec_cache = (None, [])
 
     # -- reconcile -------------------------------------------------------------

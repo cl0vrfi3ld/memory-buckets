@@ -50,7 +50,7 @@ def _build_model(sm, dest: Path, say) -> None:
             say("converting the model to float16")
             sm.convert_to_f16(raw / "model.safetensors", staging / "model.safetensors")
             shutil.copyfile(raw / "vocab.txt", staging / "vocab.txt")
-        (staging / "NOTICE").write_text(sm.notice())
+        (staging / "NOTICE").write_text(sm.notice(), encoding="utf-8")
         try:
             staging.rename(dest)
         except OSError:

@@ -3,7 +3,7 @@ import os
 import unittest
 from unittest import mock
 
-from .helpers import StoreCase, doc
+from .helpers import StoreCase, doc, symlink_or_skip
 from memory_buckets import inbox, migrate
 from memory_buckets.store import StoreError, version
 
@@ -16,10 +16,10 @@ class IndexMigrationTest(StoreCase):
         return self.store.read(path)["content"].split("\n---\n", 1)[1]
 
     def kept(self, project, name):
-        return (migrate.backup_dir(self.store) / project / name).read_text()
+        return (migrate.backup_dir(self.store) / project / name).read_text(encoding="utf-8")
 
     def kept_020(self, project, name):
-        return (migrate.backup_dir(self.store, migrate.INBOX_MIGRATION) / project / name).read_text()
+        return (migrate.backup_dir(self.store, migrate.INBOX_MIGRATION) / project / name).read_text(encoding="utf-8")
 
     def test_index_becomes_the_profile(self):
         original = doc("index", "proj-1 overview", "- a web app\n- deploys with colmena\n")
@@ -79,7 +79,7 @@ class IndexMigrationTest(StoreCase):
                 self.put("zzz/index.md", doc("index", "overview", "- z\n"))
                 target = self.store.memories / "aaa/profile.md"
                 if bad == "symlink":
-                    os.symlink(self.store.memories / "zzz/index.md", target)
+                    symlink_or_skip(self, self.store.memories / "zzz/index.md", target)
                 else:
                     target.mkdir()
                 steps = {s.project: s for s in migrate.run(self.store)}
@@ -119,7 +119,7 @@ class IndexMigrationTest(StoreCase):
         self.assertEqual(steps[0].action, "skip")
         self.assertIn("can't parse proj-1/profile.md", steps[0].detail)
         self.assertTrue((self.store.memories / "proj-1/index.md").exists())
-        self.assertEqual((self.store.memories / "proj-1/profile.md").read_text(), "---\nname: profile\n")
+        self.assertEqual((self.store.memories / "proj-1/profile.md").read_text(encoding="utf-8"), "---\nname: profile\n")
 
     def test_too_large_to_merge_is_skipped(self):
         self.put("proj-1/profile.md", doc("profile", "What proj-1 is", "- x\n" * 9000))
@@ -155,7 +155,7 @@ class IndexMigrationTest(StoreCase):
         self.assertEqual(self.kept("proj-1", "index.md"), first)
         kept = sorted(p.name for p in (migrate.backup_dir(self.store) / "proj-1").glob("index*.md"))
         self.assertEqual(len(kept), 2, kept)
-        self.assertIn(second, [(migrate.backup_dir(self.store) / "proj-1" / n).read_text() for n in kept])
+        self.assertIn(second, [(migrate.backup_dir(self.store) / "proj-1" / n).read_text(encoding="utf-8") for n in kept])
 
     def test_old_inbox_description_is_replaced(self):
         old = doc("inbox", OLD_INBOX_DESCRIPTION, "## imported USER.md\n- Sam\n")
@@ -309,7 +309,7 @@ class IndexMigrationTest(StoreCase):
         self.assertEqual([s.action for s in steps], ["rename", "pending", "remove"])
         self.assertFalse(os.path.lexists(pending))
         self.assertTrue((self.store.memories / "proj-1/profile.md").exists())
-        self.assertEqual((self.store.memories / "global/inbox.md").read_text(), broken, "left for lint")
+        self.assertEqual((self.store.memories / "global/inbox.md").read_text(encoding="utf-8"), broken, "left for lint")
 
     def test_a_missing_inbox_is_a_no_op(self):
         self.assertEqual(migrate.run(self.store), [])
@@ -366,7 +366,7 @@ class PendingMigrationTest(StoreCase):
         self.put("proj-2/profile.md", doc("profile", "What proj-2 is", "- a web app\n"))
 
     def tree(self, root):
-        return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+        return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
 
     def test_backs_up_and_removes_pending_and_applies_nothing(self):
         before = self.tree(self.store.memories)

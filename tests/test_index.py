@@ -1,7 +1,9 @@
 import os
+import sys
 import threading
 import time
 import unittest
+from unittest import mock
 
 from .helpers import FakeEmbedder, StoreCase, doc
 from memory_buckets import index as idx
@@ -114,6 +116,38 @@ class IndexTest(StoreCase):
         index = self.make()
         index.reconcile()
         index.rebuild()
+        self.assertEqual(index.search("climbing", ALL)["results"][0]["path"], "global/people/sam.md")
+
+    def test_a_connection_that_fails_to_open_is_closed(self):
+        # Nothing else can reach it; on Windows it would keep rebuild() from deleting the file.
+        index = self.make()
+        index.path.parent.mkdir(parents=True)
+        index.path.write_bytes(b"not a sqlite file")
+        opened = []
+        real_connect = idx.sqlite3.connect
+
+        def tracking_connect(*args, **kwargs):
+            opened.append(real_connect(*args, **kwargs))
+            return opened[-1]
+
+        with mock.patch.object(idx.sqlite3, "connect", tracking_connect), self.assertRaises(idx.sqlite3.DatabaseError):
+            index.reconcile()
+        with self.assertRaises(idx.sqlite3.ProgrammingError):
+            opened[0].execute("SELECT 1")  # closed
+        index.rebuild()
+        self.assertEqual(index.reconcile(), {"changed": 3, "removed": 0})
+
+    @unittest.skipUnless(sys.platform == "win32", "only Windows refuses to delete an open file")
+    def test_rebuild_while_another_process_has_the_index_open(self):
+        index = self.make()
+        index.reconcile()
+        other = idx.sqlite3.connect(index.path)  # stands in for a gateway's connection
+        self.addCleanup(other.close)
+        other.execute("SELECT count(*) FROM files").fetchone()
+        with self.assertRaises(idx.IndexInUse) as caught:
+            index.rebuild()
+        self.assertIn("open in another process", str(caught.exception))
+        self.assertTrue(index.path.exists(), "nothing deleted")
         self.assertEqual(index.search("climbing", ALL)["results"][0]["path"], "global/people/sam.md")
 
     def test_one_shot_worker_threads_do_not_leak_connections(self):

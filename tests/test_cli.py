@@ -4,7 +4,7 @@ import os
 import unittest
 from unittest import mock
 
-from .helpers import FakeEmbedder, StoreCase, doc, fake_hermes, run_hermes_cli
+from .helpers import FakeEmbedder, StoreCase, doc, fake_hermes, run_hermes_cli, symlink_or_skip
 from memory_buckets import cli, inbox
 
 
@@ -54,8 +54,8 @@ class CliTest(StoreCase):
 
     def test_import_builtin_into_inbox(self):
         (self.home / "memories").mkdir()
-        (self.home / "memories/USER.md").write_text("Name is Sam\n§\nUses they/them\n§\n")
-        (self.home / "memories/MEMORY.md").write_text("Host runs NixOS\nwith flakes")
+        (self.home / "memories/USER.md").write_text("Name is Sam\n§\nUses they/them\n§\n", encoding="utf-8")
+        (self.home / "memories/MEMORY.md").write_text("Host runs NixOS\nwith flakes", encoding="utf-8")
         code, out = self.run_cli("import", "--dry-run")
         self.assertIn("would import 2 entries", out)
         self.assertFalse((self.store.memories / "global/inbox.md").exists())
@@ -76,7 +76,7 @@ class CliTest(StoreCase):
 
     def test_import_recreates_a_deleted_inbox(self):
         (self.home / "memories").mkdir()
-        (self.home / "memories/USER.md").write_text("Name is Sam\n")
+        (self.home / "memories/USER.md").write_text("Name is Sam\n", encoding="utf-8")
         self.put("global/inbox.md", doc("inbox", "Old description", "## imported\n- a\n"))
         (self.store.memories / "global/inbox.md").unlink()
         code, out = self.run_cli("import")
@@ -109,7 +109,7 @@ class CliTest(StoreCase):
                 self.assertEqual(caught.exception.code, 2)
 
     def test_the_skill_has_no_proposal_instructions(self):
-        text = cli.SKILL_FILE.read_text().lower()
+        text = cli.SKILL_FILE.read_text(encoding="utf-8").lower()
         self.assertIn("name: sort-imports\n", text)
         for gone in ("propos", "/memory-apply", "/memory-pending", "/memory-reject", "sort-inbox"):
             self.assertNotIn(gone, text)
@@ -124,7 +124,7 @@ class CliTest(StoreCase):
             self.assertFalse(lines[0][0])
             self.assertIn(f"no sort-imports/SKILL.md in {tmp}", lines[0][1])
             (Path(tmp) / "sort-imports").mkdir()
-            (Path(tmp) / "sort-imports/SKILL.md").write_text("---\nname: sort-imports\n---\nx\n")
+            (Path(tmp) / "sort-imports/SKILL.md").write_text("---\nname: sort-imports\n---\nx\n", encoding="utf-8")
             lines.clear()
             cli._diagnose_skill(Path(tmp), lambda ok, msg: lines.append((ok, msg)))
             self.assertEqual(lines, [(True, f"skill file {Path(tmp) / 'sort-imports/SKILL.md'}")])
@@ -174,7 +174,7 @@ class CliTest(StoreCase):
         self.put("global/Stray.md", "x")
         self.put("proj-1/profile.md", doc("profile", "proj-1"))
         (self.store.memories / ".obsidian").mkdir()
-        (self.store.memories / ".obsidian/app.json").write_text("{}")
+        (self.store.memories / ".obsidian/app.json").write_text("{}", encoding="utf-8")
         self.put("proj-1/index.md", doc("index", "left over from an older version"))
         code, out = self.run_cli("lint")
         self.assertEqual(code, 1)
@@ -188,10 +188,10 @@ class CliTest(StoreCase):
         self.assertNotIn("[[proj-1/profile]]", out)
 
     def test_lint_rejects_slash_links_to_symlinks_invalid_paths_and_traversals(self):
-        (self.store.root / "outside.md").write_text(doc("outside", "Outside"))
+        (self.store.root / "outside.md").write_text(doc("outside", "Outside"), encoding="utf-8")
         self.put("global/Stray.md", doc("Stray", "Invalid path"))
         self.put("global/topics/real.md", doc("real", "Real"))
-        os.symlink(self.store.memories / "global/topics/real.md", self.store.memories / "global/topics/sym.md")
+        symlink_or_skip(self, self.store.memories / "global/topics/real.md", self.store.memories / "global/topics/sym.md")
         self.put(
             "global/topics/nix.md",
             doc("nix", "Nix", "- see [[../outside]] and [[global/Stray]] and [[global/topics/sym]]\n"),
@@ -281,7 +281,7 @@ class CliTest(StoreCase):
         pending = self.store.root / "_pending"
         pending.mkdir()
         for pid in ("a1b2c3", "d4e5f6"):
-            (pending / f"{pid}.json").write_text(f'{{"id": "{pid}", "project": "proj-1"}}\n')
+            (pending / f"{pid}.json").write_text(f'{{"id": "{pid}", "project": "proj-1"}}\n', encoding="utf-8")
         self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## added in conversation 2026-10-02\n- a\n"))
         code, out = self.run_cli("status")
         self.assertIn("migration   _pending/ left over from 0.1.0 (2 proposals); run `hermes memory-buckets migrate`", out)
@@ -324,7 +324,7 @@ class CliTest(StoreCase):
         with tempfile.TemporaryDirectory() as tmp:
             skills_dir = Path(tmp) / "skills"
             (skills_dir / "sort-imports").mkdir(parents=True)
-            (skills_dir / "sort-imports/SKILL.md").write_text("---\nname: sort-imports\n---\n# Sort\n")
+            (skills_dir / "sort-imports/SKILL.md").write_text("---\nname: sort-imports\n---\n# Sort\n", encoding="utf-8")
 
             sc_mod = types.SimpleNamespace(scan_skill_commands=lambda: {})
             su_mod = types.SimpleNamespace(

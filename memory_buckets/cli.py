@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import posixpath
 import re
 import sys
 import time
@@ -24,8 +25,8 @@ from . import config as config_mod
 from . import static_model
 from ._paths import SKILLS_DIR
 from .embeddings import EmbeddingError, make_embedder, min_similarity
-from .index import Index
-from .store import GLOBAL, MAX_FILE_BYTES, Store, StoreError, stem, validate_path
+from .index import Index, IndexInUse
+from .store import GLOBAL, MAX_FILE_BYTES, Store, StoreError, is_link, stem, validate_path
 from .tools import TOOL_NAMES
 
 ENTRY_DELIMITER = "\n§\n"  # Hermes tools/memory_tool_store.py
@@ -35,7 +36,7 @@ SKILL_FILE = SKILLS_DIR / "sort-imports" / "SKILL.md"
 
 def import_prompt() -> str:
     """The sort-imports skill's body: the same instructions, pasted as a prompt."""
-    text = SKILL_FILE.read_text()
+    text = SKILL_FILE.read_text(encoding="utf-8")
     return frontmatter.parse(text)[1].strip() if text.startswith("---") else text.strip()
 
 
@@ -289,7 +290,7 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
     if local.is_dir():
         for md in local.rglob("SKILL.md"):
             try:
-                text = md.read_text(errors="replace")
+                text = md.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
             if "global/inbox.md" in text and md.resolve() != skill_md.resolve():
@@ -309,16 +310,17 @@ def lint(store: Store) -> List[str]:
         return problems
     for dirpath, dirnames, filenames in os.walk(store.memories):
         dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-        rel_dir = os.path.relpath(dirpath, store.memories)
-        for d in dirnames:
-            if os.path.islink(os.path.join(dirpath, d)):
-                problems.append(f"{os.path.normpath(os.path.join(rel_dir, d))}: symlinked directory (ignored)")
+        rel_dir = os.path.relpath(dirpath, store.memories).replace(os.sep, "/")  # memory paths always use '/'
+        for d in list(dirnames):
+            if is_link(os.path.join(dirpath, d)):
+                problems.append(f"{posixpath.normpath(posixpath.join(rel_dir, d))}: symlinked directory (ignored)")
+                dirnames.remove(d)  # os.walk on Python < 3.12 would descend into a junction
         for name in sorted(filenames):
             if name.startswith("."):
                 continue
             rel = name if rel_dir == "." else f"{rel_dir}/{name}"
             full = os.path.join(dirpath, name)
-            if os.path.islink(full):
+            if is_link(full):
                 problems.append(f"{rel}: symlink (ignored)")
                 continue
             try:
@@ -422,7 +424,11 @@ def cmd_migrate(args) -> int:
 
 def cmd_reindex(args) -> int:
     _, _, store, index = _open(args)
-    index.rebuild()
+    try:
+        index.rebuild()
+    except IndexInUse as err:
+        _out(str(err))
+        return 1
     counts = index.reconcile()
     _out(f"indexed {counts['changed']} file(s)")
     if args.embed:
@@ -500,7 +506,7 @@ def _builtin_entries(memories_dir: Path) -> List[tuple]:
     for name in ("USER.md", "MEMORY.md"):
         path = memories_dir / name
         if path.is_file():
-            entries = [e.strip() for e in path.read_text(errors="replace").split(ENTRY_DELIMITER)]
+            entries = [e.strip() for e in path.read_text(encoding="utf-8", errors="replace").split(ENTRY_DELIMITER)]
             out.append((name, path, [e for e in entries if e]))
     return out
 

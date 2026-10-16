@@ -196,8 +196,9 @@ def _profile_state(store: Store, path: str) -> str:
 
 
 def _home_relative(path: str) -> str:
-    home = os.path.expanduser("~").rstrip(os.sep)
-    if home and (path == home or path.startswith(home + os.sep)):
+    home = os.path.expanduser("~").rstrip("/\\")
+    # normcase: Windows paths compare case-insensitively and with either separator.
+    if home and os.path.normcase(path + os.sep).startswith(os.path.normcase(home + os.sep)):
         return "~" + path[len(home) :]
     return path
 

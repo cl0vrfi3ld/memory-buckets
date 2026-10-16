@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from pathlib import Path
 
 from . import PLUGIN_DIR, memory_buckets
 from memory_buckets import _compat, frontmatter, snapshot, tools
@@ -43,7 +44,7 @@ class RegisterTest(unittest.TestCase):
         provider = ctx.providers[0]
         with tempfile.TemporaryDirectory() as home:
             provider.initialize("s1", hermes_home=home, platform="telegram", agent_context="primary")
-            self.assertEqual(str(provider.store.root), f"{home}/memory-buckets")
+            self.assertEqual(provider.store.root, Path(home) / "memory-buckets")
             self.assertEqual(provider._state("s1").platform, "telegram")
             self.assertTrue((provider.store.memories / "global").is_dir(), "store exists as soon as it's active")
             provider.shutdown()
@@ -103,11 +104,11 @@ class RegisterTest(unittest.TestCase):
 
     def test_hermes_discovery_heuristic_matches(self):
         # plugins/memory/__init__.py::_is_memory_provider_dir greps __init__.py.
-        text = (PLUGIN_DIR / "__init__.py").read_text()
+        text = (PLUGIN_DIR / "__init__.py").read_text(encoding="utf-8")
         self.assertTrue("MemoryProvider" in text or "register_memory_provider" in text)
 
     def test_manifest_declares_no_kind(self):
-        manifest = (PLUGIN_DIR / "plugin.yaml").read_text()
+        manifest = (PLUGIN_DIR / "plugin.yaml").read_text(encoding="utf-8")
         self.assertIn("name: memory-buckets", manifest)
         self.assertRegex(manifest, r"(?m)^manifest_version: 2$")
         self.assertRegex(manifest, r"(?m)^api_version: 1$")
@@ -117,8 +118,8 @@ class RegisterTest(unittest.TestCase):
     @unittest.skipUnless((PLUGIN_DIR / "pyproject.toml").exists(), "installed package: no pyproject.toml")
     def test_pip_and_plugin_metadata_agree(self):
         import re
-        pyproject = (PLUGIN_DIR / "pyproject.toml").read_text()
-        manifest = (PLUGIN_DIR / "plugin.yaml").read_text()
+        pyproject = (PLUGIN_DIR / "pyproject.toml").read_text(encoding="utf-8")
+        manifest = (PLUGIN_DIR / "plugin.yaml").read_text(encoding="utf-8")
         version = lambda text: re.search(r'(?m)^version\s*[:=]\s*"?([^"\s]+)', text).group(1)  # noqa: E731
         self.assertEqual(version(pyproject), version(manifest))
         self.assertIn('memory-buckets = "memory_buckets"', pyproject, "entry point name must be the provider name")

@@ -1,7 +1,8 @@
 """The store contract.
 
 Owns: path rules, version tokens, read/list, compare-and-swap write and delete,
-and the ``.lock`` flock. The store is a plain directory, not a git repo.
+and the ``.lock`` file lock (``flock``, or ``msvcrt.locking`` on Windows). The
+store is a plain directory, not a git repo.
 
 Layout::
 
@@ -16,10 +17,11 @@ Layout::
 from __future__ import annotations
 
 import errno
-import fcntl
 import hashlib
 import os
 import re
+import stat
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -29,9 +31,45 @@ from typing import Callable, Dict, Iterator, List, Optional
 
 from . import frontmatter
 
+if sys.platform == "win32":
+    import msvcrt
+
+    def _try_lock(fd: int) -> bool:
+        """Lock byte 0 (the fd was just opened, so that's where it points)."""
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError as err:
+            # Held elsewhere: EACCES or EDEADLOCK on Windows, errno 0 under Wine.
+            if err.errno not in (0, errno.EACCES, errno.EDEADLOCK):
+                raise
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        # Closing would release it too, but Windows only promises "eventually".
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+else:
+    import fcntl
+
+    def _try_lock(fd: int) -> bool:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as err:
+            if err.errno not in (errno.EAGAIN, errno.EACCES):
+                raise
+            return False
+        return True
+
+    def _unlock(fd: int) -> None:
+        pass  # closing the fd releases the flock
+
 MAX_FILE_BYTES = 48 * 1024
 LOCK_TIMEOUT_S = 5.0
+SHARING_RETRY_S = 1.0
 NEW = "new"
+_IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003  # a junction; stat only defines it on Windows
 
 # Paths are relative to <store>/memories. Each scope is a directory: `global/`
 # or a project id. `global` is reserved, so it can't be a project id.
@@ -67,6 +105,16 @@ class StoreError(Exception):
 
 def is_project_id(value: str) -> bool:
     return bool(SEGMENT_RE.match(value or "")) and value != GLOBAL
+
+
+def is_link(path: str | os.PathLike[str]) -> bool:
+    """A symlink, or on Windows a junction: both can lead out of the store. Not any
+    reparse point, since OneDrive's online-only files are reparse points too."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) == _IO_REPARSE_TAG_MOUNT_POINT
 
 
 def validate_path(path: str) -> str:
@@ -146,7 +194,7 @@ class Store:
         current = self.memories
         for part in [""] + path.split("/"):
             current = current / part if part else current
-            if current.is_symlink():
+            if is_link(current):
                 raise StoreError("invalid_path", f"{path!r}: symlinks aren't allowed in the store")
         return current
 
@@ -173,11 +221,11 @@ class Store:
             return
         found = []
         for dirpath, dirnames, filenames in os.walk(self.memories):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".") and not os.path.islink(os.path.join(dirpath, d))]
-            rel_dir = os.path.relpath(dirpath, self.memories)
+            dirnames[:] = [d for d in dirnames if not d.startswith(".") and not is_link(os.path.join(dirpath, d))]
+            rel_dir = os.path.relpath(dirpath, self.memories).replace(os.sep, "/")  # memory paths always use '/'
             for name in filenames:
                 rel = name if rel_dir == "." else f"{rel_dir}/{name}"
-                if os.path.islink(os.path.join(dirpath, name)):
+                if is_link(os.path.join(dirpath, name)):
                     continue
                 try:
                     validate_path(rel)
@@ -190,7 +238,7 @@ class Store:
         """The project buckets that exist on disk, sorted."""
         if not self.memories.is_dir():
             return []
-        return sorted(p.name for p in self.memories.iterdir() if p.is_dir() and not p.is_symlink() and is_project_id(p.name))
+        return sorted(p.name for p in self.memories.iterdir() if p.is_dir() and not is_link(p) and is_project_id(p.name))
 
     def list(self, prefix: str = "") -> List[Dict[str, object]]:
         out = []
@@ -205,37 +253,40 @@ class Store:
 
     @contextmanager
     def lock(self, timeout: float = LOCK_TIMEOUT_S):
-        """Exclusive ``flock`` on ``<root>/.lock``. Per open file description, so it
-        also excludes other provider instances and threads in this process."""
+        """Exclusive lock on ``<root>/.lock``. Per open file (``flock``) or per handle
+        (``msvcrt.locking``), so it also excludes other provider instances and threads
+        in this process."""
         self.root.mkdir(parents=True, exist_ok=True)
         fd = os.open(self.root / ".lock", os.O_RDWR | os.O_CREAT, 0o666)
+        locked = False
         try:
             deadline = time.monotonic() + timeout
-            while True:
-                try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except OSError as err:
-                    if err.errno not in (errno.EAGAIN, errno.EACCES):
-                        raise
-                    if time.monotonic() >= deadline:
-                        raise StoreError("locked", f"store is locked by another writer (waited {timeout:g}s)") from None
-                    time.sleep(0.02)
+            while not _try_lock(fd):
+                if time.monotonic() >= deadline:
+                    raise StoreError("locked", f"store is locked by another writer (waited {timeout:g}s)")
+                time.sleep(0.02)
+            locked = True
             yield
         finally:
-            os.close(fd)  # closing the fd releases the flock
+            try:
+                if locked:
+                    _unlock(fd)
+            finally:
+                os.close(fd)
 
     def _atomic_write(self, target: Path, data: bytes) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.parent / f".{target.name}.tmp.{os.getpid()}.{threading.get_ident()}"
         try:
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
+            # O_BINARY: Windows opens fds in text mode by default, which would turn
+            # every \n into \r\n on disk and break the version of what we just wrote.
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o666)
             try:
                 os.write(fd, data)
                 os.fsync(fd)
             finally:
                 os.close(fd)
-            os.replace(tmp, target)
+            _retrying(os.replace, tmp, target)
         except BaseException:
             try:
                 os.unlink(tmp)  # don't leave a partial .tmp behind
@@ -283,7 +334,7 @@ class Store:
                     current_version=current_version,
                     current_content=current.decode("utf-8", errors="replace"),
                 )
-            target.unlink()
+            _retrying(target.unlink)
             surviving = target.parent
             for parent in (target.parent, target.parent.parent):
                 if parent != self.memories and parent.is_dir():
@@ -296,7 +347,31 @@ class Store:
         return {"path": path}
 
 
+def _retrying(fn: Callable[..., None], *args) -> None:
+    """Windows won't replace or delete a file while another process has it open
+    (WinError 5 or 32): another Hermes session reading it, an editor, a virus
+    scanner. Those holds usually last milliseconds, so retry for a moment, then
+    report it like a held store lock: try again later."""
+    deadline = time.monotonic() + SHARING_RETRY_S
+    while True:
+        try:
+            fn(*args)
+            return
+        except PermissionError as err:
+            if sys.platform != "win32":
+                raise
+            if time.monotonic() >= deadline:
+                name = os.path.basename(err.filename2 or err.filename or "")
+                raise StoreError("locked", f"{name} is open in another program (waited {SHARING_RETRY_S:g}s); "
+                                 "try again shortly") from err
+            time.sleep(0.02)
+
+
 def _fsync_dir(path: Path) -> None:
+    if sys.platform == "win32":
+        # os.open can't open a directory on Windows, and there's no stdlib way to
+        # flush one; the rename's durability is whatever NTFS's journal gives it.
+        return
     fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(fd)

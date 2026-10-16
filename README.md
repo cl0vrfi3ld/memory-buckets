@@ -19,7 +19,8 @@ server or GPU.
    ```
    `--no-enable` skips the general-plugin prompt (`memory.provider` is what
    activates a memory provider).
-2. Set it as your memory provider in `~/.hermes/config.yaml`:
+2. Set it as your memory provider in `~/.hermes/config.yaml`
+   (`%LOCALAPPDATA%\hermes\config.yaml` on Windows):
    ```yaml
    memory:
      provider: memory-buckets
@@ -36,9 +37,10 @@ and Nix installs bundle the model at build time; see [Install](#install).
 Whichever install method you use, enable the provider by setting
 `memory.provider: memory-buckets` in `config.yaml`.
 
-Requirements are Linux or macOS, Python 3.10+, and a `sqlite3` module compiled with
-FTS5 (`hermes memory-buckets diagnose` checks this). Windows isn't supported because
-the store coordinates writes with `fcntl` file locks.
+Requirements are Linux, macOS or Windows, Python 3.10+, and a `sqlite3` module compiled
+with FTS5 (`hermes memory-buckets diagnose` checks this). On Windows the plugin runs on
+Hermes's native install, where `$HERMES_HOME` is `%LOCALAPPDATA%\hermes` and
+`config.yaml` lives there too.
 
 ### Plugin directory
 
@@ -50,6 +52,14 @@ directory is named `memory-buckets`:
 git clone https://git.cl0vr.co/cl0vr/memory-buckets ~/.hermes/plugins/memory-buckets
 # or
 ln -s ~/src/memory-buckets ~/.hermes/plugins/memory-buckets
+```
+
+On Windows, in PowerShell (a junction needs no admin rights, unlike a symlink):
+
+```powershell
+git clone https://git.cl0vr.co/cl0vr/memory-buckets "$env:LOCALAPPDATA\hermes\plugins\memory-buckets"
+# or
+New-Item -ItemType Junction -Path "$env:LOCALAPPDATA\hermes\plugins\memory-buckets" -Target "$HOME\src\memory-buckets"
 ```
 
 ### pip
@@ -412,6 +422,8 @@ See [CHANGELOG.md](CHANGELOG.md) for full release notes.
 Inside the Nix devshell (`direnv allow` or `nix develop`):
 - `sync` creates or updates `.venv` with `uv sync`;
 - `check` runs the test suite (`uv run pytest tests/`);
+- `check-windows` runs it on Windows Python under Wine (`tests/wine.sh`, x86_64 Linux;
+  the first run fetches Wine and a Windows CPython into `~/.cache/memory-buckets/wine`);
 - `lint` runs `ruff check .` and `ruff format --check .`;
 - `run` executes a command inside the project venv (`uv run`).
 

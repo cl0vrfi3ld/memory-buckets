@@ -55,7 +55,8 @@ class ProviderTest(StoreCase):
         self.assertIn("global/topics/nix.md", p.system_prompt_block(), "in-place compression rebuilds snapshot")
 
     def test_initialize_expands_tilde_in_store_path_and_backup_paths(self):
-        with mock.patch.dict(os.environ, {**self.env, "HOME": str(self.home)}):
+        # expanduser reads HOME on POSIX and USERPROFILE on Windows.
+        with mock.patch.dict(os.environ, {**self.env, "HOME": str(self.home), "USERPROFILE": str(self.home)}):
             uninit = prov.MemoryBucketsProvider()
             self.assertEqual(uninit.backup_paths(), [])
             with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_STORE": "~/custom-store"}):

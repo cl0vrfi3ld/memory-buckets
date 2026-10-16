@@ -353,7 +353,7 @@ class ToolsTest(StoreCase):
 
     def test_inbox_without_frontmatter_is_repaired_on_import(self):
         # Hand-written (e.g. in Obsidian): every import and mirrored write used to fail.
-        (self.store.memories / "global/inbox.md").write_text("- jotted down by hand\n")
+        (self.store.memories / "global/inbox.md").write_text("- jotted down by hand\n", encoding="utf-8")
         self.assertIsNotNone(inbox.append(self.store, "imported MEMORY.md", ["y"], source="cli:import"))
         text = self.content("global/inbox.md")
         self.assertTrue(text.startswith(f"---\nname: inbox\ndescription: {inbox.DESCRIPTION}"), text)
@@ -362,18 +362,18 @@ class ToolsTest(StoreCase):
 
     def test_unparseable_inbox_is_refused_not_clobbered(self):
         broken = "---\nname: inbox\n- no closing fence\n"
-        (self.store.memories / "global/inbox.md").write_text(broken)
+        (self.store.memories / "global/inbox.md").write_text(broken, encoding="utf-8")
         with self.assertRaises(StoreError) as caught:
             inbox.append(self.store, "imported", ["y"], source="cli:import")
         self.assertEqual(caught.exception.code, "invalid_frontmatter")
         got = self.call("memory_str_replace", path="global/inbox.md", old="no closing", new="x")
         self.assertEqual(got["error"]["code"], "invalid_frontmatter")
-        self.assertEqual((self.store.memories / "global/inbox.md").read_text(), broken)
+        self.assertEqual((self.store.memories / "global/inbox.md").read_text(encoding="utf-8"), broken)
 
     def test_inbox_heading_inside_a_code_block_is_not_a_section(self):
         inbox.append(self.store, "imported MEMORY.md", ["a"], source="cli:import")
         path = self.store.memories / "global/inbox.md"
-        path.write_text(path.read_text() + "```\n## not a heading\n- not an entry\n```\n")
+        path.write_text(path.read_text(encoding="utf-8") + "```\n## not a heading\n- not an entry\n```\n", encoding="utf-8")
         inbox.append(self.store, "imported MEMORY.md", ["b"], source="cli:import")
         text = self.content("global/inbox.md")
         self.assertEqual(text.count("## imported MEMORY.md"), 1, "a fenced heading is not the last section")
@@ -381,7 +381,7 @@ class ToolsTest(StoreCase):
 
     def test_no_tool_can_edit_a_file_with_broken_frontmatter(self):
         # Spec for the header's "tell the user" line: every write path refuses the file.
-        (self.store.memories / "global/topics/nix.md").write_text("- flakes\n")
+        (self.store.memories / "global/topics/nix.md").write_text("- flakes\n", encoding="utf-8")
         got = self.call("memory_append", path="global/topics/nix.md", lines=["x"])
         self.assertEqual(got["error"]["code"], "invalid_frontmatter")
         got = self.call("memory_write", path="global/topics/nix.md", description="Read for Nix",
@@ -391,11 +391,11 @@ class ToolsTest(StoreCase):
         got = self.call("memory_str_replace", path="global/topics/nix.md", old="- flakes", new="- y",
                         if_version=version(current))
         self.assertEqual(got["error"]["code"], "invalid_frontmatter")
-        self.assertEqual((self.store.memories / "global/topics/nix.md").read_text(), "- flakes\n")
+        self.assertEqual((self.store.memories / "global/topics/nix.md").read_text(encoding="utf-8"), "- flakes\n")
 
     def test_unparseable_frontmatter_refusal_names_the_user(self):
         # Only the user can fix frontmatter that won't parse; the refusal says who.
-        (self.store.memories / "global/topics/nix.md").write_text("---\nname: nix\n- flakes\n")
+        (self.store.memories / "global/topics/nix.md").write_text("---\nname: nix\n- flakes\n", encoding="utf-8")
         got = self.call("memory_append", path="global/topics/nix.md", lines=["x"])
         self.assertEqual(got["error"]["code"], "invalid_frontmatter")
         self.assertTrue(got["error"]["message"].endswith("; tell the user to fix it by hand"), got)
@@ -437,7 +437,26 @@ class ToolsTest(StoreCase):
         from pathlib import Path
         root = Path(tools.__file__).resolve().parent.parent
         for py_file in sorted([*root.glob("memory_buckets/*.py"), *root.glob("tests/*.py")]):
-            self.assertNotRegex(py_file.read_text(), r"A" + r"DR-\d+", f"found private decision ref in {py_file.name}")
+            self.assertNotRegex(py_file.read_text(encoding="utf-8"), r"A" + r"DR-\d+", f"found private decision ref in {py_file.name}")
+
+    def test_text_io_always_names_its_encoding(self):
+        # Without encoding=, Windows reads and writes text as cp1252 (UTF-8 mode is off by default).
+        import ast
+        from pathlib import Path
+        root = Path(tools.__file__).resolve().parent.parent
+        bare = []
+        for py_file in sorted([*root.glob("memory_buckets/*.py"), *root.glob("tests/*.py"), root / "hatch_build.py"]):
+            for node in ast.walk(ast.parse(py_file.read_text(encoding="utf-8"))):
+                if not isinstance(node, ast.Call) or any(k.arg == "encoding" for k in node.keywords):
+                    continue
+                func = node.func
+                if isinstance(func, ast.Attribute) and func.attr in ("read_text", "write_text"):
+                    bare.append(f"{py_file.name}:{node.lineno} {func.attr}")
+                elif isinstance(func, ast.Name) and func.id == "open":
+                    mode = node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "mode"), None)
+                    if not (isinstance(mode, ast.Constant) and "b" in str(mode.value)):
+                        bare.append(f"{py_file.name}:{node.lineno} open")
+        self.assertEqual(bare, [], "text I/O without encoding='utf-8'")
 
 
 if __name__ == "__main__":

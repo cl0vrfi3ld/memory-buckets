@@ -29,9 +29,13 @@ class HermesIntegrationTest(unittest.TestCase):
         # skills.external_dirs is how /sort-imports becomes a slash command (README: Importing built-in memory).
         (home / "config.yaml").write_text(
             "memory:\n  provider: memory-buckets\n  memory_enabled: false\n  user_profile_enabled: false\n"
-            f"skills:\n  external_dirs:\n    - {skills_dir}\n")
+            f"skills:\n  external_dirs:\n    - {skills_dir}\n", encoding="utf-8")
         env = {"PATH": os.environ.get("PATH", ""), "HOME": tmp, "HERMES_HOME": str(home), "PYTHONDONTWRITEBYTECODE": "1",
                "MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD": "0"}
+        if sys.platform == "win32":
+            # Python won't start without SYSTEMROOT; the rest keep the probe out of the real user profile.
+            env.update({k: os.environ[k] for k in ("SYSTEMROOT", "COMSPEC", "PATHEXT") if k in os.environ})
+            env.update({k: tmp for k in ("USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")})
         if pythonpath:
             env["PYTHONPATH"] = pythonpath
         proc = subprocess.run([HERMES_PYTHON, str(Path(__file__).with_name("hermes_probe.py"))],
@@ -62,7 +66,8 @@ class HermesIntegrationTest(unittest.TestCase):
                            check=True, capture_output=True, timeout=300,
                            env={**os.environ, "MEMORY_BUCKETS_BUNDLE_MODEL": "0"})
             out = self.probe(tmp, home, pythonpath=str(site), skills_dir=str(site / "memory_buckets/skills"))
-            self.assertIn("/site/memory_buckets", out["provider_file"])
+            self.assertTrue(Path(out["provider_file"]).resolve().is_relative_to((site / "memory_buckets").resolve()),
+                            out["provider_file"])
             self.check(out)
             # Hermes namespaces a pip install's skills "memory_buckets:" and prunes them (README).
             # If this starts failing, Hermes fixed it: drop the fallback in __init__.py.
@@ -77,7 +82,7 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertEqual(out["signature_problems"], [])
         self.assertEqual(len(out["tools"]), 7)
         self.assertEqual(out["core_clash"], [])
-        self.assertTrue(out["store_root"].endswith("hermes-home/memory-buckets"))
+        self.assertEqual(Path(out["store_root"]).parts[-2:], ("hermes-home", "memory-buckets"))
         self.assertTrue(out["store_created_on_init"])
         self.assertTrue(out["write_ok"])
         self.assertTrue(out["file_on_disk"])

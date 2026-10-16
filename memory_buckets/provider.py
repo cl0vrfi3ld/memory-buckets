@@ -5,7 +5,7 @@ agent, which may rotate through several session ids (``on_session_switch``:
 /new, /resume, /branch, compression). ``handle_tool_call`` and
 ``system_prompt_block`` get no session id, so they use the current one. That's
 safe because an agent never runs two turns at once. Concurrent chats are
-separate instances, sharing the store through its flock and the index through
+separate instances, sharing the store through its file lock and the index through
 SQLite.
 
 Set ``MEMORY_BUCKETS_TRACE=1`` to log every hook call (the live smoke test uses it).

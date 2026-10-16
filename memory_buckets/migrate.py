@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import List, NamedTuple, Optional, Tuple
 
 from . import frontmatter, inbox
-from .store import GLOBAL, Store, StoreError, _fsync_dir, check_content, is_project_id, stamp, version
+from .store import GLOBAL, Store, StoreError, _fsync_dir, check_content, is_link, is_project_id, stamp, version
 
 logger = logging.getLogger("memory_buckets")
 
@@ -98,9 +98,9 @@ def leftover_indexes(store: Store) -> List[str]:
         return []
     found = []
     for d in sorted(store.memories.iterdir()):
-        if is_project_id(d.name) and d.is_dir() and not d.is_symlink():
+        if is_project_id(d.name) and d.is_dir() and not is_link(d):
             index = d / "index.md"
-            if index.is_file() and not index.is_symlink():
+            if index.is_file() and not is_link(index):
                 found.append(d.name)
     return found
 
@@ -111,7 +111,7 @@ def leftover_pending(store: Store) -> Optional[List[str]]:
     folder = store.root / PENDING_DIR
     if not os.path.lexists(folder):
         return None
-    if folder.is_symlink() or not folder.is_dir():
+    if is_link(folder) or not folder.is_dir():
         return []
     try:
         return sorted(p.name for p in folder.iterdir())
@@ -317,7 +317,7 @@ def _pending_plan(store: Store) -> List[Step]:
     folder = store.root / PENDING_DIR
     if not os.path.lexists(folder):
         return []
-    if folder.is_symlink() or not folder.is_dir():
+    if is_link(folder) or not folder.is_dir():
         return [Step(PENDING_DIR, "skip", "it isn't a folder. Remove it by hand")]
     try:
         names = sorted(p.name for p in folder.iterdir())
@@ -326,7 +326,7 @@ def _pending_plan(store: Store) -> List[Step]:
     steps = []
     for name in names:
         path = folder / name
-        if path.is_symlink() or not path.is_file():
+        if is_link(path) or not path.is_file():
             steps.append(Step(PENDING_DIR, "skip", "it isn't a regular file. Move it out by hand, then run "
                                                    "`hermes memory-buckets migrate`", name))
         else:

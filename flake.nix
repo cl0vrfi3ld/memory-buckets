@@ -109,6 +109,12 @@
                 command = ''cd "$PRJ_ROOT" && uv run pytest tests/ "$@"'';
               }
               {
+                name = "check-windows";
+                category = "test";
+                help = "Run the test suite on Windows Python under Wine (x86_64 Linux)";
+                command = ''"$PRJ_ROOT/tests/wine.sh" "$@"'';
+              }
+              {
                 name = "lint";
                 category = "test";
                 help = "ruff check + format --check";

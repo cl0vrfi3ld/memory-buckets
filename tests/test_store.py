@@ -1,10 +1,12 @@
 import multiprocessing
 import os
+import sys
+import threading
 import time
 import unittest
 from unittest import mock
 
-from .helpers import StoreCase, doc
+from .helpers import StoreCase, doc, symlink_or_skip
 from memory_buckets import store as st
 
 
@@ -43,7 +45,7 @@ class StoreTest(StoreCase):
         self.assertIsNone(self.store.read_bytes("global/topics/nix.md"))
 
     def test_lock_times_out_while_another_process_holds_it(self):
-        ctx = multiprocessing.get_context("fork")
+        ctx = multiprocessing.get_context("spawn")  # Windows has no fork
         ready, release = ctx.Event(), ctx.Event()
         proc = ctx.Process(target=_hold_lock, args=(self.store.root, ready, release))
         proc.start()
@@ -79,14 +81,14 @@ class StoreTest(StoreCase):
         self.put("proj-2/topics/x.md", doc("x", "X"))
         self.put("proj-1/profile.md", doc("profile", "P"))
         self.put("global/topics/nix.md", doc("nix", "Nix"))
-        (self.store.memories / "not-a-bucket.txt").write_text("x")
+        (self.store.memories / "not-a-bucket.txt").write_text("x", encoding="utf-8")
         (self.store.memories / "Bad_Slug").mkdir()
         self.assertEqual(self.store.projects(), ["proj-1", "proj-2"])
 
     def test_projects_ignores_symlinked_bucket_directories(self):
         outside = self.home / "outside-proj"
         outside.mkdir()
-        os.symlink(outside, self.store.memories / "sym-proj")
+        symlink_or_skip(self, outside, self.store.memories / "sym-proj")
         self.put("proj-1/profile.md", doc("profile", "P"))
         self.assertEqual(self.store.projects(), ["proj-1"])
 
@@ -133,6 +135,53 @@ class StoreTest(StoreCase):
             self.assertEqual(caught.exception.code, "invalid_path")
             with self.assertRaises(st.StoreError):
                 self.store.write(path, doc("x", "x"), "new")
+
+    # -- Windows: files held open by other processes, junctions --------------------
+
+    @unittest.skipUnless(sys.platform == "win32", "only Windows refuses to replace or delete an open file")
+    def test_writes_and_deletes_wait_out_a_brief_reader(self):
+        path = "global/topics/nix.md"
+        v1 = self.store.write(path, doc("nix", "Nix"), "new")["version"]
+        reader = open(self.store.memories / path, "rb")
+        threading.Timer(0.2, reader.close).start()
+        v2 = self.store.write(path, doc("nix", "Nix", "- flakes\n"), v1)["version"]
+        self.assertEqual(self.store.read(path)["version"], v2)
+        reader = open(self.store.memories / path, "rb")
+        threading.Timer(0.2, reader.close).start()
+        self.store.delete(path, v2)
+        self.assertIsNone(self.store.read_bytes(path))
+
+    @unittest.skipUnless(sys.platform == "win32", "only Windows refuses to replace or delete an open file")
+    def test_a_reader_that_never_lets_go_is_reported_as_locked(self):
+        path = "global/topics/nix.md"
+        v1 = self.store.write(path, doc("nix", "Nix"), "new")["version"]
+        with open(self.store.memories / path, "rb"), mock.patch.object(st, "SHARING_RETRY_S", 0.1):
+            for attempt in (lambda: self.store.write(path, doc("nix", "Nix", "- flakes\n"), v1),
+                            lambda: self.store.delete(path, v1)):
+                with self.assertRaises(st.StoreError) as caught:
+                    attempt()
+                self.assertEqual(caught.exception.code, "locked")
+                self.assertIn("nix.md is open in another program", caught.exception.message)
+        self.assertEqual(self.store.read(path)["version"], v1, "unchanged")
+        leftovers = [n for _, _, names in os.walk(self.store.root) for n in names if ".tmp." in n]
+        self.assertEqual(leftovers, [])
+
+    @unittest.skipUnless(sys.platform == "win32", "junctions are Windows-only")
+    def test_junctions_are_treated_like_symlinks(self):
+        import _winapi
+        outside = self.home / "outside"
+        (outside / "topics").mkdir(parents=True)
+        (outside / "topics" / "nix.md").write_text(doc("nix", "Nix"), encoding="utf-8")
+        try:
+            _winapi.CreateJunction(str(outside), str(self.store.memories / "proj-1"))
+        except OSError as err:
+            self.skipTest(f"can't create a junction here: {err}")
+        self.assertTrue(st.is_link(self.store.memories / "proj-1"))
+        self.assertEqual(self.store.projects(), [])
+        self.assertEqual(list(self.store.iter_paths()), [])
+        with self.assertRaises(st.StoreError) as caught:
+            self.store.read("proj-1/topics/nix.md")
+        self.assertEqual(caught.exception.code, "invalid_path")
 
 
 if __name__ == "__main__":

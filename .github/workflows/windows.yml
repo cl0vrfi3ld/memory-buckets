@@ -1,0 +1,103 @@
+name: windows
+
+# The test suite on native Windows, plus the plugin loaded by a real Hermes there.
+# Linux is covered by `nix flake check`; this exists because nobody wants a Windows box.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Hermes only supports installs made by its own installer, so the integration job runs
+  # an editable checkout (what Hermes's own docs suggest for development). Bump with releases.
+  HERMES_REF: v0.22.2
+  # Windows' real default text encoding is cp1252, which the encoding fixes are for.
+  # 0 is already the default before Python 3.15; this guards against a runner that sets it.
+  PYTHONUTF8: "0"
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python: "3.10"  # the floor in pyproject.toml
+          - os: windows-latest
+            python: "3.14"  # what Hermes ships on Windows
+          - os: windows-11-arm
+            python: "3.14"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      # The real model enables the real-model tests (mmap of the weights, encode).
+      # static_model.py pins the revision and hashes, so it keys the cache.
+      - uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/mb-model
+          key: model-${{ hashFiles('memory_buckets/static_model.py') }}
+
+      - name: Fetch the embedding model
+        run: |
+          uv run python -c "
+          import os
+          from pathlib import Path
+          from memory_buckets import static_model as sm
+          d = sm.fetch(Path(os.environ['RUNNER_TEMP']) / 'mb-model')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'MEMORY_BUCKETS_MODEL_DIR={d}\n')
+              env.write(f'MEMORY_BUCKETS_MODEL_F32={d / \"model.safetensors\"}\n')
+          "
+
+      - run: uv run pytest -rs
+
+  hermes:
+    name: Hermes integration (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ env.HERMES_REF }}
+          path: .ci/hermes-agent
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      - name: Install Hermes ${{ env.HERMES_REF }}
+        run: |
+          uv venv .ci/hermes-venv --python 3.14
+          uv pip install --python .ci/hermes-venv/Scripts/python.exe -e .ci/hermes-agent
+          echo "HERMES_PYTHON=$GITHUB_WORKSPACE/.ci/hermes-venv/Scripts/python.exe" >> "$GITHUB_ENV"
+
+      # A wrong HERMES_PYTHON skips these tests rather than failing them: fail on any skip.
+      - run: |
+          uv run pytest tests/test_hermes.py -rs | tee pytest.log
+          ! grep -q SKIPPED pytest.log

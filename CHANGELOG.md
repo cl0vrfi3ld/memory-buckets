@@ -6,6 +6,35 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [Unreleased]
+
+### Added
+
+- **Windows support.** The plugin runs on Hermes's native Windows install:
+  - The store's write lock uses `msvcrt.locking` where `fcntl` doesn't exist.
+  - Files are written in binary mode, so `\n` stays `\n` and a write's version
+    matches the bytes on disk.
+  - Memory paths found on disk always use `/`, so `topics/`, `areas/` and
+    `people/` files show up in `list`, `search`, the index and `lint`.
+  - Every text read and write names UTF-8 instead of the cp1252 default. The
+    built-in memory import splits `MEMORY.md` on `§` correctly as a result.
+  - Replacing or deleting a memory file waits up to a second for another program
+    holding it open (an editor, a virus scanner, another session), then fails with
+    `locked`.
+  - `hermes memory-buckets reindex` reports an index that another process has
+    open instead of crashing.
+  - Junctions count as symlinks: the store refuses them and `lint` reports them.
+- `tests/wine.sh` (devshell: `check-windows`) runs the test suite on Windows
+  Python under Wine.
+
+### Fixed
+
+- An index connection that failed to open (a corrupt `memory.sqlite`) was left
+  open instead of closed. Harmless on Linux; on Windows it kept the rebuild from
+  deleting the broken file.
+- Rebuilding the index deletes `-wal` and `-shm` before the database, so an
+  interrupted rebuild can't leave a stale WAL beside a fresh database.
+
 ## [0.3.0] - 2026-10-15
 
 Retrieval and prefetch matching rework. The index schema is now v4; existing

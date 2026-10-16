@@ -23,6 +23,16 @@ def doc(name, description, body="- a fact\n", extra=""):
     return f"---\nname: {name}\ndescription: {description}\n{extra}---\n{body}"
 
 
+def symlink_or_skip(case, target, link):
+    """os.symlink, or skip the test where it isn't allowed (Windows without Developer Mode)."""
+    try:
+        os.symlink(target, link)
+    except OSError as err:
+        if sys.platform != "win32":
+            raise
+        case.skipTest(f"can't create symlinks here: {err}")
+
+
 def fake_vector(text, dims=DIMS):
     """Hashed bag of words: texts sharing words get similar vectors."""
     vec = [0.0] * dims
@@ -46,7 +56,10 @@ def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere"):
         yield None
 
     def project_for_path(conn, path):
-        owners = [r for r in rows if path == r.primary_path or path.startswith(r.primary_path.rstrip("/") + os.sep)]
+        def owns(folder):  # as Hermes's projects_db: either separator
+            stem = folder.rstrip("/\\")
+            return path == folder or path.startswith((stem + os.sep, stem + "/"))
+        owners = [r for r in rows if owns(r.primary_path)]
         return max(owners, key=lambda r: len(r.primary_path)) if owners else None
 
     pdb = types.ModuleType("hermes_cli.projects_db")
@@ -130,15 +143,15 @@ class StoreCase(unittest.TestCase):
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
+        # The first cleanup runs last, after tests' own cleanups have closed their indexes:
+        # Windows can't delete a directory holding an open SQLite file.
+        self.addCleanup(self._tmp.cleanup)
         self.home = Path(self._tmp.name)
         self.store = store.Store(self.home / "memory-buckets")
         self.store.memories.mkdir(parents=True)
 
-    def tearDown(self):
-        self._tmp.cleanup()
-
     def put(self, path, content):
         target = self.store.memories / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
+        target.write_text(content, encoding="utf-8", newline="")  # the exact bytes, on Windows too
         return target
