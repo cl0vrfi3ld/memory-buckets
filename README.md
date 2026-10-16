@@ -1,51 +1,50 @@
 # memory-buckets
 
-A memory provider for [Hermes Agent](https://hermes-agent.nousresearch.com/)
-that keeps memory the way Claude does: one Markdown "bucket" per subject, read on
-demand. There's a `global` bucket and one per
-[Hermes project](#projects).
+![A banner reading "Memory Buckets" with subtext "Big memory, small footprint" flanked on the right by various blue and grey shapes, including one big bucket containing a circle and a square with rounded corners.](assets/memory-buckets-banner-mono.svg)
 
-- **Plain files.** The store is a directory of Markdown files with frontmatter.
-  It also opens as an Obsidian vault.
-- **Hybrid search.** SQLite FTS5 plus a built-in embedding model that runs
-  in-process. There's no server and no GPU.
-- **Projects from Hermes.** A session's bucket follows the Hermes project it's
-  working in.
+`memory-buckets` is a memory provider for [Hermes Agent](https://hermes-agent.nousresearch.com/)
+modelled on Claude's memory system: one Markdown file per subject, organised into a
+`global` bucket and one bucket per [Hermes project](#projects), read on demand.
+
+The store is a plain directory of Markdown files with YAML frontmatter that you can
+open directly as an Obsidian vault. Search is hybrid, combining SQLite FTS5 with a
+static embedding model that runs in-process in pure stdlib Python without an external
+server or GPU.
 
 ## Quick start
 
-1. Install it as a Hermes plugin:
+1. Install the plugin:
    ```sh
    hermes plugins install --no-enable https://git.cl0vr.co/cl0vr/memory-buckets
    ```
-   `--no-enable` skips a prompt you don't need, because `memory.provider` is
-   what activates a memory provider.
-2. Make it the memory provider in `~/.hermes/config.yaml`:
+   `--no-enable` skips the general-plugin prompt (`memory.provider` is what
+   activates a memory provider).
+2. Set it as your memory provider in `~/.hermes/config.yaml`:
    ```yaml
    memory:
      provider: memory-buckets
    ```
 3. Start a new session (`/new`) or restart the gateway.
-4. Check it: `hermes memory-buckets status`.
+4. Check that it loaded: `hermes memory-buckets status`.
 
-On first use the plugin downloads its embedding model (about 130 MB) in the
-background. Search is keyword-only until the model arrives. Other ways to
-install, some of which bundle the model, are under [Install](#install).
+On first use, a plugin-directory install downloads the embedding model (about 130 MB)
+in the background. Search falls back to keywords until the download finishes. The pip
+and Nix installs bundle the model at build time; see [Install](#install).
 
 ## Install
 
-Hermes finds the plugin whichever way you install it. In every case you still
-set `memory.provider: memory-buckets` yourself.
+Whichever install method you use, enable the provider by setting
+`memory.provider: memory-buckets` in `config.yaml`.
 
-It needs Linux or macOS, Python 3.10 or later, and a `sqlite3` built with FTS5
-(`hermes memory-buckets diagnose` tells you if it isn't). Windows isn't
-supported: the store locks with `fcntl`, which Windows doesn't have.
+Requirements are Linux or macOS, Python 3.10+, and a `sqlite3` module compiled with
+FTS5 (`hermes memory-buckets diagnose` checks this). Windows isn't supported because
+the store coordinates writes with `fcntl` file locks.
 
 ### Plugin directory
 
-`hermes plugins install`, as in the quick start, clones it into
-`$HERMES_HOME/plugins/memory-buckets/`. You can also clone it there yourself,
-or link a checkout you work on. The directory must be named `memory-buckets`:
+`hermes plugins install` clones the repo into `$HERMES_HOME/plugins/memory-buckets/`.
+You can also clone it there by hand or symlink a local checkout, as long as the
+directory is named `memory-buckets`:
 
 ```sh
 git clone https://git.cl0vr.co/cl0vr/memory-buckets ~/.hermes/plugins/memory-buckets
@@ -59,20 +58,21 @@ Install into the Python environment Hermes runs in:
 
 ```sh
 pip install git+https://git.cl0vr.co/cl0vr/memory-buckets
-# or, from a checkout
+# or, from a local checkout
 pip install .
 ```
 
-Hermes finds it through the `hermes_agent.memory_providers` entry point.
-Building the wheel bundles the embedding model (see [Embeddings](#embeddings)).
+Hermes discovers the package through the `hermes_agent.memory_providers` entry point,
+and building the wheel bundles a float16 copy of the embedding model
+(see [Embeddings](#embeddings)).
 
 ### Nix
 
-`nix/package.nix` builds the plugin as a Python package, with the model
-bundled. Give it to Hermes through `extraPythonPackages`, built with Hermes's
-own interpreter. That's the route in the Hermes docs'
-[Distribute for NixOS](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins#distribute-for-nixos).
-The option exists in both the NixOS and the Home Manager module.
+`nix/package.nix` builds the plugin as a Python package with the embedding model
+bundled. Pass it to Hermes via `extraPythonPackages`, built with Hermes's own Python
+interpreter, following
+[Distribute for NixOS](https://hermes-agent.nousresearch.com/docs/developer-guide/plugins#distribute-for-nixos)
+in the Hermes docs (supported in both the NixOS and Home Manager modules):
 
 ```nix
 # flake inputs
@@ -100,11 +100,11 @@ in
 }
 ```
 
-Don't use `extraPlugins`. It links the plugin in as
-`plugins/nix-managed-<name>`, and Hermes names a memory provider after its
-directory, so the provider would be called `nix-managed-memory-buckets`.
+Avoid `extraPlugins` here: Hermes symlinks those entries as
+`plugins/nix-managed-<name>` and derives a memory provider's name from its directory,
+so the provider would register as `nix-managed-memory-buckets`.
 
-The package is about 63 MB. Building it runs the test suite, including the
+The built package is around 63 MB. Building it runs the test suite, including the
 real-model tests.
 
 ## How it works
@@ -116,309 +116,318 @@ $HERMES_HOME/memory-buckets/
   memories/                        every memory file
     global/     profile.md preferences.md inbox.md  topics/ areas/ people/
     <project>/  profile.md preferences.md            topics/ areas/ people/
-  _backup/<version>/               originals a migration changed or removed
-  .index/memory.sqlite             search cache; safe to delete
-  .models/                         the embedding model, if it was downloaded rather than bundled
+  _backup/<version>/               originals kept before a store migration
+  .index/memory.sqlite             search and vector cache (safe to delete)
+  .models/                         downloaded embedding model, when not bundled
 ```
 
-Each file covers one subject. Its frontmatter has `name` (the file's stem) and
-a one-line `description` that says when to read it. The body is plain bullets.
-Every write the plugin makes also stamps `edited_at` (UTC). Edits you make by
-hand don't.
+Each file covers one subject. Its frontmatter carries `name` (matching the filename
+stem), a one-line `description` telling the agent when to read the file, and optional
+`aliases` (other names for the subject). The body is plain Markdown bullets. Writes
+made through the plugin also record `sources` and a UTC `edited_at` timestamp; edits
+you make by hand in Obsidian or an editor are picked up automatically on the next
+search or turn.
 
 ### Projects
 
-Buckets map to Hermes's own Projects: named workspaces with one or more
-folders, kept per profile in `$HERMES_HOME/projects.db`. You create them with
-`hermes project create`, the desktop sidebar, or the agent's `desktop_project`
-tool. The plugin has no project settings of its own.
+Buckets map directly to Hermes Projects, the named workspaces stored per profile in
+`$HERMES_HOME/projects.db`. You create them with `hermes project create`, the desktop
+sidebar, or the `desktop_project` tool; `memory-buckets` doesn't keep a separate
+project list of its own.
 
-A session belongs to the project that owns its working directory. That's the
-same test Hermes uses: the innermost project folder containing it. The working
-directory is, first found wins:
+A session belongs to whichever Hermes project owns its working directory (the
+innermost project folder containing it). The working directory is resolved on every
+tool call, first match winning:
 
-1. the workspace a gateway pins for the turn;
-2. the `cwd` Hermes starts the session with;
-3. the agent's working directory (`terminal.cwd`, or wherever you ran `hermes`).
+1. the session's workspace override, updated mid-turn when you switch projects with
+   `desktop_project` or the desktop sidebar (plain `cd` in the terminal doesn't
+   change it);
+2. the working directory a multi-session gateway pins for the turn;
+3. the `cwd` Hermes passed when starting the session;
+4. the agent's working directory (`terminal.cwd`, or wherever you ran `hermes`).
 
-It's checked on every tool call, so moving a chat into another project takes
-effect immediately. A session outside every project is **unscoped**, and
-`global/` is the only bucket it reads by default.
+Because the check runs per call, switching a chat into a project takes effect right
+away. A session outside every project is unscoped and reads only `global/` by
+default.
 
-The project's slug names its bucket, `memories/<slug>/`. An `_` in the slug
-becomes `-`. Hermes never changes a slug, so the mapping is stable. To attach
-an existing bucket to a project, create the project with that slug:
+A project's slug names its bucket under `memories/<slug>/` (with `_` normalised to
+`-`). Hermes keeps slugs fixed after creation, so to attach an existing bucket on
+disk to a new Hermes project, pass `--slug`:
 
 ```sh
 hermes project create "Home server" ~/src/home-server --slug home-server
 ```
 
-A project session reads `global/` and its own bucket by default. It reads
-other buckets only when asked. What a session may write:
+`hermes memory-buckets status` lists any buckets on disk that don't have a matching
+Hermes project yet.
+
+By default, a project session reads `global/` and its own bucket, and only reads
+other projects' buckets when you ask about them. Write access depends on the session:
 
 | Session | `global/` | Own bucket | Other buckets |
 |---|---|---|---|
-| Unscoped | full | — | add only |
+| Unscoped | full | - | add only |
 | Project | full | full | add only |
 | Read-only (cron, subagents, flushes, `readonly: true`) | none | none | none |
 
-**Full** is every write tool. **Add only** is `memory_append` to an existing
-file and `memory_write` with `if_version: "new"` to create one. Editing,
-overwriting and deleting another project's files are refused, and the error
-names both ways to add. Those stay with that project's own
-sessions. A cron job under `cron_writes: true` writes like any other session.
+Full access allows all write tools (`memory_write`, `memory_str_replace`,
+`memory_append`, `memory_delete`). Add-only access allows appending to an existing
+file with `memory_append` or creating a new file with `memory_write` and
+`if_version: "new"`, while edits, overwrites, and deletes in another project's bucket
+are refused and left to sessions actually working in that project. Setting
+`cron_writes: true` lets cron sessions write like a normal session.
 
-"Other buckets" are the buckets on disk plus every Hermes project, including
-ones with no memory yet. A write anywhere else is refused; the agent is told
-to save a fact about any other project in `global/topics/<name>.md`.
+"Other buckets" covers every bucket on disk plus every Hermes project, including
+projects that have no memory files yet. Facts about a project that has neither go into
+`global/topics/<name>.md`.
 
-A write into another project's bucket records where it came from in the
-file's `sources` frontmatter, as `<platform>@<project>`. `tui@proj-2` is a
-TUI session in the `proj-2` project; `tui@*` is an unscoped TUI session (`*`
-can't be a project slug). Writes inside a session's own scope record only the
-platform. Nothing undoes a cross-project write; the tag is there so you can
-find what another session added.
-
-`hermes memory-buckets status` lists buckets that no Hermes project uses yet;
-no session is scoped to those.
+When a session writes into another project's bucket, the file's `sources` frontmatter
+records `<platform>@<project>` (for example `tui@proj-2`, or `tui@*` from an unscoped
+TUI session) so you can trace cross-project additions later. Classic CLI and TUI
+sessions also show a brief `📝 Saved to <path>` status line on cross-project writes.
 
 ### What the agent gets
 
-- **A prompt block, frozen per session.** It holds the usage rules,
-  `global/profile.md` and `global/preferences.md` in full, and, in a project
-  session, the project index. Then come a listing of every other file and
-  the other projects it can add to. It's capped at 12,000 characters.
-- **The project index** is built when the session starts, never stored. It
-  shows the Hermes project's folders, plus its name and description when
-  they add something. Then come the bucket's `profile.md` and
-  `preferences.md` in full. A bucket with no profile yet gets a line telling
-  the agent to create one.
-- **Seven tools:**
-  - `memory_list`, `memory_read` and `memory_search`
-  - `memory_write`, `memory_str_replace`, `memory_append` and `memory_delete`
+At the start of a session, the plugin builds a system prompt block (capped at
+`snapshot_max_chars`, 12,000 by default) and freezes it for the session so prefix
+caching stays warm. If Hermes compresses the conversation in place, the cached
+snapshot is cleared and rebuilt from the current files.
 
-  Every write is a compare-and-swap. On a conflict the tool returns the
-  file's current content, so the agent can merge and retry.
-- **A status line** when the agent writes into another project's bucket:
-  `📝 Saved to <path>`. The classic CLI and the terminal TUI show it. The
-  desktop app, gateways (Telegram, Discord and so on) and quiet or one-shot
-  runs show nothing, and the agent isn't asked to tell you instead.
-- **Prefetch hints** each turn. These are the paths of relevant files, never
-  their content.
-- **A periodic reminder** to file durable facts.
-- **The `sort-imports` skill,** which sorts imported memory (see
-  [Importing built-in memory](#importing-built-in-memory)). The plugin has no
-  slash commands of its own; `/sort-imports` comes from the skill.
+The prompt block contains:
+- usage and routing instructions for reading and filing facts;
+- `global/profile.md` and `global/preferences.md` in full;
+- in a project session, a generated project header (the Hermes project's folders, its
+  name and description when they add detail, and the bucket's `profile.md` and
+  `preferences.md` in full, or a note asking the agent to create `profile.md` once it
+  learns about the project);
+- a path-and-description index of the remaining files in scope, plus the list of other
+  projects the session can add to.
+
+If the prompt block would exceed `snapshot_max_chars`, it trims the file listing
+first, then drops `global/preferences.md`, `<project>/preferences.md`, and
+`<project>/profile.md` in that order. `global/profile.md` and the project header are
+always kept.
+
+The agent gets seven tools: `memory_list`, `memory_read`, `memory_search`,
+`memory_write`, `memory_str_replace`, `memory_append`, and `memory_delete`. Every
+write is compare-and-swap against a content hash version; on a conflict, the tool
+returns the file's current version and content so the agent can merge and retry.
+
+On each user turn, `prefetch` checks whether any files outside the inlined profiles
+and preferences match the message, and injects their paths and descriptions as hints
+(never the file bodies). Once a file has been hinted, read, or written, prefetch
+holds it back for the next four turns so the agent isn't nagged with the same hint on
+every message. Every `nudge_interval` turns (default 10), a short reminder also asks
+the agent to save any new durable facts from the conversation.
 
 ### Embeddings
 
-The embedding model is
+Embeddings use
 [potion-retrieval-32M](https://huggingface.co/minishlab/potion-retrieval-32M)
-(MinishLab, MIT). It's a Model2Vec static model: a transformer distilled into
-a lookup table. Embedding a text means tokenising, averaging and normalising,
-all in plain stdlib Python. The weights are memory-mapped and shared by every
-process, so loading is instant, and it embeds about 1,000 characters in 5 ms.
-It's the only model the plugin supports.
+(MinishLab, MIT), a Model2Vec static model that distils a transformer into a token
+lookup table. Embedding a piece of text is BERT WordPiece tokenisation, a weighted
+mean of token rows, and L2 normalisation in pure Python. The safetensors weights are
+memory-mapped and shared across processes by the OS page cache, so loading is instant
+and encoding ~1,000 characters takes a couple of milliseconds.
 
-Where the model comes from:
-
-| Install | Model |
+| Install | How the model is provided |
 |---|---|
-| pip / wheel | Bundled at build time. The build hook `hatch_build.py` fetches the pinned files, checks their sha256 and converts them to float16. It caches the result in `~/.cache/memory-buckets` (or `$XDG_CACHE_HOME`). `MEMORY_BUCKETS_BUNDLE_MODEL=0` skips it; editable installs never bundle it. |
-| Nix | Bundled at build time (`nix/model.nix`), with the same files. |
-| Plugin directory (including `hermes plugins install`) | Downloaded into `$HERMES_HOME/memory-buckets/.models/` in the background on first use. `hermes memory-buckets fetch-model` downloads it up front. |
+| pip / wheel | Bundled at build time. `hatch_build.py` fetches the pinned upstream files, checks their sha256 hashes, converts the weights to float16 (~65 MB), and caches the result in `${XDG_CACHE_HOME:-~/.cache}/memory-buckets`. Set `MEMORY_BUCKETS_BUNDLE_MODEL=0` to skip bundling; editable installs (`uv sync`) never bundle it. |
+| Nix | Bundled at build time via `nix/model.nix` with the same float16 conversion. |
+| Plugin directory | Downloaded into `$HERMES_HOME/memory-buckets/.models/` in the background on first use, or up front with `hermes memory-buckets fetch-model`. |
 
-`embeddings.local_model_dir` uses a copy of the model from elsewhere.
-`embeddings.auto_download: false` stops the background download.
-`embeddings.backend: off` turns embeddings off, which leaves keyword search
-only and no prefetch hints.
+To point at an existing local copy, set `embeddings.local_model_dir` (or
+`MEMORY_BUCKETS_MODEL_DIR`). `embeddings.auto_download: false` disables background
+downloads, and `embeddings.backend: off` disables embeddings completely (leaving FTS5
+keyword search only and turning off prefetch hints).
 
-The prefetch threshold defaults to 0.27, a measured value. Relevant notes
-scored a median of 0.37, and unrelated ones stayed under 0.15 for 95% of
-cases. `hermes memory-buckets hints "<query>"` shows the real scores for your
-store.
+When indexing a file, the store splits the body into heading-aware chunks of up to
+300 characters alongside an identity chunk (`bucket`, filename stem, description, and
+`aliases`). Body chunks include their section heading path (or the file's stem when
+there is no heading) in the embedded text so individual bullets keep their subject
+context. Long user messages over 512 tokens are embedded from their first 352 and
+last 160 tokens, so a question at the bottom of a pasted build log isn't lost to
+truncation.
+
+`memory_search` runs FTS5 BM25 (with section headings weighted 2x and stopwords
+filtered) alongside cosine similarity (with a `0.20` relevance floor), fuses file
+ranks with Reciprocal Rank Fusion, and scales scores by query-term coverage, best
+vector similarity, and `project_boost`.
+
+Prefetch hints use vector similarity (boosted by `project_boost` for the session's
+own bucket) and also rescue any file whose exact stem or frontmatter alias appears in
+the message. The default `prefetch_min_similarity` threshold is `0.27`; you can
+inspect raw similarity scores against your own store with
+`hermes memory-buckets hints "<query>"`.
 
 ## Importing built-in memory
 
-`global/inbox.md` holds imported memory that's waiting to be sorted. It can
-stay when it's empty, and you can edit it by hand: adding an entry fills in
-missing frontmatter. Two things add to it:
+`global/inbox.md` is a staging file for memory imported from Hermes's built-in
+`MEMORY.md` and `USER.md`. Only two things append to it:
 
-- `hermes memory-buckets import`, which copies in built-in memory's
-  `MEMORY.md` and `USER.md` entries;
-- built-in memory writes, mirrored there while built-in memory is still on.
+- `hermes memory-buckets import`, which copies entries over from `MEMORY.md` and
+  `USER.md`;
+- the `on_memory_write` bridge, which mirrors built-in memory writes while built-in
+  memory is still enabled.
 
-Nothing else does. The agent files what it learns in conversation itself, and
-`memory_append` to the inbox is refused. An inbox from 0.1.0 may still have
-`added in conversation` sections; they're sorted like the rest.
+During normal conversations the agent files facts directly into `global/` or the
+relevant project bucket, and `memory_append` to `global/inbox.md` is refused. The
+agent can still remove sorted entries from the inbox with `memory_str_replace`,
+`memory_write`, or `memory_delete`. An empty or deleted inbox is fine; the next
+import recreates it if needed, and the startup migration strips any `## ` section
+headings that a sort left empty.
 
-The agent can still remove entries with `memory_str_replace`, `memory_write`
-or `memory_delete`. If the inbox is deleted, the next import or mirrored write
-creates it again.
+To sort the inbox, run `/sort-imports` or ask the agent to sort your imported memory
+(it only sorts when asked):
 
-**To sort it**, run `/sort-imports` or ask the agent to sort your imported
-memory. It's sorted only when you ask.
+- General facts are filed into `global/` (`profile.md`, `preferences.md`, `people/`,
+  `areas/`, or `topics/`).
+- Project facts are added directly to that project's bucket (`memory_append` or new
+  files only, never overwriting or editing existing project notes). Facts for an
+  unrecognised project go into `global/topics/<name>.md`.
+- Entries the agent isn't sure how to classify are saved under `global/` and listed in
+  its final reply for you to check, along with any stale or duplicate lines it
+  dropped.
 
-- **General** facts go into `global/`.
-- **Project** facts are added straight to their project's bucket. Existing
-  files there are added to, never edited. Nothing waits for you to apply it.
-- A fact for a project with no bucket and no Hermes project goes into
-  `global/topics/<name>.md`.
-- A fact the agent can't place goes into `global/`, and its reply lists those
-  for you to check.
-- Each line is removed from the inbox once its fact is filed. Stale and
-  already-saved entries are dropped, and the reply says which.
+Back up your store before sorting (`import` and `import-prompt` print the `cp -a` and
+`diff -ru` commands).
 
-Back up the store first. `import` and `import-prompt` print the command, and
-a `diff` to review the result with.
-
-**`/sort-imports` needs one line of config.** Hermes only makes slash commands
-from skills in its skill directories, never from a plugin's bundled skills:
+For `/sort-imports` to register as a slash command, Hermes needs the plugin's `skills`
+directory in `skills.external_dirs`:
 
 ```yaml
 skills:
   external_dirs:
     - plugins/memory-buckets/skills   # plugin directory, relative to HERMES_HOME
     # pip: <site-packages>/memory_buckets/skills
-    # Nix: see the Nix install above
+    # Nix: see the Nix install example above
 ```
 
-Without it, asking still works for a plugin-directory install: the prompt block
-tells the agent to load the skill with `skill_view`. pip and Nix installs can't
-do that, because Hermes prunes the bundled skills of a pip-installed provider.
-There, either add the line or paste the prompt that
-`hermes memory-buckets import-prompt` prints.
-
-Don't save the sort prompt as a skill of your own. That copy goes stale when
-the plugin's instructions change.
+Without `skills.external_dirs`, asking the agent in prose still works for a
+plugin-directory install because the prompt block points it to `skill_view`. For pip
+and Nix installs without `skills.external_dirs`, paste the prompt printed by
+`hermes memory-buckets import-prompt`. Avoid saving that prompt as a custom skill in
+`~/.hermes/skills/`, as a local copy will shadow updates to the bundled skill.
 
 ## Reference
 
 ### Commands
 
-`hermes memory-buckets` is available while `memory.provider` is `memory-buckets`.
+`hermes memory-buckets` is available whenever `memory.provider` is `memory-buckets`:
 
 ```
-status                       store, index, embeddings, Hermes config, buckets without a project
-diagnose [--platform P]      why an agent would or wouldn't see the memory tools
-lint                         bad paths, frontmatter, duplicate names, broken [[links]]
-migrate [--dry-run]          update a store written by an older version (also runs on startup)
-reindex [--embed]            rebuild the search cache
-search QUERY [--prefix P]    search the whole store (--limit N, --json)
-hints QUERY [--threshold T]  raw similarities, to tune prefetch_min_similarity
-fetch-model [--force]        download the embedding model now
-import [--from HERMES_HOME]  append built-in MEMORY.md/USER.md entries to global/inbox.md
-import-prompt                print the prompt that sorts the imported memory
+status                                  store, index, embeddings, Hermes config, unlinked buckets
+diagnose [--platform P]                 check why an agent would or wouldn't see the memory tools
+lint                                    check paths, frontmatter, duplicate stems, and [[links]]
+migrate [--dry-run]                     migrate a store from an older version (also runs on startup)
+reindex [--embed]                       rebuild the SQLite search cache
+search QUERY [--limit N] [--prefix P]   search the store (--json for raw output)
+hints QUERY [--limit N] [--threshold T] show raw prefetch similarities to tune prefetch_min_similarity
+fetch-model [--force]                   download the built-in embedding model now
+import [--from HERMES_HOME] [--dry-run] append built-in MEMORY.md/USER.md entries to global/inbox.md
+import-prompt                           print the prompt for sorting global/inbox.md
 ```
 
 ### Configuration
 
-Every key is optional, and all of them go under `plugins.memory-buckets` in
-`config.yaml`.
+All settings are optional and live under `plugins.memory-buckets` in `config.yaml`:
 
 | Key | Default | Effect |
 |---|---|---|
-| `readonly` | `false` | no session writes memory |
-| `cron_writes` | `false` | let cron jobs write (cron, subagent and flush contexts are otherwise read-only) |
-| `nudge_interval` | `10` | user turns between reminders to file durable facts; `0` turns them off |
-| `snapshot_max_chars` | `12000` | cap on the prompt block |
-| `prefetch_min_similarity` | `0.27` | how close a file must be to be hinted |
-| `prefetch_max_hints` | `4` | hints per turn |
-| `search_limit` | `8` | `memory_search` results when the agent doesn't ask for a number |
-| `project_boost` | `1.3` | search weight for the session's own bucket |
-| `store_path` | `$HERMES_HOME/memory-buckets` | where the store lives |
-| `embeddings.backend` | `local` | `off`: keyword search only |
-| `embeddings.auto_download` | `true` | download the model in the background when it isn't bundled |
-| `embeddings.local_model_dir` | | use the model in this directory |
+| `readonly` | `false` | make every session read-only |
+| `cron_writes` | `false` | allow cron sessions to write (cron, subagent, and flush contexts are otherwise read-only) |
+| `nudge_interval` | `10` | user turns between reminders to file durable facts (`0` disables reminders) |
+| `snapshot_max_chars` | `12000` | character cap on the system prompt block |
+| `prefetch_min_similarity` | `<model default>` | minimum cosine similarity for prefetch hints (`0.27` for the built-in model; see [Embeddings](#embeddings)) |
+| `prefetch_max_hints` | `4` | maximum prefetch hints per turn |
+| `search_limit` | `8` | default `memory_search` result count |
+| `project_boost` | `1.3` | score multiplier for the session's own bucket in search and prefetch hints |
+| `store_path` | `$HERMES_HOME/memory-buckets` | store directory (custom paths outside `$HERMES_HOME` are also included in `hermes backup`) |
+| `embeddings.backend` | `local` | `local` (built-in model) or `off` (keyword search only) |
+| `embeddings.auto_download` | `true` | download the model in the background when not bundled |
+| `embeddings.local_model_dir` | | load the model from this directory instead |
 
-These environment variables override the config: `MEMORY_BUCKETS_STORE`,
-`MEMORY_BUCKETS_EMBEDDINGS_BACKEND`, `MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD`
-and `MEMORY_BUCKETS_MODEL_DIR`. `MEMORY_BUCKETS_TRACE=1` logs every hook call
-Hermes makes.
+Environment variable overrides: `MEMORY_BUCKETS_STORE`,
+`MEMORY_BUCKETS_EMBEDDINGS_BACKEND`, `MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD`, and
+`MEMORY_BUCKETS_MODEL_DIR`. Setting `MEMORY_BUCKETS_TRACE=1` logs every provider hook
+call.
 
 ## Troubleshooting
 
-**The agent doesn't know the memory tools.** Hermes picks the memory provider
-when it builds an agent. A chat that existed before you set `memory.provider`
-has no memory tools, and nothing in the chat says why. Start a new session
-(`/new`) or restart the gateway. If a new session still can't see the tools,
-run `hermes memory-buckets diagnose`. It checks each platform's toolsets the
-way Hermes does.
+If the agent doesn't see the `memory_*` tools after you set `memory.provider`, start a
+new session (`/new`) or restart the gateway: Hermes resolves the memory provider when
+constructing an agent, so sessions that were already running won't pick it up. If a
+fresh session still lacks the tools, run `hermes memory-buckets diagnose` to check
+provider loading and per-platform toolsets.
 
-**The tools are withheld on one platform.** Keep the `memory` toolset enabled
-on every platform. Without it, Hermes withholds provider tools and the prompt
-block.
+If tools are missing on one specific platform (for example Telegram or Discord), make
+sure the `memory` toolset is enabled for that platform in `platform_toolsets` and not
+listed in `agent.disabled_toolsets`.
 
-**`hermes plugins doctor memory-buckets` says `0 tool(s), 0 hook(s)`.** That's
-expected. The doctor counts general-plugin registrations, but a memory
-provider's tools arrive through Hermes's memory manager. `hermes memory-buckets
-status` should report 7 memory tools.
+`hermes plugins doctor memory-buckets` reporting `0 tool(s), 0 hook(s)` is normal:
+`plugins doctor` only counts general-plugin registrations, whereas memory provider
+tools are registered through Hermes's memory manager. Use
+`hermes memory-buckets status` instead, which should show 7 memory tools.
 
 ## Migrating
 
 ### From an older version
 
-The plugin updates the store itself when a session starts. Read-only
-sessions (cron, subagents, flushes, and every session under `readonly: true`)
-leave it for the next writable one; with `readonly: true`, run `migrate`
-yourself. Before it changes or removes a file, it keeps the original under
-`_backup/<version>/`. `hermes memory-buckets migrate --dry-run` shows what it
-would do, `migrate` runs it, and `status` reports anything still waiting. A
-file it can't read or parse is left alone and reported; the rest still migrate.
+Writable sessions automatically migrate the store on startup (read-only sessions skip
+migration; if you run with `readonly: true`, run `hermes memory-buckets migrate`
+manually). Before modifying or removing any file in the store, `migrate` saves the
+original under `_backup/<version>/`. You can preview pending changes with
+`hermes memory-buckets migrate --dry-run`.
 
-- **0.1.0:** `<project>/index.md` is gone, because the project index is now
-  generated. A leftover `index.md` becomes the project's `profile.md`. If the
-  project already has one, the body of `index.md` is appended to it as it is,
-  under `## Moved from index.md`, so check for repeated lines afterwards. If
-  either file can't be parsed, or the profile would go over the size cap, the
-  migration leaves both files alone and says so. The plugin owns the inbox's
-  description, so any other description becomes the current one (the original
-  is kept in the backup).
-- **0.2.0:** proposals are gone, and so is `_pending/`. Each proposal in it is
-  copied to `_backup/0.2.0/_pending/`, then the folder is removed. None is
-  applied: you never confirmed them, and their lines are still in the inbox,
-  so the next `/sort-imports` files them. A proposal whose copy fails stays
-  where it is, with `_pending/`, and `migrate` says so. The inbox's
-  description becomes "Imported memory waiting to be sorted", and its lines
-  stay as they are. Empty `## ` headings (a heading with no non-blank lines
-  before the next one or the end of the file) are removed, including on a
-  later run after a sort emptied them; that loses nothing, so a run that only
-  removes headings keeps no backup. `status` and `lint` don't report empty
-  headings.
+The SQLite cache at `.index/memory.sqlite` also rebuilds itself automatically whenever
+the index schema changes (most recently schema v4 in 0.3.0).
 
-  `write_policy` is gone too. **If your config sets `write_policy: confined`,
-  upgrading widens what sessions may write:** project sessions now write
-  `global/`, and every writable session can add to other projects' buckets
-  (see [Projects](#projects)). The setting is ignored, with a warning in the
-  log; delete it.
+For stores created on 0.1.0 or earlier:
+- Leftover `<project>/index.md` files (replaced in 0.1.0 by the generated project
+  header) are renamed to `<project>/profile.md`, or appended under
+  `## Moved from index.md` if `profile.md` already exists.
+- Leftover `_pending/` proposal directories from 0.1.0 are backed up to
+  `_backup/0.2.0/_pending/` and removed; their unconfirmed lines remain in
+  `global/inbox.md` for `/sort-imports` to file.
+- `write_policy: confined` was removed in 0.2.0 (project sessions now write `global/`
+  and can add to other projects' buckets); if still present in `config.yaml`, it logs
+  a warning and is ignored.
+
+See [CHANGELOG.md](CHANGELOG.md) for full release notes.
 
 ### From built-in memory
 
-1. Install the plugin and set `memory.provider: memory-buckets`, but leave
-   built-in memory on for now. Its writes are mirrored into `global/inbox.md`.
-2. Run `hermes memory-buckets import`. Add `--from <HERMES_HOME>` to import
-   another instance's memory. It prints a backup command and the sorting
-   prompt; `import-prompt` prints them again.
-3. Back up the store. Then, in a new chat outside any project,
+1. Install the plugin and set `memory.provider: memory-buckets`, leaving built-in
+   memory enabled for the moment so any writes still mirror into `global/inbox.md`.
+2. Run `hermes memory-buckets import` (pass `--from <HERMES_HOME>` to import from
+   another profile or instance).
+3. Back up the store with the `cp -a` command it prints, then start a new chat and
    [sort the imported memory](#importing-built-in-memory).
-4. Review with `diff -ru <backup> <store>`.
-5. Turn built-in memory off (`memory.memory_enabled: false`,
+4. Check the result with `diff -ru <backup> <store>`.
+5. Disable built-in memory in `config.yaml` (`memory.memory_enabled: false` and
    `memory.user_profile_enabled: false`).
 
 ## Development
 
-In the devshell (`direnv allow` or `nix develop`), `sync` creates the venv with
-the devshell's Python and `check` runs the tests. They're `unittest` tests,
-run under pytest. Two variables turn on more of them:
+Inside the Nix devshell (`direnv allow` or `nix develop`):
+- `sync` creates or updates `.venv` with `uv sync`;
+- `check` runs the test suite (`uv run pytest tests/`);
+- `lint` runs `ruff check .` and `ruff format --check .`;
+- `run` executes a command inside the project venv (`uv run`).
 
-- `HERMES_PYTHON=<Hermes's interpreter>` adds integration tests that drive real
-  Hermes code against a throwaway `HERMES_HOME`, loading the plugin both as a
-  directory and as a pip install.
-- `MEMORY_BUCKETS_MODEL_DIR=<a copy of the model>` adds the real-model tests.
+Two environment variables enable extra test coverage:
+- `HERMES_PYTHON=<path to Hermes's python>` runs the Hermes integration tests against
+  a temporary `HERMES_HOME`, testing both plugin-directory and pip entry-point loads.
+- `MEMORY_BUCKETS_MODEL_DIR=<path to potion-retrieval-32M>` enables the real-model
+  embedding and retrieval tests.
 
-`nix flake check` builds the package with the model bundled and runs the
-tests in the build sandbox. That includes the real-model tests and, in the
-`tokenizer` check, token-for-token parity with Hugging Face's tokenizers.
+To run the synthetic retrieval and prefetch benchmark added in 0.3.0:
 
-`tests/smoke.sh` is a manual end-to-end chat test on a throwaway profile. It
-needs a test config you prepare, and it refuses anything under `~/.hermes`.
+```sh
+MEMORY_BUCKETS_MODEL_DIR=<model-dir> uv run python -m tests.bench_retrieval
+```
+
+`nix flake check` builds the package with the float16 model bundled and runs the test
+suite inside the Nix sandbox, including the real-model tests and token-for-token
+parity against Hugging Face `tokenizers`. `tests/smoke.sh` runs a manual end-to-end
+chat test against a throwaway profile (never `~/.hermes`).
