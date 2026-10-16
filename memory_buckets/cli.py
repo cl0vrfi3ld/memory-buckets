@@ -531,10 +531,21 @@ def cmd_import(args) -> int:
     return 0
 
 
+def _backup_commands(store: Store) -> tuple:
+    """(back up, review) shell commands for sorting imports. PowerShell has no
+    ``cp -a`` or ``diff -ru``; git is there, since Hermes's Windows installer brings it."""
+    backup = f"{store.root}.before-sort"
+    if sys.platform == "win32":
+        return (f'Copy-Item -Recurse "{store.root}" "{backup}"',
+                f'git diff --no-index "{backup}\\memories" "{store.memories}"')
+    return f"cp -a {store.root} {backup}", f"diff -ru {backup}/memories {store.memories}"
+
+
 def _print_import_prompt(store: Store) -> None:
+    backup, review = _backup_commands(store)
     _out()
     _out("Next:")
-    _out(f"  1. Back up the store first: cp -a {store.root} {store.root}.before-sort")
+    _out(f"  1. Back up the store first: {backup}")
     if _is_plugin_dir_install() or _has_external_skill(SKILLS_DIR):
         _out("  2. In a new chat, ask the agent to sort your imported memory")
         _out("     (it uses memory-buckets's sort-imports skill), or paste the prompt below.")
@@ -542,7 +553,7 @@ def _print_import_prompt(store: Store) -> None:
         _out("  2. In a new chat, paste the prompt below (from `hermes memory-buckets import-prompt`),")
         _out(f"     or add {SKILLS_DIR} to skills.external_dirs so the agent can use the sort-imports skill.")
     _out("  3. It files every fact itself, and removes each line from the inbox as it goes.")
-    _out(f"  4. Review with: diff -ru {store.root}.before-sort/memories {store.memories}")
+    _out(f"  4. Review with: {review}")
     _out("     (Print this again with: hermes memory-buckets import-prompt)")
     _out()
     _out("----- prompt -----")

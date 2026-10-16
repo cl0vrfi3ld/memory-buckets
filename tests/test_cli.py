@@ -69,10 +69,20 @@ class CliTest(StoreCase):
         self.assertEqual(text.count("## imported"), 2)
         self.assertIn("----- prompt -----", out)
         self.assertIn("global/inbox.md", out.split("----- prompt -----")[1])
-        self.assertIn("cp -a", out)
+        self.assertIn(cli._backup_commands(self.store)[0], out)
         code, again = self.run_cli("import-prompt")
         self.assertEqual(code, 0)
         self.assertEqual(again, out[out.index("\nNext:"):])
+
+    def test_backup_and_review_commands_suit_the_shell(self):
+        root = str(self.store.root)
+        with mock.patch.object(cli.sys, "platform", "linux"):
+            self.assertEqual(cli._backup_commands(self.store),
+                             (f"cp -a {root} {root}.before-sort", f"diff -ru {root}.before-sort/memories {self.store.memories}"))
+        with mock.patch.object(cli.sys, "platform", "win32"):  # PowerShell: no cp -a, no diff -ru
+            backup, review = cli._backup_commands(self.store)
+        self.assertEqual(backup, f'Copy-Item -Recurse "{root}" "{root}.before-sort"')
+        self.assertTrue(review.startswith(f'git diff --no-index "{root}.before-sort'), review)
 
     def test_import_recreates_a_deleted_inbox(self):
         (self.home / "memories").mkdir()

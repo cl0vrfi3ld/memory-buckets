@@ -6,7 +6,9 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
-## [Unreleased]
+## [0.4.0] - 2026-10-16
+
+Windows support. No store or index changes: upgrading needs no migration.
 
 ### Added
 
@@ -24,6 +26,11 @@ change the store's layout; the plugin migrates the store itself (see
   - `hermes memory-buckets reindex` reports an index that another process has
     open instead of crashing.
   - Junctions count as symlinks: the store refuses them and `lint` reports them.
+  - `import` and `import-prompt` print PowerShell backup and review commands
+    (`Copy-Item -Recurse`, `git diff --no-index`) instead of `cp -a` and `diff -ru`.
+- **Windows CI** on the GitHub mirror: the test suite on x64 (Python 3.10 and 3.14)
+  and arm64 (3.14) with the real embedding model, and the Hermes integration test
+  against a pinned Hermes release.
 - `tests/wine.sh` (devshell: `check-windows`) runs the test suite on Windows
   Python under Wine.
 
@@ -374,6 +381,7 @@ will do.
 
 Initial release.
 
+[0.4.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.3.0...v0.4.0
 [0.3.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.2.1...v0.3.0
 [0.2.1]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.2.0...v0.2.1
 [0.2.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.1.0...v0.2.0

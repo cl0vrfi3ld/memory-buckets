@@ -242,7 +242,7 @@ and encoding ~1,000 characters takes a couple of milliseconds.
 
 | Install | How the model is provided |
 |---|---|
-| pip / wheel | Bundled at build time. `hatch_build.py` fetches the pinned upstream files, checks their sha256 hashes, converts the weights to float16 (~65 MB), and caches the result in `${XDG_CACHE_HOME:-~/.cache}/memory-buckets`. Set `MEMORY_BUCKETS_BUNDLE_MODEL=0` to skip bundling; editable installs (`uv sync`) never bundle it. |
+| pip / wheel | Bundled at build time. `hatch_build.py` fetches the pinned upstream files, checks their sha256 hashes, converts the weights to float16 (~65 MB), and caches the result in `${XDG_CACHE_HOME:-~/.cache}/memory-buckets` (`%USERPROFILE%\.cache\memory-buckets` on Windows). Set `MEMORY_BUCKETS_BUNDLE_MODEL=0` to skip bundling; editable installs (`uv sync`) never bundle it. |
 | Nix | Bundled at build time via `nix/model.nix` with the same float16 conversion. |
 | Plugin directory | Downloaded into `$HERMES_HOME/memory-buckets/.models/` in the background on first use, or up front with `hermes memory-buckets fetch-model`. |
 
@@ -299,8 +299,9 @@ To sort the inbox, run `/sort-imports` or ask the agent to sort your imported me
   its final reply for you to check, along with any stale or duplicate lines it
   dropped.
 
-Back up your store before sorting (`import` and `import-prompt` print the `cp -a` and
-`diff -ru` commands).
+Back up your store before sorting. `import` and `import-prompt` print the commands to
+back it up and to review the result afterwards: `cp -a` and `diff -ru`, or on Windows
+the PowerShell `Copy-Item -Recurse` and `git diff --no-index`.
 
 For `/sort-imports` to register as a slash command, Hermes needs the plugin's `skills`
 directory in `skills.external_dirs`:
@@ -411,9 +412,10 @@ See [CHANGELOG.md](CHANGELOG.md) for full release notes.
    memory enabled for the moment so any writes still mirror into `global/inbox.md`.
 2. Run `hermes memory-buckets import` (pass `--from <HERMES_HOME>` to import from
    another profile or instance).
-3. Back up the store with the `cp -a` command it prints, then start a new chat and
+3. Back up the store with the command it prints, then start a new chat and
    [sort the imported memory](#importing-built-in-memory).
-4. Check the result with `diff -ru <backup> <store>`.
+4. Check the result with the review command it printed (`diff -ru`, or
+   `git diff --no-index` on Windows).
 5. Disable built-in memory in `config.yaml` (`memory.memory_enabled: false` and
    `memory.user_profile_enabled: false`).
 
@@ -442,4 +444,11 @@ MEMORY_BUCKETS_MODEL_DIR=<model-dir> uv run python -m tests.bench_retrieval
 `nix flake check` builds the package with the float16 model bundled and runs the test
 suite inside the Nix sandbox, including the real-model tests and token-for-token
 parity against Hugging Face `tokenizers`. `tests/smoke.sh` runs a manual end-to-end
-chat test against a throwaway profile (never `~/.hermes`).
+chat test against a throwaway profile (never `~/.hermes`); it's a bash script, so it
+runs on Linux and macOS only.
+
+Windows runs in CI: `.github/workflows/windows.yml` on the GitHub mirror runs the test
+suite on Windows x64 (Python 3.10 and 3.14) and arm64 (3.14) with the real model, and
+the Hermes integration tests against the Hermes release pinned in `HERMES_REF`. Bump
+that pin when Hermes releases. Hermes refuses to build as a wheel, so the job installs
+an editable checkout.
