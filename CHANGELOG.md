@@ -6,6 +6,26 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [Unreleased]
+
+### Added
+
+- **Threat scanning for memory.** Built-in memory already runs Hermes's prompt-injection
+  patterns over every write and over what it loads into the prompt; memory-buckets did
+  neither, and `global/profile.md` and `global/preferences.md` go into every system
+  prompt. It now uses the same scanner (`tools.threat_patterns`, `strict` scope):
+  - `memory_write`, `memory_append` and `memory_str_replace` refuse content that
+    matches, with a new `threat_detected` error that lists the pattern IDs in
+    `patterns` and does not repeat the text. The whole file is scanned, frontmatter
+    description included. `memory_delete` is never blocked, so a bad file can be removed.
+  - A file inlined into the system prompt that matches (a hand edit, a synced file) is
+    replaced there by `[BLOCKED: <path> matched <pattern ids>; fix or delete it]`, and a
+    matching description in the file listing is replaced the same way. A warning is
+    logged. The file on disk is untouched and `memory_read` still returns it.
+  - Without the scanner (a bare Python, or a Hermes that doesn't ship it) nothing is
+    scanned and memory behaves as before. A scanner that raises is logged once and
+    treated the same way.
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
