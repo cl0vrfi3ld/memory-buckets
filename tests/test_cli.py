@@ -176,6 +176,58 @@ class CliTest(StoreCase):
         self.assertIn("no Hermes project (no session is scoped to them): old-proj", out)
         self.assertIn("--slug <bucket>", out)
 
+    def test_status_reports_files_the_index_skips(self):
+        self.put("global/topics/nix.md", doc("nix", "Nix"))
+        self.put("global/topics/My Note.md", "x")
+        self.put("global/topics/nix/flakes.md", "x")
+        self.put("global/topics/ex_luna.md", "x")
+        self.put("global/notes.md", "x")
+        self.put(".obsidian/app.json", "{}")
+        code, out = self.run_cli("status")
+        self.assertEqual(code, 0, out)  # a notice, not a fault
+        self.assertIn("ignored     4 files outside the path rules, so the agent can't see them; "
+                      "run `hermes memory-buckets lint`", out)
+        self.assertNotIn("frontmatter ", out)
+        self.assertIn("1 files", out)  # the index still has only the valid one
+
+    def test_status_says_nothing_about_a_clean_store(self):
+        self.put("global/topics/nix.md", doc("nix", "Nix", extra="# a comment\n"))
+        code, out = self.run_cli("status")
+        self.assertNotIn("ignored", out)
+        self.assertNotIn("frontmatter ", out)
+
+    def test_status_singular_wording(self):
+        self.put("global/notes.md", "x")
+        self.put("global/topics/bad.md", "no frontmatter\n")
+        out = self.run_cli("status")[1]
+        self.assertIn("ignored     1 file outside the path rules, so the agent can't see it;", out)
+        self.assertIn("frontmatter 1 file with invalid frontmatter, so tools won't edit it until it's fixed;", out)
+
+    def test_status_reports_unparseable_frontmatter(self):
+        self.put("global/topics/nix.md", doc("nix", "Nix"))
+        self.put("global/topics/bad.md", "no frontmatter\n")
+        self.put("global/topics/dupe.md", "---\nname: dupe\nname: dupe\ndescription: x\n---\n")
+        self.put("global/topics/wrong.md", doc("other", "name does not match the file"))
+        code, out = self.run_cli("status")
+        self.assertEqual(code, 0, out)
+        self.assertIn("frontmatter 3 files with invalid frontmatter, so tools won't edit them until it's fixed; "
+                      "run `hermes memory-buckets lint`", out)
+        self.assertNotIn("ignored", out)  # all three are on valid paths
+
+    def test_status_counts_symlinks_apart_and_leaves_leftover_indexes_to_migration(self):
+        self.put("global/topics/real.md", doc("real", "Real"))
+        symlink_or_skip(self, self.store.memories / "global/topics/real.md", self.store.memories / "global/topics/sym.md")
+        self.put("proj-1/index.md", doc("index", "left over from an older version"))
+        out = self.run_cli("status")[1]
+        self.assertIn("ignored     1 symlink (never followed); run `hermes memory-buckets lint`", out)
+        self.assertNotIn("outside the path rules", out)  # proj-1/index.md has its migration line
+        self.assertIn("index.md left over in: proj-1", out)
+
+    def test_a_frontmatter_comment_is_not_a_problem(self):
+        self.put("global/topics/nix.md", doc("nix", "Nix", extra="# written in Obsidian\n"))
+        self.assertEqual(self.run_cli("lint")[1], "0 problem(s)\n")
+        self.assertNotIn("frontmatter ", self.run_cli("status")[1])
+
     def test_lint(self):
         self.put("global/topics/nix.md", doc("nix", "Nix", "- see [[sam]] and [[nope]] and [[proj-1/profile]]\n"))
         self.put("global/people/sam.md", doc("sam", "Sam"))
