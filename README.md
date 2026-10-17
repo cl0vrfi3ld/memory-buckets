@@ -270,6 +270,44 @@ the message. The default `prefetch_min_similarity` threshold is `0.27`; you can
 inspect raw similarity scores against your own store with
 `hermes memory-buckets hints "<query>"`.
 
+### Retrieval quality
+
+`tests/bench_retrieval.py` scores retrieval on three splits. Its original queries all
+reused the target file's own words, so every metric was 1.0 and nothing could move. The
+splits are now reported separately (default threshold `0.27`, potion-retrieval-32M, 21
+files; `n/m` is queries):
+
+| Split | Result |
+|---|---|
+| exact (query reuses the file's words): search top-1, top-3 | 12/13, 13/13 |
+| exact: prefetch hint recall | 7/7 |
+| paraphrase (no content word in common with the file): search top-1, top-3 | 6/16, 8/16 |
+| paraphrase: prefetch hint recall | 3/16 |
+| negative (greetings, thanks, off-topic): turns that got any hint | 1/15 |
+
+The same queries against a store with 400 filler files, where the prompt's file listing
+truncates and search is the only way to the target (14 of the 29 search queries qualify):
+exact 5/5 top-1; paraphrase 2/9 top-1, 4/9 top-3, 2/9 hint recall; negatives 1/15.
+
+A static model cannot link a request to a file that shares none of its vocabulary, so
+expect hints to miss most paraphrases and `memory_search` to put about half in its top
+three. Hints are tuned for quiet: the one false positive is "ok sounds good" scoring 0.35
+against a file about a colleague named Okafor ("ok" alone scores 0.54). Sweeping
+`prefetch_min_similarity` over the 21-file store shows the trade:
+
+| threshold | exact recall | paraphrase recall | negatives hinted |
+|---|---|---|---|
+| 0.20 | 7/7 | 8/16 | 4/15 |
+| 0.25 | 7/7 | 5/16 | 1/15 |
+| 0.27 (default) | 7/7 | 3/16 | 1/15 |
+| 0.35 | 6/7 | 1/16 | 1/15 |
+| 0.40 | 6/7 | 0/16 | 0/15 |
+
+On this store 0.25 keeps the single false positive and gains recall over 0.27, so the
+numbers do not by themselves single out 0.27; the default stays until a larger or real
+store says otherwise. The benchmark prints the full sweep for both stores; use
+`hermes memory-buckets hints` to check your own.
+
 ## Importing built-in memory
 
 `global/inbox.md` is a staging file for memory imported from Hermes's built-in
@@ -440,6 +478,12 @@ To run the synthetic retrieval and prefetch benchmark added in 0.3.0:
 ```sh
 MEMORY_BUCKETS_MODEL_DIR=<model-dir> uv run python -m tests.bench_retrieval
 ```
+
+It reports exact, paraphrase and negative queries separately, on a small store and on a
+large one whose file listing truncates, with a `prefetch_min_similarity` sweep for each
+(numbers in [Retrieval quality](#retrieval-quality)). It takes about 20 seconds.
+`tests/test_bench_retrieval.py` checks the corpus itself (no paraphrase shares a word
+with its target) and, with the real model, floors for each split.
 
 `nix flake check` builds the package with the float16 model bundled and runs the test
 suite inside the Nix sandbox, including the real-model tests and token-for-token
