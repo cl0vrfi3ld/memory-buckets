@@ -1,4 +1,3 @@
-import logging
 import unittest
 
 from memory_buckets import config
