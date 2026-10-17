@@ -6,6 +6,21 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [Unreleased]
+
+### Added
+
+- **Recoverable history.** Overwrites, `memory_str_replace` edits and deletes save
+  the previous bytes to `.history/<path>/` before the change is applied, so a bad
+  write no longer loses a file for good. `hermes memory-buckets history PATH` lists
+  the recorded versions and `hermes memory-buckets restore PATH [VERSION]` writes
+  one back through the normal compare-and-swap path, so a restore is itself
+  recorded and a concurrent change is refused. Appends and creations record
+  nothing. Retention keeps the newest `history_keep` versions per file (default 20)
+  and drops anything older than `history_days` (default 90); `history_keep: 0`
+  turns history off. A history write that fails is logged and never breaks the
+  memory write. Hand edits outside the plugin are not recorded (README: History).
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.

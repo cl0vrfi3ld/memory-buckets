@@ -59,7 +59,7 @@ def _open(args):
     home = _hermes_home()
     root = Path(cfg.store_path or home / "memory-buckets").expanduser()
     embedder = make_embedder(cfg, root)
-    store = Store(root)
+    store = Store(root, history_keep=cfg.history_keep, history_days=cfg.history_days)
     return cfg, home, store, Index(store, embedder)
 
 
@@ -570,6 +570,42 @@ def cmd_import_prompt(args) -> int:
     return 0
 
 
+def cmd_history(args) -> int:
+    """Versions of one memory file recorded in .history/, newest first."""
+    _, _, store, _ = _open(args)
+    try:
+        entries = store.history(args.path)
+    except StoreError as err:
+        _out(f"error: {err.message}")
+        return 1
+    if not entries:
+        _out(f"no history for {args.path}")
+        return 1
+    for e in entries:
+        _out(f"{e['timestamp']}  {e['version']}  {_bytes(e['bytes'])}")
+    _out("restore one with: hermes memory-buckets restore PATH [VERSION]")
+    return 0
+
+
+def cmd_restore(args) -> int:
+    _, _, store, _ = _open(args)
+    try:
+        got = store.restore(args.path, args.version)
+    except StoreError as err:
+        _out(f"error: {err.message}")
+        return 1
+    if got["unchanged"]:
+        _out(f"{args.path} already holds version {got['version']} (recorded {got['timestamp']})")
+    else:
+        _out(f"restored {args.path} to version {got['version']} (recorded {got['timestamp']}); "
+             "the content it replaced is itself recorded")
+    return 0
+
+
+def _bytes(n: int) -> str:
+    return f"{n} bytes"
+
+
 # -- argparse ----------------------------------------------------------------------
 
 def _add_commands(parser: argparse.ArgumentParser) -> None:
@@ -608,12 +644,19 @@ def _add_commands(parser: argparse.ArgumentParser) -> None:
     p.set_defaults(bm_func=cmd_import)
     p = sub.add_parser("import-prompt", help="Print the prompt that asks the agent to sort the imported memory in global/inbox.md")
     p.set_defaults(bm_func=cmd_import_prompt)
+    p = sub.add_parser("history", help="List the recorded versions of one memory file (.history/)")
+    p.add_argument("path", help="Memory path, e.g. global/topics/nix.md")
+    p.set_defaults(bm_func=cmd_history)
+    p = sub.add_parser("restore", help="Write a recorded version of one memory file back (itself recorded)")
+    p.add_argument("path", help="Memory path, e.g. global/topics/nix.md")
+    p.add_argument("version", nargs="?", help="Version from `history`; default: the newest recorded version")
+    p.set_defaults(bm_func=cmd_restore)
 
 
 def _dispatch(args) -> int:
     func = getattr(args, "bm_func", None)
     if func is None:
-        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, import-prompt (--help for more)", file=sys.stderr)
+        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, import-prompt, history, restore (--help for more)", file=sys.stderr)
         return 2
     return func(args)
 
