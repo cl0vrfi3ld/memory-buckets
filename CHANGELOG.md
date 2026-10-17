@@ -20,6 +20,13 @@ change the store's layout; the plugin migrates the store itself (see
   and drops anything older than `history_days` (default 90); `history_keep: 0`
   turns history off. A history write that fails is logged and never breaks the
   memory write. Hand edits outside the plugin are not recorded (README: History).
+- **Drift detection for the Hermes internals the plugin depends on.** The Hermes
+  integration probe now imports and calls the private code behind the desktop workspace
+  override, the gateway per-turn cwd, the TUI status line and project lookup, and fails
+  naming whichever moved. Before, those paths fell back silently (an ignored workspace,
+  no status line, an unscoped session) and a Hermes refactor looked like behaviour drift.
+  A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
+  from the job pinned to a Hermes release.
 
 ## [0.4.0] - 2026-10-16
 
