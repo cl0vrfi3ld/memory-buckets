@@ -80,6 +80,7 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertTrue(out["is_provider"])
         self.assertTrue(out["distinct_instances"])
         self.assertEqual(out["signature_problems"], [])
+        self.assertEqual(out["internals_problems"], [], "private Hermes internals the plugin falls back on")
         self.assertEqual(len(out["tools"]), 7)
         self.assertEqual(out["core_clash"], [])
         self.assertEqual(Path(out["store_root"]).parts[-2:], ("hermes-home", "memory-buckets"))
