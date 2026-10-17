@@ -218,6 +218,14 @@ first, then drops `global/preferences.md`, `<project>/preferences.md`, and
 `<project>/profile.md` in that order. `global/profile.md` and the project header are
 always kept.
 
+The listing is cut by recency, not by name. Project files come first, then global
+ones; within each group the most recently edited files are kept and the least recently
+edited are the ones summarised as "and N more files". A file's age is its `edited_at`
+stamp, or its modification time when it has none (a hand edit, or a date that isn't in
+the stamp's format). The lines that survive are still shown in path order. Hand edits
+to a file that already has a stamp don't move it, since the stamp wins over the
+modification time.
+
 The agent gets seven tools: `memory_list`, `memory_read`, `memory_search`,
 `memory_write`, `memory_str_replace`, `memory_append`, and `memory_delete`. Every
 write is compare-and-swap against a content hash version; on a conflict, the tool

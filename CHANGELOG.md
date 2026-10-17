@@ -6,6 +6,16 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [Unreleased]
+
+### Changed
+
+- When the prompt block's file listing doesn't fit under `snapshot_max_chars`, it now
+  keeps the most recently edited files instead of the ones that sort first by path.
+  Project files still come before global ones, and the lines that remain are shown in
+  path order. A file's age is its `edited_at` stamp, falling back to its modification
+  time. No store or index changes.
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.

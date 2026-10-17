@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from .helpers import StoreCase, doc, symlink_or_skip
+from memory_buckets import frontmatter
 from memory_buckets import store as st
 
 
@@ -18,6 +19,19 @@ def _hold_lock(root, ready, release):
 
 
 class StoreTest(StoreCase):
+    def test_edited_at_reads_what_stamp_writes(self):
+        fm = frontmatter.parse(doc("nix", "Nix"))[0]
+        self.assertIsNone(st.edited_at(fm))
+        st.stamp(fm)
+        self.assertAlmostEqual(st.edited_at(fm), time.time(), delta=5)
+        fm.set(st.EDITED_AT, "2031-01-02T03:04:05Z")
+        self.assertEqual(st.edited_at(fm), 1925089445.0)
+        for odd in ("last Tuesday", "2031-01-02", "2031-01-02T03:04:05+01:00", ""):
+            fm.set(st.EDITED_AT, odd)
+            self.assertIsNone(st.edited_at(fm), odd)
+        fm.set(st.EDITED_AT, ["2031-01-02T03:04:05Z"])  # a list is not a stamp
+        self.assertIsNone(st.edited_at(fm))
+
     def test_write_read_delete(self):
         v1 = self.store.write("global/topics/nix.md", doc("nix", "Nix"), "new")["version"]
         got = self.store.read("global/topics/nix.md")
