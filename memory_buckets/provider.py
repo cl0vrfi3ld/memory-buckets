@@ -42,6 +42,52 @@ NUDGE = ("Memory check: has this conversation produced new durable facts about t
          "save them now with the memory tools, following your memory instructions. If no, do nothing. Do not "
          "mention this check to the user.")
 
+# Setup fields for `hermes memory setup` (agent/memory_provider.py get_config_schema):
+# the twelve non-secret settings from config.py, in the README table's order. Defaults and
+# types come from the Config dataclasses; minimums are the ones the code already enforces
+# (snapshot.py floors snapshot_max_chars at 1000, tools.py requires search_limit >= 1, and
+# nudge_interval 0 means off). No secret field: every value belongs in config.yaml, never .env.
+CONFIG_SCHEMA = [
+    {"key": "readonly", "description": "Make every session read-only", "type": "boolean", "default": False},
+    {"key": "cron_writes", "description": "Allow cron sessions to write", "type": "boolean", "default": False},
+    {"key": "nudge_interval", "description": "User turns between filing reminders (0 disables them)",
+     "type": "integer", "default": 10, "minimum": 0},
+    {"key": "snapshot_max_chars", "description": "Character cap on the system prompt block",
+     "type": "integer", "default": 12000, "minimum": 1000},
+    {"key": "prefetch_min_similarity",
+     "description": "Minimum cosine similarity for prefetch hints (below 0: the model's own default)",
+     "type": "number", "default": -1.0},
+    {"key": "prefetch_max_hints", "description": "Maximum prefetch hints per turn",
+     "type": "integer", "default": 4, "minimum": 1},
+    {"key": "search_limit", "description": "Default memory_search result count",
+     "type": "integer", "default": 8, "minimum": 1},
+    {"key": "project_boost", "description": "Score multiplier for the session's own bucket",
+     "type": "number", "default": 1.3},
+    {"key": "store_path", "description": "Store directory (default: $HERMES_HOME/memory-buckets)",
+     "type": "text", "default": ""},
+    {"key": "embeddings.backend", "description": "Embedding search: local (built-in model) or off (keyword search only)",
+     "type": "text", "default": "local", "choices": ["local", "off"]},
+    {"key": "embeddings.auto_download", "description": "Download the model in the background when not bundled",
+     "type": "boolean", "default": True},
+    {"key": "embeddings.local_model_dir", "description": "Load the model from this directory instead",
+     "type": "text", "default": ""},
+]
+
+
+def _coerce(value: Any, type_name: str) -> Any:
+    """One schema value from the setup wizard, which hands every answer over as a
+    string, into the type config.yaml should hold. A value that won't coerce is
+    kept as-is: config.py already warns and ignores bad values at load, so the
+    user's typed text is never silently dropped here."""
+    try:
+        if type_name == "boolean" and isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        if type_name in ("integer", "number") and isinstance(value, str):
+            return int(value) if type_name == "integer" else float(value)
+    except ValueError:
+        pass
+    return value
+
 
 def _sqlite_has_fts5() -> bool:
     try:
@@ -109,6 +155,54 @@ class MemoryBucketsProvider(MemoryProvider):
     def backup_paths(self) -> List[str]:
         cfg = self.config if self.store is not None and self.config is not None else config_mod.load()
         return [str(Path(cfg.store_path).expanduser())] if cfg.store_path else []
+
+    def get_config_schema(self) -> List[Dict[str, Any]]:
+        """Setup fields for `hermes memory setup`; see CONFIG_SCHEMA for the field list."""
+        return copy.deepcopy(CONFIG_SCHEMA)
+
+    def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
+        """Write non-secret setup values to ``plugins.memory-buckets`` in config.yaml.
+
+        Through Hermes's own writer (``hermes_cli.config.save_config``, the same
+        one behind `hermes config set` and the wizard), so unrelated keys survive
+        and the file stays parseable: no raw string surgery. Dotted schema keys
+        (``embeddings.backend``) nest the way config.py reads them. Runs under a
+        hermes-home override keyed to ``hermes_home``, because a caller may serve
+        a profile other than the process-wide one (memory_setup does exactly
+        this for its .env writes). Outside Hermes there is nothing to write to,
+        and the lazy import says so with an ImportError.
+        """
+        from hermes_cli.config import load_config, save_config  # lazy, like config.py
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        types = {f["key"]: f.get("type", "text") for f in CONFIG_SCHEMA}
+        token = set_hermes_home_override(hermes_home) if hermes_home else None
+        try:
+            cfg = load_config()
+            plugins = cfg.get("plugins")
+            if not isinstance(plugins, dict):  # a stray scalar must not block the write
+                plugins = {}
+                cfg["plugins"] = plugins
+            block = plugins.get(config_mod.CONFIG_KEY)
+            if not isinstance(block, dict):
+                block = {}
+                plugins[config_mod.CONFIG_KEY] = block
+            for key, value in values.items():
+                if not isinstance(key, str) or not key:
+                    continue
+                node = block
+                parts = key.split(".")
+                for part in parts[:-1]:
+                    child = node.get(part)
+                    if not isinstance(child, dict):
+                        child = {}
+                        node[part] = child
+                    node = child
+                node[parts[-1]] = _coerce(value, types.get(key, "text"))
+            save_config(cfg)
+        finally:
+            if token is not None:
+                reset_hermes_home_override(token)
 
     # -- lifecycle -----------------------------------------------------------------
 
