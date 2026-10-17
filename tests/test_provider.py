@@ -282,6 +282,50 @@ class ProviderTest(StoreCase):
         p.on_turn_start(1, "x")
         self.assertEqual(p.prefetch("x", session_id="s1"), "")
 
+    def test_pre_compress_asks_the_summary_to_keep_unsaved_facts_and_queues_the_nudge(self):
+        p = self.make()
+        p.config.nudge_interval = 10
+        p.on_turn_start(1, "hello")
+        self.assertEqual(p.prefetch("hello", session_id="s1"), "", "interval not reached yet")
+        note = p.on_pre_compress([{"role": "user", "content": "I switched to Neovim"}])
+        self.assertEqual(note, prov.PRE_COMPRESS_NOTE)
+        self.assertIn("not yet been saved", note)
+        self.assertIn(prov.NUDGE, p.prefetch("what's new", session_id="s1"))
+        self.assertNotIn(prov.NUDGE, p.prefetch("and now", session_id="s1"), "one reminder per compression")
+
+    def test_pre_compress_nudge_survives_compression_rotating_the_session_id(self):
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s2", parent_session_id="s1", reset=False, reason="compression")
+        self.assertIn(prov.NUDGE, p.prefetch("hello", session_id="s2"))
+
+    def test_pre_compress_nudge_survives_in_place_compression(self):
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s1", parent_session_id="s1", reset=False, reason="compression")
+        self.assertIn(prov.NUDGE, p.prefetch("hello", session_id="s1"))
+
+    def test_a_reset_drops_a_pending_pre_compress_nudge(self):
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s2", parent_session_id="s1", reset=True)
+        self.assertEqual(p.prefetch("hello", session_id="s2"), "")
+
+    def test_pre_compress_does_nothing_when_read_only(self):
+        p = self.make(agent_context="cron")
+        self.assertEqual(p.on_pre_compress([]), "")
+        self.assertEqual(p.prefetch("x", session_id="s1"), "")
+        self.assertFalse(p._state("s1").nudge_due)
+
+    def test_pre_compress_does_nothing_when_reminders_are_off(self):
+        p = self.make()
+        p.config.nudge_interval = 0
+        self.assertEqual(p.on_pre_compress([]), "")
+        self.assertEqual(p.prefetch("x", session_id="s1"), "")
+
+    def test_pre_compress_before_initialize_is_empty(self):
+        self.assertEqual(prov.MemoryBucketsProvider().on_pre_compress([]), "")
+
     def test_prefetch_is_empty_without_embeddings(self):
         p = self.make()
         with self.assertNoLogs("memory_buckets", "WARNING"):

@@ -6,6 +6,23 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [Unreleased]
+
+### Added
+
+- **Pre-compression nudge.** Facts mentioned since the last save and never filed were
+  lost when Hermes compressed the conversation. The provider now implements
+  `on_pre_compress`: it sets the filing reminder for the next turn, even if
+  `nudge_interval` hasn't come round, and returns a line for the summary prompt asking
+  it to keep durable facts that haven't been saved. No model calls, and the transcript
+  isn't read. Read-only sessions and `nudge_interval: 0` skip both.
+
+### Fixed
+
+- A pending filing reminder now carries over when Hermes switches to a new session id
+  without a reset (compression that rotates the id), instead of being dropped with the
+  old session's state. `/new` still clears it.
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
