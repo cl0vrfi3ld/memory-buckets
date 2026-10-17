@@ -320,6 +320,38 @@ and Nix installs without `skills.external_dirs`, paste the prompt printed by
 `hermes memory-buckets import-prompt`. Avoid saving that prompt as a custom skill in
 `~/.hermes/skills/`, as a local copy will shadow updates to the bundled skill.
 
+## Tidying memory
+
+Memory only grows. After a few months the same fact can sit in two files, "currently
+doing X" lines stop being true, and a file can get long enough to be noisy in search.
+`/tidy-memory` is a bundled skill that looks at the store as a whole and proposes fixes.
+
+It asks before it changes anything. It reads your files, replies with a numbered list of
+proposed changes grouped by file, and waits. You answer with `all`, `none`, or the
+numbers you want. It applies exactly those and nothing else, then tells you what it
+changed and what it left alone. It only runs when you ask for it.
+
+It looks for:
+- the same fact in more than one file;
+- facts that contradict each other (it asks you which is right and never picks);
+- time words that have gone stale, such as "currently", "this semester" or "next week";
+- finished one-off tasks;
+- files over about 8 KB, which it proposes to split by subject;
+- descriptions that do not say when to read the file.
+
+It only touches `global/` and the current project's files. It never edits another
+project's files and never touches `global/inbox.md`; use `/sort-imports` for that.
+
+To run it, type `/tidy-memory` or ask the agent to tidy your memory. For `/tidy-memory`
+to register as a slash command, Hermes needs the plugin's `skills` directory in
+`skills.external_dirs`, exactly as for `/sort-imports` (see the example above). Asking in
+prose works for a plugin-directory install, because Hermes lists the plugin's skills for
+the agent. For pip and Nix installs, add the `skills` directory to `skills.external_dirs`.
+
+Back up your store first, as for the import: the proposal is a plan, but applying it
+edits and can delete files. `cp -a` on the store (or `Copy-Item -Recurse` on Windows) is
+enough, and `diff -ru` against the copy shows exactly what changed.
+
 ## Reference
 
 ### Commands

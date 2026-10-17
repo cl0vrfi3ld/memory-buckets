@@ -6,6 +6,17 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [Unreleased]
+
+### Added
+
+- **`/tidy-memory` skill.** A bundled skill that finds duplicate facts, contradictions,
+  stale time words ("currently", "this semester"), finished one-off tasks, files over
+  about 8 KB and vague descriptions. It proposes the fixes as a numbered list, waits for
+  you to say which to apply, and applies only those. It never touches `global/inbox.md`
+  or another project's files. It registers like `/sort-imports`, with no code change.
+  See [Tidying memory](README.md#tidying-memory).
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
