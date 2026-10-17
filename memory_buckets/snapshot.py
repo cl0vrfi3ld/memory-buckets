@@ -6,9 +6,10 @@ here from the Hermes project (name, description, folders) and the bucket's own
 ``profile.md`` and ``preferences.md`` in full. No file holds it. Then a path +
 description listing of the other files the session reads by default (project
 files first). Capped at ``snapshot_max_chars``. When over the cap, drop listing
-lines first, then whole files, in ``drop_order()``'s order. The global profile and the
-project header are never dropped. The provider freezes the result per session
-id for prefix caching.
+drop lines first, then whole files, in ``drop_order()``'s order. The global profile and the
+project header are never dropped. A file that still doesn't fit is cut to its head, ending
+with a line that says how much was cut and points at ``memory_read``. The provider freezes
+the result per session id for prefix caching.
 """
 
 from __future__ import annotations
@@ -146,7 +147,7 @@ OTHER_PROJECTS_ADD = "- You may only add to their files. Do not edit or delete t
 @dataclass
 class Snapshot:
     text: str
-    paths: Set[str] = field(default_factory=set)  # files inlined in full
+    paths: Set[str] = field(default_factory=set)  # files shown in the block (whole, or truncated with a cut note)
 
 
 def rules(scope: Scope, config: Config, projects: List[str]) -> str:
@@ -261,6 +262,29 @@ def drop_order(project: Optional[str]) -> List[str]:
     # The project's own files matter more here: drop the global preferences
     # first, its profile last.
     return [PREFERENCES, f"{project}/preferences.md", f"{project}/profile.md"]
+
+
+CUT_NOTE = "{cut} of {total} characters are not shown. Use memory_read to read the rest of {path}."
+
+
+def _cut_body(body: str, path: str, budget: int) -> str:
+    """The head of ``body`` that fits in ``budget``, ending with a line that says
+    how much was cut. The cut backs up to the end of a line when one is close, so
+    the head doesn't end mid-sentence."""
+    keep = max(budget, 0)
+    while True:
+        head = body[:keep]
+        newline = head.rfind("\n")
+        if newline >= keep // 2:  # near a line end: cut there, not mid-sentence
+            head = head[:newline]
+        head = head.rstrip()
+        note = CUT_NOTE.format(cut=len(body) - len(head), total=len(body), path=path)
+        if not head:
+            return note  # no room even for the head; the line still names the file
+        text = f"{head}\n\n{note}"
+        if len(text) <= budget:
+            return text
+        keep = budget - len(note) - 2  # once more, sized to leave room for the note
 
 
 def build(
@@ -389,4 +413,20 @@ def build(
         if floor(trial_shown, trial_dropped) < floor(shown, dropped):
             shown, dropped = trial_shown, trial_dropped
             text = fit(shown, dropped)
+    if len(text) > cap:
+        # Whole-file dropping is exhausted (the global profile is never dropped):
+        # cut it to the space left after everything else and say what was cut. Any
+        # other file still in ``shown`` is treated the same way, though only the
+        # profile is ever still over.
+        base = render(shown, 0, dropped)
+        if profile:
+            budget = cap - (len(base) - len(profile))
+            if budget < len(profile):
+                profile = _cut_body(profile, PROFILE, budget)
+        for path in list(shown):
+            base = render(shown, 0, dropped)  # includes the profile cut and any earlier cut
+            budget = cap - (len(base) - len(shown[path]))
+            if budget < len(shown[path]):
+                shown[path] = _cut_body(shown[path], path, budget)
+        text = fit(shown, dropped)
     return Snapshot(text=text, paths=set(shown) | ({PROFILE} if profile else set()))
