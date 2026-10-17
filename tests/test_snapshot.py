@@ -1,4 +1,5 @@
 import os
+import threading
 import unittest
 from unittest import mock
 
@@ -255,6 +256,27 @@ class SnapshotTest(StoreCase):
         hermes = Project(bucket="proj-1", slug="proj-1", name="proj-1", folders=("/src/proj-1",))
         text = self.build(project="proj-1", hermes=hermes, snapshot_max_chars=12000).text
         self.assertIn("Folders: /src/proj-1", text)
+
+    def test_a_budget_smaller_than_the_cut_note_never_hangs(self):
+        # Issue 17 regression: with a budget that can't fit the cut note, the
+        # retry pass computed a negative keep and _cut_body never returned. The
+        # empty-head path must return the note instead. Each call runs behind a
+        # join timeout so a regression fails the test rather than hanging it.
+        body = "\n".join(f"line {i}" for i in range(1000))
+        for budget in list(range(0, 130)) + [500, 1000, 5000, 6001]:
+            with self.subTest(budget=budget):
+                result = {}
+                thread = threading.Thread(
+                    target=lambda: result.update(text=snapshot._cut_body(body, "global/profile.md", budget)),
+                    daemon=True,
+                )
+                thread.start()
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive(), f"_cut_body hung at budget {budget}")
+                self.assertIn("text", result, f"_cut_body returned nothing at budget {budget}")
+                self.assertTrue(result["text"])
+                self.assertIn("global/profile.md", result["text"])
+                self.assertIn("not shown", result["text"])
 
     def test_listing_fills_the_cap(self):
         # Regression: the trim assumed ~40 characters a line and cut the listing far below the cap.

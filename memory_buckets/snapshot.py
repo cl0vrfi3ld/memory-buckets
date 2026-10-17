@@ -284,7 +284,10 @@ def _cut_body(body: str, path: str, budget: int) -> str:
         text = f"{head}\n\n{note}"
         if len(text) <= budget:
             return text
-        keep = budget - len(note) - 2  # once more, sized to leave room for the note
+        # Once more, sized to leave room for the note. If the budget can't fit
+        # even the note, floor the head at 0 so the empty-head path returns it
+        # instead of slicing from the tail of the body forever.
+        keep = max(budget - len(note) - 2, 0)
 
 
 def build(
