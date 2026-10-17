@@ -1,0 +1,97 @@
+name: test
+
+# The test suite on Linux and macOS, the platforms most people use, plus lint.
+# This lives on the GitHub mirror next to windows.yml because git.cl0vr.co has
+# Actions enabled but no runner; branches pushed there are mirrored here, so every
+# push and pull request branch still gets its checks.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # Hermes needs 3.11 to 3.14; the 3.10 floor in pyproject.toml is exercised
+        # by the Windows job, so this stays inside Hermes's range.
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0; setup-uv publishes no floating major tag
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      # The real model enables the real-model tests (mmap of the weights, encode).
+      # static_model.py pins the revision and hashes, so it keys the cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/mb-model
+          key: model-${{ hashFiles('memory_buckets/static_model.py') }}
+
+      - name: Fetch the embedding model
+        run: |
+          uv run python - <<'PY'
+          import os
+          from pathlib import Path
+          from memory_buckets import static_model as sm
+          d = sm.fetch(Path(os.environ['RUNNER_TEMP']) / 'mb-model')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'MEMORY_BUCKETS_MODEL_DIR={d}\n')
+              env.write(f'MEMORY_BUCKETS_MODEL_F32={d / "model.safetensors"}\n')
+          PY
+
+      - run: uv run pytest -rs
+
+  lint:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0; setup-uv publishes no floating major tag
+        with:
+          enable-cache: true
+
+      # PR #10 (issue #8) adds [tool.ruff] and fixes the existing findings; until it
+      # merges there is no config and main does not pass, so skip rather than be red.
+      - name: ruff check .
+        run: |
+          if ! grep -q '^\[tool\.ruff\]' pyproject.toml; then
+            echo '[tool.ruff] not in pyproject.toml (PR #10 pending); skipping ruff check'
+            exit 0
+          fi
+          # The version PR #10 linted with, so CI and the devshell agree on the rules.
+          uvx ruff@0.17.1 check .
+
+      # Reported, never blocking: PR #10 drops ruff format from lint on purpose
+      # (the tree has never been formatted that way), and reformatting is out of
+      # scope here. Flip this to blocking once the tree is formatted.
+      - name: ruff format --check . (non-blocking)
+        continue-on-error: true
+        run: |
+          if ! grep -q '^\[tool\.ruff\]' pyproject.toml; then
+            echo '[tool.ruff] not in pyproject.toml (PR #10 pending); skipping ruff format'
+            exit 0
+          fi
+          uvx ruff@0.17.1 format --check .
