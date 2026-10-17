@@ -17,10 +17,12 @@ change the store's layout; the plugin migrates the store itself (see
   and filing rules out of context. `prefetch` now compares the session's project with
   the one it last described and, on a difference, sends a one-off note: the routing
   rules for the new project, its `profile.md` and `preferences.md` in full, and a line
-  saying the old project is now add-only. It fires once per move (also when leaving a
+  saying the old project is now add-only, and that the new one is no longer an "other
+  project" as the block lists it. It fires once per move (also when leaving a
   project or returning to the first one), the files it inlines are left out of
   `prefetch` hints, and the frozen block is untouched, so prefix caching still works.
-  `Snapshot` records the bucket it was built for (`Snapshot.project`).
+  `Snapshot` records the bucket it was built for (`Snapshot.project`). A resumed chat
+  has no snapshot to compare with, so it gets no note (documented in the README).
 
 ## [0.4.0] - 2026-10-16
 

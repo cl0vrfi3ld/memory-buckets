@@ -225,9 +225,13 @@ note instead of rebuilding the block, so the prefix cache stays warm. The note s
 which project the session is now in, gives the routing rules for it, and includes its
 `profile.md` and `preferences.md` in full (trimmed under `snapshot_max_chars` the same
 way as the block). It also says the old project is now add-only, matching what the
-tools allow. It is sent once per move, and moving back sends it again for the project
+tools allow, and that the new project is no longer one of the "other projects" the
+block lists. It is sent once per move, and moving back sends it again for the project
 you return to. Compression in place rebuilds the block for the current project, so no
-note follows it.
+note follows it. A resumed chat gets no note: Hermes reuses the stored prompt and this
+plugin never built it, so there is nothing to compare the project with. If you reopen
+a chat in a different project from the one it started in, start a new chat to get a
+block for the right one.
 
 The agent gets seven tools: `memory_list`, `memory_read`, `memory_search`,
 `memory_write`, `memory_str_replace`, `memory_append`, and `memory_delete`. Every

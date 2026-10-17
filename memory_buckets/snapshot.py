@@ -151,6 +151,12 @@ SWITCHED = """\
 MOVED_IN = "This session was not in a project. It is now in the project {new}."
 MOVED_OUT = "This session was in the project {old}. It is no longer in a project."
 MOVED = "This session was in the project {old}. It is now in the project {new}."
+# The frozen block's "Facts for another project" and "Other projects with memory"
+# sections still list the new project as someone else's, so the note has to overrule them too.
+NOT_ANOTHER = (
+    "{new} is now this session's own project. Where the earlier \"Facts for another project\" "
+    'and "Other projects with memory" sections list it as another project, ignore that.'
+)
 # What scopes.py allows in a bucket that isn't the session's own.
 NOW_ANOTHER = (
     "{old} is now another project. You may add to its files with memory_append, "
@@ -433,6 +439,8 @@ def switch_note(
     else:
         moved = MOVED_OUT.format(old=previous)
     head = [SWITCHED.format(moved=moved)]
+    if new:
+        head.append(NOT_ANOTHER.format(new=new))
     if scope.read_only:
         head.append(READ_ONLY.format(reason=scope.read_only_reason))
     else:

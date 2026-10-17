@@ -322,6 +322,7 @@ class SnapshotTest(StoreCase):
         self.assertIn("### proj-1/preferences.md\n- run the linter first", note.text)
         self.assertNotIn("- Sam, they/them", note.text, "the global files are already in the frozen block")
         self.assertNotIn("is now another project", note.text, "nothing to demote from an unscoped session")
+        self.assertIn("proj-1 is now this session's own project.", note.text)
 
     def test_switch_note_demotes_the_old_bucket_to_add_only(self):
         text = self.switch("proj-1", "proj-0").text
@@ -337,6 +338,7 @@ class SnapshotTest(StoreCase):
     def test_switch_note_out_of_a_project_uses_the_unscoped_rules(self):
         note = self.switch(None, "proj-1")
         self.assertIsNone(note.project)
+        self.assertNotIn("own project", note.text)
         self.assertEqual(note.paths, set())
         self.assertIn("This session was in the project proj-1. It is no longer in a project.", note.text)
         self.assertIn(snapshot.UNSCOPED, note.text)

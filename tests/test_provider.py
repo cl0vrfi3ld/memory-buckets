@@ -471,6 +471,27 @@ class ProviderTest(StoreCase):
             self.assertIn("proj-a is now another project. You may add to its files", note)
             self.assertTrue(self.call(p, "memory_append", path="proj-a/topics/arch.md", lines=["- more"])["ok"])
 
+    def test_the_note_overrules_the_frozen_blocks_other_project_sections(self):
+        # The block frozen in proj-a lists proj-b as "another project" in two places, with
+        # add-only rules. After the move the note has to say that no longer holds for proj-b.
+        self.put_two_projects()
+        projects_ab = {"proj-a": "/src/proj-a", "proj-b": "/src/proj-b"}
+        with fake_hermes(projects_ab):
+            p = self.make(cwd="/src/proj-a")
+            block = p.system_prompt_block()
+        self.assertIn("Projects: proj-b.", block)
+        self.assertIn("Other projects with memory: proj-b", block)
+        with fake_hermes(projects_ab, pinned="/src/proj-b"):
+            note = p.prefetch("hello", session_id="s1")
+        self.assertIn(
+            "proj-b is now this session's own project. Where the earlier \"Facts for another project\" "
+            "and \"Other projects with memory\" sections list it as another project, ignore that.",
+            note,
+        )
+        # Out of a project there is no new own project to claim, so no such line.
+        with fake_hermes(projects_ab, pinned="/elsewhere"):
+            self.assertNotIn("own project", p.prefetch("hello", session_id="s1"))
+
     def test_moving_back_or_out_of_a_project_is_noted_too(self):
         self.put_two_projects()
         projects_ab = {"proj-a": "/src/proj-a", "proj-b": "/src/proj-b"}
