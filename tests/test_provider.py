@@ -439,6 +439,110 @@ class ProviderTest(StoreCase):
         for inlined in ("global/profile.md", "global/preferences.md", "proj-1/profile.md", "proj-1/preferences.md"):
             self.assertNotIn(inlined, out)
 
+    def put_two_projects(self):
+        for bucket, who in (("proj-a", "Ann"), ("proj-b", "Bea")):
+            self.put(f"{bucket}/profile.md", doc("profile", f"What {bucket} is", f"- {who} runs {bucket}\n"))
+            self.put(f"{bucket}/preferences.md", doc("preferences", f"How to work on {bucket}", f"- {who} wants tests\n"))
+            self.put(f"{bucket}/topics/arch.md", doc("arch", f"{bucket} architecture", f"- {who} uses SQLite\n"))
+
+    def test_a_project_switch_is_noted_once_and_the_block_stays_frozen(self):
+        self.put_two_projects()
+        projects_ab = {"proj-a": "/src/proj-a", "proj-b": "/src/proj-b"}
+        with fake_hermes(projects_ab):
+            p = self.make(cwd="/src/proj-a")
+            block = p.system_prompt_block()
+            self.assertIn("This session is in the project proj-a.", block)
+            self.assertEqual(p.prefetch("hello", session_id="s1"), "", "no switch, no note")
+        with fake_hermes(projects_ab, pinned="/src/proj-b"):
+            note = p.prefetch("hello", session_id="s1")
+            self.assertIn("It is now in the project proj-b.", note)
+            self.assertIn("This session is in the project proj-b. Save each fact once, in one place:", note)
+            self.assertIn("- proj-b/preferences.md: how to work on the project", note)
+            self.assertIn("### proj-b/profile.md\n- Bea runs proj-b", note)
+            self.assertIn("### proj-b/preferences.md\n- Bea wants tests", note)
+            self.assertNotIn("Ann", note)
+            self.assertEqual(p.prefetch("hello again", session_id="s1"), "", "once per switch, not every turn")
+            self.assertEqual(p.system_prompt_block(), block, "the frozen block is kept for prefix caching")
+            # The note and the tools agree: proj-b is the session's own bucket, proj-a is add-only.
+            ok = self.call(p, "memory_str_replace", path="proj-b/topics/arch.md", old="SQLite", new="Postgres")
+            self.assertTrue(ok["ok"], ok)
+            refused = self.call(p, "memory_str_replace", path="proj-a/topics/arch.md", old="SQLite", new="Postgres")
+            self.assertEqual(refused["error"]["code"], "out_of_scope")
+            self.assertIn("proj-a is now another project. You may add to its files", note)
+            self.assertTrue(self.call(p, "memory_append", path="proj-a/topics/arch.md", lines=["- more"])["ok"])
+
+    def test_moving_back_or_out_of_a_project_is_noted_too(self):
+        self.put_two_projects()
+        projects_ab = {"proj-a": "/src/proj-a", "proj-b": "/src/proj-b"}
+        with fake_hermes(projects_ab):
+            p = self.make(cwd="/src/proj-a")
+            p.system_prompt_block()
+        with fake_hermes(projects_ab, pinned="/src/proj-b"):
+            self.assertIn("project proj-b", p.prefetch("x", session_id="s1"))
+        # The model was last told proj-b, so going back to proj-a needs its own note,
+        # even though the frozen block still describes proj-a.
+        with fake_hermes(projects_ab, pinned="/src/proj-a"):
+            back = p.prefetch("x", session_id="s1")
+            self.assertIn("This session was in the project proj-b. It is now in the project proj-a.", back)
+            self.assertIn("### proj-a/profile.md\n- Ann runs proj-a", back)
+            self.assertEqual(p.prefetch("x", session_id="s1"), "")
+        with fake_hermes(projects_ab, pinned="/elsewhere"):
+            out = p.prefetch("x", session_id="s1")
+            self.assertIn("It is no longer in a project.", out)
+            self.assertIn("This session is not in a project. Save general facts under global/.", out)
+            self.assertIn("proj-a is now another project.", out)
+            self.assertNotIn("### proj-a/", out)
+            self.assertEqual(p.prefetch("x", session_id="s1"), "")
+
+    def test_the_note_inlines_files_that_prefetch_then_does_not_hint(self):
+        self.put_two_projects()
+        projects_ab = {"proj-a": "/src/proj-a", "proj-b": "/src/proj-b"}
+        with fake_hermes(projects_ab):
+            p = self.make(embedder=FakeEmbedder(), cwd="/src/proj-a")
+            p.config.prefetch_min_similarity = 0.1
+            p.system_prompt_block()
+            p.queue_prefetch("x", session_id="s1")
+        with fake_hermes(projects_ab, pinned="/src/proj-b"):
+            out = p.prefetch("Bea", session_id="s1")
+        self.assertIn("### proj-b/profile.md", out)
+        self.assertIn("- proj-b/topics/arch.md: proj-b architecture", out)
+        # A hint line carries the file's description; the routing text only names the paths.
+        for description in ("What proj-b is", "How to work on proj-b"):
+            self.assertNotIn(description, out, "inlined by the note, so not hinted as well")
+
+    def test_in_place_compression_after_a_switch_rebuilds_for_the_new_project(self):
+        self.put_two_projects()
+        projects_ab = {"proj-a": "/src/proj-a", "proj-b": "/src/proj-b"}
+        with fake_hermes(projects_ab):
+            p = self.make(cwd="/src/proj-a")
+            p.system_prompt_block()
+        with fake_hermes(projects_ab, pinned="/src/proj-b"):
+            self.assertIn("project proj-b", p.prefetch("x", session_id="s1"))
+            p.on_session_switch("s1", parent_session_id="s1")
+            self.assertIsNone(p._state("s1").note)
+            self.assertIn("This session is in the project proj-b.", p.system_prompt_block())
+            self.assertEqual(p.prefetch("x", session_id="s1"), "", "the rebuilt block already says proj-b")
+
+    def test_no_note_without_a_snapshot_to_compare_with(self):
+        # A resumed session reuses a persisted prompt that this provider never built.
+        self.put_two_projects()
+        with fake_hermes({"proj-b": "/src/proj-b"}, pinned="/src/proj-b"):
+            p = self.make(cwd="/elsewhere")
+            self.assertIsNone(p._state("s1").snapshot)
+            self.assertEqual(p.prefetch("x", session_id="s1"), "")
+
+    def test_a_failing_note_is_retried_next_turn(self):
+        self.put_two_projects()
+        projects_ab = {"proj-a": "/src/proj-a", "proj-b": "/src/proj-b"}
+        with fake_hermes(projects_ab):
+            p = self.make(cwd="/src/proj-a")
+            p.system_prompt_block()
+        with fake_hermes(projects_ab, pinned="/src/proj-b"):
+            with mock.patch.object(prov.snapshot, "switch_note", side_effect=RuntimeError("boom")), \
+                    self.assertLogs("memory_buckets", "WARNING"):
+                self.assertEqual(p.prefetch("x", session_id="s1"), "")
+            self.assertIn("project proj-b", p.prefetch("x", session_id="s1"))
+
     def test_queue_prefetch_skips_embed_backlog_while_after_write_embeds(self):
         p = self.make(embedder=FakeEmbedder())
         self.assertTrue(p._embed_running.acquire(blocking=False))

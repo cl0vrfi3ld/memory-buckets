@@ -158,7 +158,8 @@ tool call, first match winning:
 
 Because the check runs per call, switching a chat into a project takes effect right
 away. A session outside every project is unscoped and reads only `global/` by
-default.
+default. The prompt block follows with a one-off note on the next turn (see
+[What the agent gets](#what-the-agent-gets)).
 
 A project's slug names its bucket under `memories/<slug>/` (with `_` normalised to
 `-`). Hermes keeps slugs fixed after creation, so to attach an existing bucket on
@@ -217,6 +218,16 @@ If the prompt block would exceed `snapshot_max_chars`, it trims the file listing
 first, then drops `global/preferences.md`, `<project>/preferences.md`, and
 `<project>/profile.md` in that order. `global/profile.md` and the project header are
 always kept.
+
+The frozen block describes the project the session started in. If you move the chat
+into another project (or out of one) mid-session, the next `prefetch` sends a one-off
+note instead of rebuilding the block, so the prefix cache stays warm. The note says
+which project the session is now in, gives the routing rules for it, and includes its
+`profile.md` and `preferences.md` in full (trimmed under `snapshot_max_chars` the same
+way as the block). It also says the old project is now add-only, matching what the
+tools allow. It is sent once per move, and moving back sends it again for the project
+you return to. Compression in place rebuilds the block for the current project, so no
+note follows it.
 
 The agent gets seven tools: `memory_list`, `memory_read`, `memory_search`,
 `memory_write`, `memory_str_replace`, `memory_append`, and `memory_delete`. Every

@@ -8,7 +8,8 @@ description listing of the other files the session reads by default (project
 files first). Capped at ``snapshot_max_chars``. When over the cap, drop listing
 lines first, then whole files, in ``drop_order()``'s order. The global profile and the
 project header are never dropped. The provider freezes the result per session
-id for prefix caching.
+id for prefix caching. When the session later moves project, ``switch_note`` builds
+the correction that ``prefetch`` sends once, so the frozen block can stay as it is.
 """
 
 from __future__ import annotations
@@ -142,11 +143,29 @@ OTHER_PROJECTS = """\
 - Read their files only when the user asks about that project."""
 OTHER_PROJECTS_ADD = "- You may only add to their files. Do not edit or delete them."
 
+# The one-off correction ``switch_note`` builds when a session moves project after
+# its prompt block was frozen. The cap's "too long" line is shared with ``build``.
+SWITCHED = """\
+### Project changed
+{moved} Follow this note instead of the earlier "Where facts go" and "Project:" sections."""
+MOVED_IN = "This session was not in a project. It is now in the project {new}."
+MOVED_OUT = "This session was in the project {old}. It is no longer in a project."
+MOVED = "This session was in the project {old}. It is now in the project {new}."
+# What scopes.py allows in a bucket that isn't the session's own.
+NOW_ANOTHER = (
+    "{old} is now another project. You may add to its files with memory_append, "
+    'or create a file there with memory_write and if_version "new". Do not edit or delete its files.'
+)
+TOO_LONG = (
+    "These files are too long to show here. Read them with memory_read when they are relevant: "
+)
+
 
 @dataclass
 class Snapshot:
     text: str
     paths: Set[str] = field(default_factory=set)  # files inlined in full
+    project: Optional[str] = None  # the bucket the text was built for; None when unscoped
 
 
 def rules(scope: Scope, config: Config, projects: List[str]) -> str:
@@ -327,10 +346,7 @@ def build(
             f"### {path}\n{body}" for path, body in shown.items() if path != PREFERENCES
         )
         if dropped:
-            parts.append(
-                "These files are too long to show here. Read them with memory_read when they are relevant: "
-                + ", ".join(dropped)
-            )
+            parts.append(TOO_LONG + ", ".join(dropped))
         omitted = len(listing) - kept
         if kept or omitted:
             lines = ["### Other files", *listing[:kept]]
@@ -389,4 +405,61 @@ def build(
         if floor(trial_shown, trial_dropped) < floor(shown, dropped):
             shown, dropped = trial_shown, trial_dropped
             text = fit(shown, dropped)
-    return Snapshot(text=text, paths=set(shown) | ({PROFILE} if profile else set()))
+    return Snapshot(
+        text=text,
+        paths=set(shown) | ({PROFILE} if profile else set()),
+        project=scope.project,
+    )
+
+
+def switch_note(
+    store: Store, scope: Scope, config: Config, previous: Optional[str]
+) -> Snapshot:
+    """The correction for a session that moved from bucket ``previous`` into
+    ``scope.project`` after its prompt block was frozen: the routing rules for the new
+    bucket and its ``profile.md`` and ``preferences.md`` in full. The frozen block
+    stays as it is, for prefix caching; ``prefetch`` carries this instead.
+
+    Only the new bucket's own files go in: the global ones are already in the frozen
+    block, and the Hermes project header and the other-projects list would need a
+    project listing that ``prefetch`` avoids. The new bucket's files drop under the
+    same cap and order as ``build``. ``paths`` are the files inlined, so ``prefetch``
+    doesn't hint them as well."""
+    new = scope.project
+    if previous and new:
+        moved = MOVED.format(old=previous, new=new)
+    elif new:
+        moved = MOVED_IN.format(new=new)
+    else:
+        moved = MOVED_OUT.format(old=previous)
+    head = [SWITCHED.format(moved=moved)]
+    if scope.read_only:
+        head.append(READ_ONLY.format(reason=scope.read_only_reason))
+    else:
+        if previous:
+            head.append(NOW_ANOTHER.format(old=previous))
+        head.append(SHARED.format(p=new) if new else UNSCOPED)
+
+    shown = {}
+    if new:
+        for path in (f"{new}/profile.md", f"{new}/preferences.md"):
+            body = _body(store, path)
+            if body:
+                shown[path] = body
+
+    def render(shown, dropped):
+        parts = list(head)
+        parts.extend(f"### {path}\n{body}" for path, body in shown.items())
+        if dropped:
+            parts.append(TOO_LONG + ", ".join(dropped))
+        return "\n\n".join(parts)
+
+    cap = max(1000, config.snapshot_max_chars)
+    dropped: List[str] = []
+    for path in drop_order(new)[1:]:
+        if len(render(shown, dropped)) <= cap:
+            break
+        if path in shown:
+            del shown[path]
+            dropped.append(path)
+    return Snapshot(text=render(shown, dropped), paths=set(shown), project=new)

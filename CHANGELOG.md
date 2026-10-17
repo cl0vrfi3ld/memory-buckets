@@ -6,6 +6,22 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
+## [Unreleased]
+
+### Fixed
+
+- **The prompt block no longer goes stale when a session changes project.** Scope
+  follows the session's project on every tool call, but the frozen prompt block kept
+  describing the project the session started in: it told the agent to save under the
+  old bucket (which the tools then refused to edit) and left the new project's profile
+  and filing rules out of context. `prefetch` now compares the session's project with
+  the one it last described and, on a difference, sends a one-off note: the routing
+  rules for the new project, its `profile.md` and `preferences.md` in full, and a line
+  saying the old project is now add-only. It fires once per move (also when leaving a
+  project or returning to the first one), the files it inlines are left out of
+  `prefetch` hints, and the frozen block is untouched, so prefix caching still works.
+  `Snapshot` records the bucket it was built for (`Snapshot.project`).
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
