@@ -432,6 +432,14 @@ Inside the Nix devshell (`direnv allow` or `nix develop`):
 Two environment variables enable extra test coverage:
 - `HERMES_PYTHON=<path to Hermes's python>` runs the Hermes integration tests against
   a temporary `HERMES_HOME`, testing both plugin-directory and pip entry-point loads.
+  Hermes only installs its dependencies on Python 3.14, so build its venv with that.
+  The probe (`tests/hermes_probe.py`) also checks the private Hermes code the plugin
+  reaches into, each of which falls back silently when it changes: the workspace
+  override and per-turn cwd (`resolve_task_overrides`, `get_session_env`,
+  `scoped_session_cwd`, `resolve_agent_cwd`), project lookup (`hermes_cli.projects_db`)
+  and the TUI status line (`tui_gateway.server._sessions`, `agent._memory_manager`,
+  `status_callback`). Renaming any of them in a Hermes checkout fails the test with the
+  names that moved.
 - `MEMORY_BUCKETS_MODEL_DIR=<path to potion-retrieval-32M>` enables the real-model
   embedding and retrieval tests.
 
@@ -456,3 +464,8 @@ and arm64 (3.14) with the real model, and the Hermes integration tests against t
 Hermes release pinned in `HERMES_REF`. Bump that pin when Hermes releases. Hermes
 refuses to build as a wheel, so the job installs an editable checkout. The lint job
 activates once the `[tool.ruff]` configuration lands; until then it skips with a note.
+
+`.github/workflows/hermes-main.yml` runs the same Hermes integration tests on Linux
+against Hermes `main` every Monday (and on demand), separately from the pinned job. A red
+run there means Hermes moved something the plugin depends on, not that a change here
+broke it; the log names the Hermes commit and the thing that moved.

@@ -1,0 +1,60 @@
+name: hermes-main
+
+# The Hermes integration tests on Linux against Hermes `main`, weekly. The pinned job in
+# windows.yml tells us a release works; this one tells us, before the next release does, that a
+# Hermes refactor has moved something the plugin reaches into (tests/hermes_probe.py lists what).
+# Those paths all fall back silently in the plugin, so without this a rename is behaviour drift.
+# Separate from windows.yml on purpose: a red run here is Hermes moving, not a regression in a PR.
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"  # Mondays, off the hour so it isn't queued with everyone else's
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  HERMES_REF: main
+  PYTHONUTF8: "0"
+
+jobs:
+  hermes:
+    name: Hermes integration (ubuntu-latest, Hermes main)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ env.HERMES_REF }}
+          path: .ci/hermes-agent
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0; setup-uv publishes no floating major tag
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      # Hermes pins its dependencies for 3.14 only, so the venv has to be 3.14 or the install is empty.
+      - name: Install Hermes ${{ env.HERMES_REF }}
+        run: |
+          echo "Hermes commit: $(git -C .ci/hermes-agent rev-parse HEAD)"
+          uv venv .ci/hermes-venv --python 3.14
+          uv pip install --python .ci/hermes-venv/bin/python -e .ci/hermes-agent
+          echo "HERMES_PYTHON=$GITHUB_WORKSPACE/.ci/hermes-venv/bin/python" >> "$GITHUB_ENV"
+
+      # A wrong HERMES_PYTHON skips these tests rather than failing them: fail on any skip.
+      - run: |
+          uv run pytest tests/test_hermes.py -rs | tee pytest.log
+          ! grep -q SKIPPED pytest.log
