@@ -5,6 +5,7 @@ from unittest import mock
 from .helpers import StoreCase, doc
 from memory_buckets import config, index, scopes, snapshot
 from memory_buckets.projects import Project
+from memory_buckets.store import StoreError
 
 
 def header_of(text, bucket):
@@ -301,6 +302,71 @@ class SnapshotTest(StoreCase):
             # "the prompt", not "the output": the output also holds steps meant for the user.
             self.assertIn("- To sort it, ask the user to paste the prompt from "
                           "`hermes memory-buckets import-prompt`.", self.build().text)
+
+    def test_the_snapshot_records_the_bucket_it_was_built_for(self):
+        self.assertEqual(self.build(project="proj-1").project, "proj-1")
+        self.assertIsNone(self.build().project)
+
+    def switch(self, project, previous, context="primary", **cfg):
+        c = config.Config.from_dict(cfg)
+        return snapshot.switch_note(self.store, scopes.resolve(c, project, context), c, previous)
+
+    def test_switch_note_carries_the_new_buckets_rules_and_files(self):
+        note = self.switch("proj-1", None)
+        self.assertEqual(note.project, "proj-1")
+        self.assertEqual(note.paths, {"proj-1/profile.md", "proj-1/preferences.md"})
+        self.assertIn("This session was not in a project. It is now in the project proj-1.", note.text)
+        # The same routing text the frozen block would have carried for proj-1.
+        self.assertIn(snapshot.SHARED.format(p="proj-1"), note.text)
+        self.assertIn("### proj-1/profile.md\n- a web app", note.text)
+        self.assertIn("### proj-1/preferences.md\n- run the linter first", note.text)
+        self.assertNotIn("- Sam, they/them", note.text, "the global files are already in the frozen block")
+        self.assertNotIn("is now another project", note.text, "nothing to demote from an unscoped session")
+        self.assertIn("proj-1 is now this session's own project.", note.text)
+
+    def test_switch_note_demotes_the_old_bucket_to_add_only(self):
+        text = self.switch("proj-1", "proj-0").text
+        self.assertIn("This session was in the project proj-0. It is now in the project proj-1.", text)
+        self.assertIn("proj-0 is now another project. You may add to its files with memory_append", text)
+        # That is what the scope allows: add and create in the old bucket, no edits or deletes.
+        old = scopes.resolve(config.Config(), "proj-1", buckets=["proj-0", "proj-1"])
+        old.check_write("proj-0/topics/x.md", append=True)
+        old.check_write("proj-0/topics/x.md", create=True)
+        with self.assertRaises(StoreError):
+            old.check_write("proj-0/topics/x.md")
+
+    def test_switch_note_out_of_a_project_uses_the_unscoped_rules(self):
+        note = self.switch(None, "proj-1")
+        self.assertIsNone(note.project)
+        self.assertNotIn("own project", note.text)
+        self.assertEqual(note.paths, set())
+        self.assertIn("This session was in the project proj-1. It is no longer in a project.", note.text)
+        self.assertIn(snapshot.UNSCOPED, note.text)
+        self.assertNotIn("### proj-1/", note.text)
+
+    def test_switch_note_is_read_only_when_the_session_is(self):
+        text = self.switch("proj-1", "proj-0", context="cron").text
+        self.assertIn("Memory is read-only in this session (cron context). Read it; do not try to save.", text)
+        self.assertNotIn("Save each fact once", text)
+        self.assertNotIn("is now another project", text)
+        self.assertIn("### proj-1/profile.md", text, "read-only sessions still read the new bucket's files")
+
+    def test_switch_note_skips_missing_and_empty_files(self):
+        self.put("proj-2/preferences.md", doc("preferences", "How to work on proj-2", "\n"))
+        note = self.switch("proj-2", "proj-1")
+        self.assertEqual(note.paths, set())
+        self.assertIn("Save each fact once", note.text)
+
+    def test_switch_note_drops_long_files_under_the_cap_in_build_order(self):
+        self.put("proj-1/preferences.md", doc("preferences", "How to work on proj-1", "- x\n" * 1500))
+        note = self.switch("proj-1", "proj-0", snapshot_max_chars=4000)
+        self.assertLessEqual(len(note.text), 4000)
+        self.assertIn("memory_read when they are relevant: proj-1/preferences.md", note.text)
+        self.assertEqual(note.paths, {"proj-1/profile.md"}, "the preferences go first, the profile stays")
+        self.put("proj-1/profile.md", doc("profile", "What proj-1 is", "- y\n" * 1500))
+        note = self.switch("proj-1", "proj-0", snapshot_max_chars=4000)
+        self.assertIn("relevant: proj-1/preferences.md, proj-1/profile.md", note.text)
+        self.assertEqual(note.paths, set())
 
     def test_empty_store(self):
         snap = self.build()

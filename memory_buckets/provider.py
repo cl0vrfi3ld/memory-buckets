@@ -81,6 +81,9 @@ class SessionState:
     hint_seen: Dict[str, int] = field(default_factory=dict)  # path -> prefetch_turn when hinted or read/written
     nudge_due: bool = False
     snapshot: Optional[snapshot.Snapshot] = None
+    # The last project-switch note prefetch sent: it names the project the model was last told
+    # about (so each switch is noted once) and the files that note inlined. Cleared with the snapshot.
+    note: Optional[snapshot.Snapshot] = None
     status: Optional[Callable[..., Any]] = None  # status_callback from initialize: only the classic CLI gets one
 
 
@@ -228,6 +231,7 @@ class MemoryBucketsProvider(MemoryProvider):
         if new_session_id == self._current:
             state = self._state(new_session_id)
             state.snapshot = None
+            state.note = None
             state.hint_seen.clear()
             state.prefetch_turns = 0
             return
@@ -289,12 +293,15 @@ class MemoryBucketsProvider(MemoryProvider):
         scope = self._read_scope(sid)
         parts = []
         hints = []
+        note = self._project_note(state, scope)
+        if note is not None:
+            parts.append(note.text)
         if query and query.strip() and self.index is not None and self.index.embedder is not None and self.config is not None:
             state.prefetch_turns += 1
             turn = state.prefetch_turns
             try:
                 if state.snapshot is not None:
-                    base_exclude = state.snapshot.paths
+                    base_exclude = state.snapshot.paths | (state.note.paths if state.note else set())
                 else:
                     base_exclude = {"global/profile.md", "global/preferences.md"} | (
                         {f"{scope.project}/profile.md", f"{scope.project}/preferences.md"} if scope.project else set()
@@ -328,6 +335,24 @@ class MemoryBucketsProvider(MemoryProvider):
             state.nudge_due = False
             parts.append(NUDGE)
         return "\n\n".join(parts)
+
+    def _project_note(self, state: SessionState, scope: scopes.Scope) -> Optional[snapshot.Snapshot]:
+        """The one-off note for a session that moved project since the model was last told
+        which one it was in, else None. The frozen prompt block is left alone for prefix
+        caching; this corrects it. Nothing is sent without a snapshot to compare with: a
+        resumed session reuses a persisted prompt this provider never built."""
+        if state.snapshot is None or self.store is None or self.config is None:
+            return None
+        told = state.note.project if state.note is not None else state.snapshot.project
+        if scope.project == told:
+            return None
+        try:
+            note = snapshot.switch_note(self.store, scope, self.config, previous=told)
+        except Exception:  # never break the turn; the next prefetch tries again
+            logger.warning("memory-buckets: project switch note failed", exc_info=True)
+            return None
+        state.note = note
+        return note
 
     @_traced
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
