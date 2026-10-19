@@ -18,6 +18,13 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
+- **Pre-compression nudge.** Facts mentioned since the last save and never filed were
+  lost when Hermes compressed the conversation. The provider now implements
+  `on_pre_compress`: it sets the filing reminder for the next turn, even if
+  `nudge_interval` hasn't come round, and returns a line for the summary prompt asking
+  it to keep durable facts that haven't been saved. No model calls, and the transcript
+  isn't read. Read-only sessions and `nudge_interval: 0` skip both.
+
 ### Fixed
 
 - **Closing the session no longer closes the index under a running `queue_prefetch`.**
@@ -36,6 +43,10 @@ change the store's layout; the plugin migrates the store itself (see
   used to fail 25 of them). `tests/conftest.py` clears them for every test and keeps
   `MEMORY_BUCKETS_MODEL_DIR`, `MEMORY_BUCKETS_MODEL_F32` and
   `MEMORY_BUCKETS_REFERENCE_TOKENIZER`, which switch on the real-model tests.
+
+- A pending filing reminder now carries over when Hermes switches to a new session id
+  without a reset (compression that rotates the id), instead of being dropped with the
+  old session's state. `/new` still clears it.
 
 ## [0.4.0] - 2026-10-16
 

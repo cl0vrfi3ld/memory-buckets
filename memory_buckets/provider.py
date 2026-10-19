@@ -42,6 +42,10 @@ HINT_COOLDOWN_TURNS = 5
 NUDGE = ("Memory check: has this conversation produced new durable facts about the user or their work? If yes, "
          "save them now with the memory tools, following your memory instructions. If no, do nothing. Do not "
          "mention this check to the user.")
+# Handed to the compression summary prompt, so facts not yet filed survive the summary and the
+# agent still has them when the reminder fires on the next turn.
+PRE_COMPRESS_NOTE = ("Keep any durable facts about the user or their projects from this conversation that have not "
+                     "yet been saved to memory, so they can still be saved after compression.")
 
 
 def _sqlite_has_fts5() -> bool:
@@ -229,9 +233,11 @@ class MemoryBucketsProvider(MemoryProvider):
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
+        # A pending reminder rides along unless the conversation was reset: Hermes may rotate
+        # the id when it compresses, and on_pre_compress has just set the flag on the old one.
         self._remember(new_session_id, SessionState(
             platform=previous.platform, agent_context=previous.agent_context, cwd=previous.cwd,
-            status=previous.status,
+            status=previous.status, nudge_due=previous.nudge_due and not reset,
         ))
         self._current = new_session_id
 
@@ -259,6 +265,19 @@ class MemoryBucketsProvider(MemoryProvider):
         state.turns += 1
         if interval > 0 and state.turns % interval == 0:
             state.nudge_due = True
+
+    @_traced
+    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+        """Compression drops whatever was said since the last save, so make the next turn carry the
+        reminder and ask the summary to keep unsaved facts. No model calls and no reading of
+        ``messages``: that's the design (no background extraction), this only closes the gap.
+        ``nudge_interval = 0`` and read-only sessions opt out of the reminder, so they opt out here too."""
+        if self.store is None or self.config is None or self.config.nudge_interval <= 0:
+            return ""
+        if self._read_scope().read_only:
+            return ""
+        self._state().nudge_due = True
+        return PRE_COMPRESS_NOTE
 
     @_traced
     def prefetch(self, query: str, *, session_id: str = "") -> str:
