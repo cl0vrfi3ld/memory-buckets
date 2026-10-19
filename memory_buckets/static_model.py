@@ -63,6 +63,12 @@ QUERY_HEAD_TOKENS = 352
 QUERY_TAIL_TOKENS = MAX_TOKENS - QUERY_HEAD_TOKENS
 UNK = "[UNK]"
 MAX_WORD_CHARS = 100
+# Row-cache arithmetic: a float32 row is 512 x 4 B, about 2 KB in an array, where the
+# tuple it used to hold cost ~16 KB (512 float objects, 24 B each plus an 8 B slot).
+# Capping at 4096 rows keeps the cache near 8 MB: one turn of a mean-of-tokens workload
+# touches far fewer distinct tokens, and clearing only pays a re-read from the mmap, so
+# a full LRU isn't worth the code.
+ROW_CACHE_MAX_ROWS = 4096
 
 
 class ModelUnavailable(Exception):
@@ -236,7 +242,7 @@ class StaticModel:
                 data = memoryview(swapped.tobytes())
             self.weights = data.cast(fmt)
         self.rows = rows
-        self._row_cache: Dict[int, Tuple[float, ...]] = {}
+        self._row_cache: Dict[int, array] = {}
         if len(self.weights) != rows * self.dims or rows != len(vocab_lines):
             raise ModelUnavailable(f"model shape {rows}x{self.dims} doesn't match vocab of {len(vocab_lines)}")
 
@@ -261,7 +267,9 @@ class StaticModel:
         for i, count in Counter(ids).items():
             row = row_cache.get(i)
             if row is None:
-                row = tuple(w[i * dims:(i + 1) * dims])
+                row = array("f", w[i * dims:(i + 1) * dims])  # 2 KB a row, not 16 KB
+                if len(row_cache) >= ROW_CACHE_MAX_ROWS:
+                    row_cache.clear()  # see ROW_CACHE_MAX_ROWS
                 row_cache[i] = row
             rows.append([x * count for x in row] if count > 1 else row)
         acc = list(map(sum, zip(*rows)))

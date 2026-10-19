@@ -108,7 +108,7 @@ class StaticModelTest(unittest.TestCase):
         for tok in ("climb", "##ing", "tea", "sam"):
             tid = model.vocab[tok]
             self.assertIn(tid, model._row_cache)
-            self.assertIsInstance(model._row_cache[tid], tuple)
+            self.assertIsInstance(model._row_cache[tid], sm.array)
             self.assertEqual(len(model._row_cache[tid]), model.dims)
         self.assertEqual(list(model.encode("tea tea tea")), list(model.encode("tea")))
         # Manual un-deduplicated sum for "climbing tea climbing sam" (6 token occurrences).
@@ -124,6 +124,30 @@ class StaticModelTest(unittest.TestCase):
             self.assertAlmostEqual(got, want, delta=1e-6)
         self.assertAlmostEqual(embeddings.dot(vec, expected), 1.0, places=5)
         self.assertEqual(embeddings.dot(vec, sm.array("f", [1.0])), 0.0)
+
+    def test_row_cache_stays_bounded_and_rows_stay_arrays(self):
+        # A wider model than the cache cap, encoded past it: entries must not grow
+        # without bound (issue #32 parked ~16 KB of tuple rows per distinct token),
+        # and rows must be arrays, which cost 512 x 4 B against the tuple's ~16 KB.
+        n = sm.ROW_CACHE_MAX_ROWS + 204
+        vocab = list(sm.SPECIAL_TOKENS) + [f"w{i}" for i in range(n - len(sm.SPECIAL_TOKENS))]
+        d = self.root / "wide"
+        d.mkdir()
+        (d / "vocab.txt").write_text("\n".join(vocab) + "\n", encoding="utf-8")
+        dims = 4
+        values = [float((i + j) % 7) for i in range(len(vocab)) for j in range(dims)]
+        data = struct.pack(f"<{len(values)}f", *values)
+        header = json.dumps({"embeddings": {"dtype": "F32", "shape": [len(vocab), dims],
+                                            "data_offsets": [0, len(data)]}}).encode()
+        (d / "model.safetensors").write_bytes(struct.pack("<Q", len(header)) + header + data)
+        model = sm.StaticModel(d)
+        words = vocab[len(sm.SPECIAL_TOKENS):]
+        # encode() keeps 512 tokens per call; chunks of 300 stay under that and under
+        # the max_chars pre-truncation, so every chunk's rows actually reach the cache.
+        for k in range(0, len(words), 300):
+            model.encode(" ".join(words[k:k + 300]))
+        self.assertLessEqual(len(model._row_cache), sm.ROW_CACHE_MAX_ROWS)
+        self.assertTrue(all(isinstance(row, sm.array) for row in model._row_cache.values()))
 
     def test_query_windowing_preserves_tail_tokens_for_long_prompts(self):
         model_dir = write_model(self.root / "m")

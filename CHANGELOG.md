@@ -8,6 +8,12 @@ change the store's layout; the plugin migrates the store itself (see
 
 ## [Unreleased]
 
+### Fixed
+
+- The built-in model's row cache is now bounded: cached rows are `array("f")` at about
+  2 KB each rather than ~16 KB tuples, and the cache clears at 4096 rows, so encoding
+  20,000 distinct tokens peaks near 94 MB of RSS instead of the 478 MB it was before.
+
 ### Added
 
 - **Drift detection for the Hermes internals the plugin depends on.** The Hermes
