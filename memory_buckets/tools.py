@@ -27,7 +27,7 @@ from . import _compat, frontmatter, inbox
 from .config import Config
 from .index import Index
 from .scopes import Scope
-from .store import NEW, Store, StoreError, check_content, stamp, stem, validate_path
+from .store import MAX_FILE_BYTES, NEW, Store, StoreError, check_content, stamp, stem, validate_path, version
 
 MAX_READ_PATHS = 20
 MAX_SEARCH_LIMIT = 20
@@ -52,10 +52,14 @@ SCHEMAS: List[Dict[str, Any]] = [
         {"prefix": {"type": "string", "description": "Only list paths that start with this, for example 'global/people/'."},
          "include_projects": {"type": "boolean", "description": "Set to true to also list other projects' files."}}, []),
     _fn("memory_read",
-        "Read one or more memory files in full. Each result has the file's content and its version. To edit a "
-        "file later, pass that version as if_version.",
+        "Read one or more memory files. Each result has the file's content and its version; to edit a "
+        "file later, pass that version as if_version. A file over 48 KiB comes back in pages: the result "
+        "sets truncated and gives next_offset, which you pass back as offset to read the rest.",
         {"paths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_READ_PATHS,
-                   "description": _EXISTING_PATH_HELP}}, ["paths"]),
+                   "description": _EXISTING_PATH_HELP},
+         "offset": {"type": "integer", "minimum": 0,
+                    "description": "Byte offset into a file that was truncated (use next_offset from the "
+                                   "previous read). Only needed for files over 48 KiB."}}, ["paths"]),
     _fn("memory_search",
         "Search memory by meaning and by keywords. Use it when no file description in the list matches what you "
         "need. Returns matching files, each with its best-matching passage.",
@@ -201,13 +205,39 @@ def _read(args, ctx: Context):
     paths = _str_list(args, "paths")
     if not paths or len(paths) > MAX_READ_PATHS:
         raise ArgError(f"'paths' needs 1–{MAX_READ_PATHS} paths")
+    offset = args.get("offset")
+    if offset is None:
+        offset = 0
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        raise ArgError("'offset' must be a byte offset of 0 or more")
     files, errors = [], []
     for path in dict.fromkeys(paths):
+        data = None
         try:
-            got = ctx.store.read(path)
-            files.append({"path": path, "version": got["version"], "content": got["content"]})
+            data = ctx.store.read_bytes(path)
         except StoreError as err:
             errors.append({"path": path, "code": err.code, "message": err.message})
+            continue
+        if data is None:
+            errors.append({"path": path, "code": "not_found", "message": f"{path} doesn't exist"})
+            continue
+        window = data[offset:offset + MAX_FILE_BYTES]
+        # Don't cut inside a UTF-8 sequence: back up to its start. The next page
+        # starts at the end of what was returned, so nothing is skipped.
+        end = offset + len(window)
+        while end < len(data) and (data[end] & 0xC0) == 0x80:
+            end -= 1
+        window = data[offset:end]
+        entry = {"path": path, "version": version(data), "content": window.decode("utf-8", errors="replace")}
+        if end < len(data):
+            # A file the write path can't create (a hand edit or sync over the cap)
+            # would flood the context whole; page it instead.
+            entry["truncated"] = True
+            entry["total_bytes"] = len(data)
+            entry["next_offset"] = end
+        elif offset > 0:
+            entry["total_bytes"] = len(data)  # the last page says how big the file is
+        files.append(entry)
     out: Dict[str, Any] = {"ok": bool(files) or not errors, "files": files}
     if errors:
         out["errors"] = errors

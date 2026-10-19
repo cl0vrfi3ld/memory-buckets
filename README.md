@@ -134,7 +134,8 @@ $HERMES_HOME/memory-buckets/
 
 Each file covers one subject. Its frontmatter carries `name` (matching the filename
 stem), a one-line `description` telling the agent when to read the file, and optional
-`aliases` (other names for the subject). The body is plain Markdown bullets. Writes
+`aliases` (other names for the subject; an alias may contain a comma). The body is
+plain Markdown bullets. Writes
 made through the plugin also record `sources` and a UTC `edited_at` timestamp; edits
 you make by hand in Obsidian or an editor are picked up automatically on the next
 search or turn.
@@ -233,7 +234,8 @@ The prompt block contains:
 If the prompt block would exceed `snapshot_max_chars`, it trims the file listing
 first, then drops `global/preferences.md`, `<project>/preferences.md`, and
 `<project>/profile.md` in that order. `global/profile.md` and the project header are
-always kept.
+always kept. When even the profile cannot fit, the block keeps its head and ends with
+a line saying how much was cut and pointing at `memory_read` for the rest.
 
 The listing is cut by recency, not by name. Project files come first, then global
 ones; within each group the most recently edited files are kept and the least recently
@@ -261,6 +263,10 @@ The agent gets seven tools: `memory_list`, `memory_read`, `memory_search`,
 `memory_write`, `memory_str_replace`, `memory_append`, and `memory_delete`. Every
 write is compare-and-swap against a content hash version; on a conflict, the tool
 returns the file's current version and content so the agent can merge and retry.
+Writes are capped at 48 KiB per file. `memory_read` returns at most 48 KiB per file
+too: a file over that size (possible through a hand edit or a sync, which no tool can
+rewrite as it stands) comes back in pages, with `truncated` and `next_offset` set,
+and an `offset` argument continues it. `status` and `lint` warn about such files.
 
 On each user turn, `prefetch` checks whether any files outside the inlined profiles
 and preferences match the message, and injects their paths and descriptions as hints

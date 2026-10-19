@@ -85,6 +85,13 @@ def cmd_status(args) -> int:
         index.reconcile()
         s = index.stats()
         _out(f"index       {s['files']} files, {s['chunks']} chunks, {s['embedded']} embedded, {s['backlog']} waiting")
+        oversized = [p for p in store.iter_paths()
+                     if (store.memories / p).stat().st_size > MAX_FILE_BYTES]
+        if oversized:
+            # A file over the write cap can only have come from a hand edit or a
+            # sync; no memory tool can rewrite it whole.
+            _out(f"oversized   {'; '.join(oversized)}: over the {MAX_FILE_BYTES}-byte write cap; "
+                 "the tools can't rewrite one, so fix or split it by hand")
     if index.embedder is None:
         _out("embeddings  off (keyword search only)")
     else:

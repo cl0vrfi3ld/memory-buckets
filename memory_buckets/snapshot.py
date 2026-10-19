@@ -8,11 +8,12 @@ description listing of the other files the session reads by default (project
 files first, each group in path order). Capped at ``snapshot_max_chars``. When over
 the cap, drop listing lines first, least recently edited first (project files last),
 then whole files, in ``drop_order()``'s order. The global profile and the
-project header are never dropped. A file or description that matches one of Hermes's
-threat patterns is replaced by a ``[BLOCKED: ...]`` line (see ``blocked``). The provider
-freezes the result per session id for prefix caching. When the session later moves
-project, ``switch_note`` builds the correction that ``prefetch`` sends once, so the
-frozen block can stay as it is.
+project header are never dropped. A file that still doesn't fit is cut to its head, ending
+with a line that says how much was cut and points at ``memory_read``. A file or description
+that matches one of Hermes's threat patterns is replaced by a ``[BLOCKED: ...]`` line (see
+``blocked``). The provider freezes the result per session id for prefix caching. When the
+session later moves project, ``switch_note`` builds the correction that ``prefetch`` sends
+once, so the frozen block can stay as it is.
 """
 
 from __future__ import annotations
@@ -176,7 +177,7 @@ TOO_LONG = (
 @dataclass
 class Snapshot:
     text: str
-    paths: Set[str] = field(default_factory=set)  # files inlined in full
+    paths: Set[str] = field(default_factory=set)  # files shown in the block (whole, or truncated with a cut note)
     project: Optional[str] = None  # the bucket the text was built for; None when unscoped
 
 
@@ -328,6 +329,32 @@ def drop_order(project: Optional[str]) -> List[str]:
     return [PREFERENCES, f"{project}/preferences.md", f"{project}/profile.md"]
 
 
+CUT_NOTE = "{cut} of {total} characters are not shown. Use memory_read to read the rest of {path}."
+
+
+def _cut_body(body: str, path: str, budget: int) -> str:
+    """The head of ``body`` that fits in ``budget``, ending with a line that says
+    how much was cut. The cut backs up to the end of a line when one is close, so
+    the head doesn't end mid-sentence."""
+    keep = max(budget, 0)
+    while True:
+        head = body[:keep]
+        newline = head.rfind("\n")
+        if newline >= keep // 2:  # near a line end: cut there, not mid-sentence
+            head = head[:newline]
+        head = head.rstrip()
+        note = CUT_NOTE.format(cut=len(body) - len(head), total=len(body), path=path)
+        if not head:
+            return note  # no room even for the head; the line still names the file
+        text = f"{head}\n\n{note}"
+        if len(text) <= budget:
+            return text
+        # Once more, sized to leave room for the note. If the budget can't fit
+        # even the note, floor the head at 0 so the empty-head path returns it
+        # instead of slicing from the tail of the body forever.
+        keep = max(budget - len(note) - 2, 0)
+
+
 def build(
     store: Store,
     index: Index,
@@ -463,6 +490,22 @@ def build(
         if floor(trial_shown, trial_dropped) < floor(shown, dropped):
             shown, dropped = trial_shown, trial_dropped
             text = fit(shown, dropped)
+    if len(text) > cap:
+        # Whole-file dropping is exhausted (the global profile is never dropped):
+        # cut it to the space left after everything else and say what was cut. Any
+        # other file still in ``shown`` is treated the same way, though only the
+        # profile is ever still over.
+        base = render(shown, 0, dropped)
+        if profile:
+            budget = cap - (len(base) - len(profile))
+            if budget < len(profile):
+                profile = _cut_body(profile, PROFILE, budget)
+        for path in list(shown):
+            base = render(shown, 0, dropped)  # includes the profile cut and any earlier cut
+            budget = cap - (len(base) - len(shown[path]))
+            if budget < len(shown[path]):
+                shown[path] = _cut_body(shown[path], path, budget)
+        text = fit(shown, dropped)
     return Snapshot(
         text=text,
         paths=set(shown) | ({PROFILE} if profile else set()),
@@ -523,3 +566,4 @@ def switch_note(
             del shown[path]
             dropped.append(path)
     return Snapshot(text=render(shown, dropped), paths=set(shown), project=new)
+
