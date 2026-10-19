@@ -18,6 +18,16 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
+### Fixed
+
+- `memory_read` returns at most 48 KiB per file. `MAX_FILE_BYTES` was checked on
+  writes only, so a hand-edited or synced file over the cap came back whole and could
+  take most of the context window in one call. Larger files now come back in pages,
+  with `truncated`, `total_bytes` and `next_offset`, and an optional `offset`
+  argument reads the next page (#17).
+- `hermes memory-buckets status` warns about files over the 48 KiB cap, which
+  `lint` already reported: no memory tool can rewrite one as it stands (#17).
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
