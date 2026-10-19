@@ -49,6 +49,11 @@ change the store's layout; the plugin migrates the store itself (see
 
 - The README says which files are read, and what the naming rules are.
 
+- `tests/test_bench_retrieval.py` guards the benchmark: a paraphrase that shares a word
+  with its target, a negative that names a file, or a filler store that fits in the
+  prompt fails a test. With the real model it also holds floors for each split and
+  fails if the paraphrase split reaches 1.0.
+
 ### Fixed
 
 - **Closing the session no longer closes the index under a running `queue_prefetch`.**
@@ -97,6 +102,23 @@ change the store's layout; the plugin migrates the store itself (see
   Project files still come before global ones, and the lines that remain are shown in
   path order. A file's age is its `edited_at` stamp, falling back to its modification
   time. No store or index changes.
+
+- **`tests/bench_retrieval.py` no longer saturates.** Every metric was 1.0 on its
+  23-chunk store, because every query reused its target file's words, so it could
+  neither catch a regression nor tell two `prefetch_min_similarity` values apart. It
+  now reports three splits separately:
+  - exact: the existing queries, now against a larger store (12/13 search top-1 where
+    it was 13/13);
+  - paraphrase: 16 queries that share no content word with their target;
+  - negative: 13 greetings, acknowledgements and off-topic requests, plus the two
+    existing no-match hint queries, scored as hint false positives.
+
+  A second, large store adds 400 filler files so the prompt's file listing truncates;
+  there only queries whose target the prompt does not show are scored. Each store
+  prints a sweep of `prefetch_min_similarity` against hint recall and false positives.
+  `run_benchmark` now returns a nested result per store and split instead of a flat
+  dict. The numbers are in the README's new
+  [Retrieval quality](README.md#retrieval-quality) section.
 
 ## [0.4.0] - 2026-10-16
 
