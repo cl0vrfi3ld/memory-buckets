@@ -44,12 +44,14 @@ NUDGE = ("Memory check: has this conversation produced new durable facts about t
 
 # Setup fields for `hermes memory setup` (agent/memory_provider.py get_config_schema):
 # the twelve non-secret settings from config.py, in the README table's order. Defaults and
-# types come from the Config dataclasses; minimums are the ones the code already enforces
-# (snapshot.py floors snapshot_max_chars at 1000, tools.py requires search_limit >= 1, and
-# nudge_interval 0 means off). No secret field: every value belongs in config.yaml, never .env.
+# types come from the Config dataclasses. The minimums advise the wizard rather than bind
+# the code: snapshot.py floors snapshot_max_chars at 1000 and tools.py rejects search_limit
+# < 1, but index.hints merely slices [:prefetch_max_hints], and nudge_interval 0 is off
+# because the check skips anything below 1. No secret field: every value belongs in
+# config.yaml, never .env.
 CONFIG_SCHEMA = [
-    {"key": "readonly", "description": "Make every session read-only", "type": "boolean", "default": False},
-    {"key": "cron_writes", "description": "Allow cron sessions to write", "type": "boolean", "default": False},
+    {"key": "readonly", "description": "Make every session read-only (true or false)", "type": "boolean", "default": False},
+    {"key": "cron_writes", "description": "Allow cron sessions to write (true or false)", "type": "boolean", "default": False},
     {"key": "nudge_interval", "description": "User turns between filing reminders (0 disables them)",
      "type": "integer", "default": 10, "minimum": 0},
     {"key": "snapshot_max_chars", "description": "Character cap on the system prompt block",
@@ -67,7 +69,7 @@ CONFIG_SCHEMA = [
      "type": "text", "default": ""},
     {"key": "embeddings.backend", "description": "Embedding search: local (built-in model) or off (keyword search only)",
      "type": "text", "default": "local", "choices": ["local", "off"]},
-    {"key": "embeddings.auto_download", "description": "Download the model in the background when not bundled",
+    {"key": "embeddings.auto_download", "description": "Download the model in the background when not bundled (true or false)",
      "type": "boolean", "default": True},
     {"key": "embeddings.local_model_dir", "description": "Load the model from this directory instead",
      "type": "text", "default": ""},
@@ -81,7 +83,15 @@ def _coerce(value: Any, type_name: str) -> Any:
     user's typed text is never silently dropped here."""
     try:
         if type_name == "boolean" and isinstance(value, str):
-            return value.strip().lower() in ("1", "true", "yes", "on")
+            lowered = value.strip().lower()
+            # The wizard prompts booleans as free text, so the short spellings must count
+            # both ways (a `y` is yes, not silently false); anything else stays as typed
+            # rather than quietly becoming false.
+            if lowered in ("1", "true", "yes", "on", "y", "t"):
+                return True
+            if lowered in ("0", "false", "no", "off", "n", "f"):
+                return False
+            return value
         if type_name in ("integer", "number") and isinstance(value, str):
             return int(value) if type_name == "integer" else float(value)
     except ValueError:

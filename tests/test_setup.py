@@ -103,11 +103,14 @@ class SetupSchemaTest(unittest.TestCase):
         self.assertEqual(defaults["embeddings.auto_download"], True)
         self.assertEqual(defaults["embeddings.local_model_dir"], "")
 
-    def test_minimums_where_the_code_enforces_them(self):
+    def test_minimums_advisory_or_enforced(self):
+        # Advisory wizard hints, not all enforced downstream: snapshot.py floors
+        # snapshot_max_chars and tools.py rejects search_limit < 1, but index.hints only
+        # slices [:prefetch_max_hints] and nudge_interval < 1 just disables the nudge.
         minimums = {f["key"]: f.get("minimum") for f in CONFIG_SCHEMA}
         self.assertEqual(minimums["nudge_interval"], 0)  # 0 turns the nudge off
         self.assertEqual(minimums["snapshot_max_chars"], 1000)  # snapshot.py floors the cap
-        self.assertEqual(minimums["prefetch_max_hints"], 1)
+        self.assertEqual(minimums["prefetch_max_hints"], 1)  # advisory: nothing clamps it
         self.assertEqual(minimums["search_limit"], 1)  # tools.py requires limit >= 1
         for key in ("readonly", "cron_writes", "prefetch_min_similarity", "project_boost",
                     "store_path", "embeddings.backend", "embeddings.auto_download",
@@ -190,6 +193,21 @@ class SaveConfigTest(FakeHermesCase):
         self.assertEqual(block["snapshot_max_chars"], 8000)
         self.assertEqual(block["project_boost"], 1.5)
         self.assertEqual(block["nudge_interval"], "banana")
+
+    def test_wizard_boolean_spellings_and_junk_kept_as_typed(self):
+        # Hermes prompts booleans as free text with no format hint (memory_setup.py shows
+        # the default only when truthy), so the one-letter spellings must count both ways:
+        # a `y` used to land as readonly: false. Text that is no boolean spelling at all
+        # stays as typed for config.py to reject at load, instead of quietly becoming false.
+        p = self.provider()
+        with self.patch_hermes():
+            p.save_config({"readonly": "y", "cron_writes": "N", "embeddings.auto_download": "off"}, str(self.home))
+            self.assertIs(self.saved()["plugins"]["memory-buckets"]["readonly"], True)
+            p.save_config({"readonly": "banana"}, str(self.home))
+        block = self.saved()["plugins"]["memory-buckets"]
+        self.assertEqual(block["readonly"], "banana")
+        self.assertIs(block["cron_writes"], False)
+        self.assertIs(block["embeddings"]["auto_download"], False)
 
     def test_second_write_updates_instead_of_replacing_the_block(self):
         p = self.provider()
