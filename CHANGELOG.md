@@ -53,6 +53,25 @@ change the store's layout; the plugin migrates the store itself (see
     system prompt (and the strict scope also matches some ordinary phrasings; see the
     README). Nothing is deleted, `memory_read` still returns the file, and fixing the
     line puts it back.
+- **Credentials are refused, and the store is private.** Memory is plain Markdown that
+  sync tools copy and the model reads back, and two things about it were wrong:
+  - `memory_write`, `memory_append` and `memory_str_replace` stored a pasted credential
+    verbatim. They now refuse content that looks like one, with a new `secret_detected`
+    error that lists the families in `patterns` and does not repeat the text: AWS access
+    key ids, `sk-` API keys, GitHub, GitLab and Slack tokens, PEM private key blocks, and
+    `password`, `secret`, `token` or `api_key` followed by `:` or `=` and a value that
+    looks like a credential. A memory that only mentions the word password is fine. The
+    list is local (Hermes ships no reusable one), runs before the threat scan, and also
+    screens built-in memory mirrored into `global/inbox.md`, which becomes a placeholder.
+  - Files were created `0666` and directories with the default mode, so under the usual
+    umask the store was `0644`/`0755`: readable by every account on the machine. The
+    store root and everything the plugin creates in it, the search index included, are
+    now `0700` and `0600` on Linux and macOS. `status` warns when anything can be read by
+    group or other, and `migrate` removes that access. Windows is unchanged.
+  - Upgrading: `migrate` runs on startup, so an existing store is made private the next
+    time a writable session starts. A store you share with another account on purpose
+    (a `store_path` on a shared drive) loses that access. A file that already holds a
+    credential is left alone, but edits to it are refused until the credential is removed.
 
 ## [0.4.0] - 2026-10-16
 

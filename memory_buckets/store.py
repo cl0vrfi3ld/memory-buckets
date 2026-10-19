@@ -27,7 +27,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Iterator, List, Optional
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
 
 from . import frontmatter
 
@@ -70,6 +70,23 @@ LOCK_TIMEOUT_S = 5.0
 SHARING_RETRY_S = 1.0
 NEW = "new"
 _IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003  # a junction; stat only defines it on Windows
+
+# Memory is what the agent has learnt about one person, so the store is theirs alone:
+# directories 0o700 and files 0o600. Directories are the control that matters, since a
+# 0o700 root keeps every other account out of everything beneath it; file modes are the
+# second line, for when a file is copied out or the root's mode is lost.
+PRIVATE_DIR = 0o700
+PRIVATE_FILE = 0o600
+GROUP_OTHER = 0o077
+MODELS_DIR = ".models"  # the embedding model: public, hash-pinned data, not memory
+
+
+def private_modes() -> bool:
+    """Whether the store is kept private with POSIX modes. Not on Windows: its access
+    control is ACLs, inherited from the user profile, and since Python 3.13 a mode of
+    0o700 on ``os.mkdir`` rewrites the ACL, so passing one there would be a change."""
+    return sys.platform != "win32"
+
 
 # Paths are relative to <store>/memories. Each scope is a directory: `global/`
 # or a project id. `global` is reserved, so it can't be a project id.
@@ -151,6 +168,20 @@ def stem(path: str) -> str:
     return path.rsplit("/", 1)[-1][: -len(".md")]
 
 
+def file_mode() -> int:
+    """The mode for files the store creates (before the umask): private on POSIX, and
+    the 0o666 it always used on Windows, where only the read-only bit means anything."""
+    return PRIVATE_FILE if private_modes() else 0o666
+
+
+def create_private_file(path: Path) -> None:
+    """Make an empty file at ``path`` if there is none, private from its first byte.
+    For files another library creates (SQLite's), which would otherwise take the umask:
+    SQLite gives its -wal and -shm files the mode of the database. A no-op on Windows."""
+    if private_modes():
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT, PRIVATE_FILE))
+
+
 EDITED_AT = "edited_at"
 
 
@@ -187,6 +218,55 @@ class Store:
         self.memories = self.root / MEMORIES_DIR
 
     # -- paths ----------------------------------------------------------------
+
+    def ensure_dir(self, path: os.PathLike) -> None:
+        """``mkdir -p``, with every directory it makes at or below the store root private.
+        ``Path.mkdir(mode, parents=True)`` would not do: it applies the mode to the leaf
+        only and creates the parents with the umask's, so each missing directory is made
+        in turn. Directories above the root are not the plugin's and keep the default."""
+        path = Path(path)
+        if not private_modes():
+            path.mkdir(parents=True, exist_ok=True)
+            return
+        missing = []
+        current = path
+        while not os.path.lexists(current):
+            missing.append(current)
+            if current.parent == current:
+                break
+            current = current.parent
+        if not missing and not path.is_dir():
+            raise FileExistsError(errno.EEXIST, "exists and is not a directory", str(path))
+        for directory in reversed(missing):
+            inside = directory == self.root or self.root in directory.parents
+            try:
+                os.mkdir(directory, PRIVATE_DIR if inside else 0o777)
+            except FileExistsError:
+                pass  # another process got there first
+
+    def loose_modes(self) -> List[Tuple[str, int]]:
+        """``(path relative to the root, mode)`` for each directory and file under the root
+        that group or other can reach, the root itself first (as ``.``). Empty on Windows.
+        Symlinks are skipped, since a mode change would land on their target, and so is
+        ``.models``: public, hash-checked data that a private root already shields."""
+        if not private_modes() or not self.root.is_dir() or is_link(self.root):
+            return []
+        found = []
+        for dirpath, dirnames, filenames in os.walk(self.root):
+            dirnames[:] = sorted(d for d in dirnames if not (dirpath == str(self.root) and d == MODELS_DIR))
+            for name in [None] + sorted(filenames):
+                full = dirpath if name is None else os.path.join(dirpath, name)
+                try:
+                    st = os.lstat(full)
+                except OSError:
+                    continue  # gone since the walk listed it
+                if not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
+                    continue  # a symlink, socket or the like
+                if not stat.S_IMODE(st.st_mode) & GROUP_OTHER:
+                    continue
+                rel = os.path.relpath(full, self.root).replace(os.sep, "/")
+                found.append((rel, stat.S_IMODE(st.st_mode)))
+        return found
 
     def resolve(self, path: str) -> Path:
         """Validated absolute path. Refuses symlinks at any level below the root."""
@@ -256,8 +336,8 @@ class Store:
         """Exclusive lock on ``<root>/.lock``. Per open file (``flock``) or per handle
         (``msvcrt.locking``), so it also excludes other provider instances and threads
         in this process."""
-        self.root.mkdir(parents=True, exist_ok=True)
-        fd = os.open(self.root / ".lock", os.O_RDWR | os.O_CREAT, 0o666)
+        self.ensure_dir(self.root)
+        fd = os.open(self.root / ".lock", os.O_RDWR | os.O_CREAT, file_mode())
         locked = False
         try:
             deadline = time.monotonic() + timeout
@@ -275,12 +355,14 @@ class Store:
                 os.close(fd)
 
     def _atomic_write(self, target: Path, data: bytes) -> None:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        self.ensure_dir(target.parent)
         tmp = target.parent / f".{target.name}.tmp.{os.getpid()}.{threading.get_ident()}"
         try:
             # O_BINARY: Windows opens fds in text mode by default, which would turn
             # every \n into \r\n on disk and break the version of what we just wrote.
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o666)
+            # The mode is private from the first byte, and os.replace carries it to the
+            # target, so a rewrite also tightens a file an older version left loose.
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), file_mode())
             try:
                 os.write(fd, data)
                 os.fsync(fd)
