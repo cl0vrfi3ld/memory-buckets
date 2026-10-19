@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest import mock
 
 from .helpers import StoreCase, doc
 from memory_buckets import config, frontmatter, inbox, index, scopes, tools
@@ -48,6 +49,54 @@ class ToolsTest(StoreCase):
         self.assertEqual({e["code"] for e in got["errors"]}, {"not_found", "invalid_path"})
         self.assertFalse(self.call("memory_read", paths=["global/topics/nope.md"])["ok"])
         self.assertEqual(self.call("memory_read", paths=[])["error"]["code"], "invalid_args")
+        # A file under the cap reads whole, exactly as before: no paging fields.
+        small = self.call("memory_read", paths=["global/topics/nix.md"])["files"][0]
+        self.assertNotIn("truncated", small)
+        self.assertNotIn("total_bytes", small)
+
+    def test_a_file_over_the_write_cap_reads_in_pages(self):
+        # Issue 17: MAX_FILE_BYTES is checked on writes only, so a hand-edited or
+        # synced file can be any size; one read must not flood the context.
+        body = "- fact\n" * 720_000  # about 5 MB
+        self.put("global/topics/big.md", doc("big", "Read for a big topic", body))
+        size = (self.store.memories / "global/topics/big.md").stat().st_size
+        first = self.call("memory_read", paths=["global/topics/big.md"])["files"][0]
+        self.assertTrue(first["truncated"])
+        self.assertEqual(first["total_bytes"], size)
+        self.assertLessEqual(len(first["content"].encode("utf-8")), tools.MAX_FILE_BYTES)
+        # Paging: next_offset feeds the next read until the file is done.
+        offset, pages = first["next_offset"], [first["content"]]
+        while True:
+            entry = self.call("memory_read", paths=["global/topics/big.md"], offset=offset)["files"][0]
+            pages.append(entry["content"])
+            if not entry.get("truncated"):
+                self.assertEqual(entry["total_bytes"], size)
+                break
+            self.assertEqual(entry["next_offset"], offset + tools.MAX_FILE_BYTES)
+            offset = entry["next_offset"]
+        self.assertEqual("".join(pages), self.store.read_bytes("global/topics/big.md").decode("utf-8"))
+
+    def test_a_page_never_cuts_inside_a_letter(self):
+        self.put("global/topics/cafe.md", doc("cafe", "Read for accents", "café " * 40))
+        whole = self.store.read_bytes("global/topics/cafe.md").decode("utf-8")
+        with mock.patch.object(tools, "MAX_FILE_BYTES", 10):
+            offset, pages = 0, []
+            while True:
+                entry = self.call("memory_read", paths=["global/topics/cafe.md"], offset=offset)["files"][0]
+                pages.append(entry["content"])
+                if not entry.get("truncated"):
+                    break
+                offset = entry["next_offset"]
+        joined = "".join(pages)
+        self.assertEqual(joined, whole)
+        self.assertNotIn("\ufffd", joined)
+
+    def test_bad_read_args(self):
+        self.call("memory_read", paths=["global/topics/nix.md"])
+        got = self.call("memory_read", paths=["global/topics/nix.md"], offset=-1)
+        self.assertEqual(got["error"]["code"], "invalid_args")
+        got = self.call("memory_read", paths=["global/topics/nix.md"], offset="one")
+        self.assertEqual(got["error"]["code"], "invalid_args")
 
     def test_write_create_and_replace(self):
         made = self.call("memory_write", path="global/people/sam.md", description="Who Sam is",
