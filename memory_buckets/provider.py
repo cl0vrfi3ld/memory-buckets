@@ -129,7 +129,7 @@ class MemoryBucketsProvider(MemoryProvider):
     def initialize(self, session_id: str, **kwargs) -> None:
         self.config = config_mod.load()
         root = Path(self.config.store_path).expanduser() if self.config.store_path else Path(kwargs["hermes_home"]) / "memory-buckets"
-        self.store = Store(root)
+        self.store = Store(root, history_keep=self.config.history_keep, history_days=self.config.history_days)
         # Create the store up front (not just on first write), so it exists as soon as the
         # provider is active and the log says where it went (profiles move HERMES_HOME).
         try:
