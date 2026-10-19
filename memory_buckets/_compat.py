@@ -8,9 +8,12 @@ overrides against the real ABC when ``HERMES_PYTHON`` is set.
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger("memory_buckets")
 
 try:
     from agent.memory_provider import MemoryProvider, RecallStatus, spawn_context_thread
@@ -58,6 +61,39 @@ except ImportError:  # not running inside Hermes
         args: tuple = (), kwargs: Optional[Dict[str, Any]] = None,
     ) -> threading.Thread:
         return threading.Thread(target=target, args=args, kwargs=kwargs, name=name, daemon=daemon)
+
+
+try:
+    from tools.threat_patterns import scan_for_threats as _scan_for_threats
+except Exception:  # not in Hermes, or a Hermes without the shared pattern library
+    # Exception, not ImportError: outside Hermes ``tools`` can be someone else's package,
+    # and whatever its __init__ raises must not stop this plugin loading.
+    _scan_for_threats = None
+
+THREAT_SCAN_AVAILABLE = _scan_for_threats is not None
+_scan_failure_logged = False
+
+
+def scan_threats(content: str) -> List[str]:
+    """IDs of the Hermes threat patterns ``content`` matches, at the ``strict`` scope the
+    built-in memory uses for writes (it is the one scope meant for content a user can
+    fix, and everything we scan is memory). Empty when nothing matches.
+
+    Also empty when Hermes has no scanner (a bare Python, an older Hermes) or the
+    scanner raises: a missing safety check must not stop memory working, so this fails
+    open. A scanner that exists but errors is logged once, since that is the case where
+    the protection has silently gone."""
+    global _scan_failure_logged
+    if _scan_for_threats is None or not content:
+        return []
+    try:
+        return list(_scan_for_threats(content, scope="strict"))
+    except Exception:
+        if not _scan_failure_logged:
+            _scan_failure_logged = True
+            logger.warning("memory-buckets: Hermes's threat scanner failed; memory is not being scanned",
+                           exc_info=True)
+        return []
 
 
 TUI_PLATFORMS = ("tui",)

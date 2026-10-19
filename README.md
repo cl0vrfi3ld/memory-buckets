@@ -234,6 +234,32 @@ to the summary prompt asking it to keep durable facts that haven't been saved ye
 makes no model calls and doesn't read the transcript. Read-only sessions get neither,
 and neither does a session with `nudge_interval` set to `0`.
 
+### Threat scanning
+
+Memory is injected into the system prompt, and a session that has just read a hostile
+web page or repository can write to `global/`. Like Hermes's built-in memory, the plugin
+checks memory against Hermes's threat patterns (`tools.threat_patterns`, `strict` scope):
+
+- **Writes.** `memory_write`, `memory_append` and `memory_str_replace` refuse content
+  that matches, with the error code `threat_detected` and the matching pattern IDs in
+  `patterns` (for example `prompt_injection`, for "ignore all previous instructions").
+  The whole file is scanned, including its description. Editing a file that already
+  contains a match is refused until the match is gone; `memory_delete` always works.
+- **The prompt.** Hand edits and synced files skip the write check, so the snapshot
+  checks too. A matching `profile.md` or `preferences.md` appears as
+  `[BLOCKED: <path> matched <pattern ids>; fix or delete it]` instead of its text, and
+  a matching description in the file listing is replaced the same way. The file itself
+  is left alone and `memory_read` still returns it, so you can see what tripped the
+  scan. The plugin logs a warning naming the file. The snapshot is frozen per session, so
+  the block clears in the next session (or after Hermes compresses the conversation)
+  once you have fixed the file.
+- **No scanner.** Outside Hermes, or on a Hermes without `tools.threat_patterns`, nothing
+  is scanned.
+
+Pattern matching is heuristic: it catches common injection and exfiltration phrasing, not
+every attack, and it can reject harmless text that happens to match (a note quoting an
+injection example, say).
+
 ### Embeddings
 
 Embeddings use
