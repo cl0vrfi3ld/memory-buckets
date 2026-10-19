@@ -40,7 +40,7 @@ class HermesIntegrationTest(unittest.TestCase):
             env["PYTHONPATH"] = pythonpath
         proc = subprocess.run([HERMES_PYTHON, str(Path(__file__).with_name("hermes_probe.py"))],
                               env=env, cwd=tmp, capture_output=True, text=True, timeout=120)
-        lines = [l for l in proc.stdout.splitlines() if l.startswith("PROBE-RESULT ")]
+        lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("PROBE-RESULT ")]
         self.assertTrue(lines, f"probe failed:\n{proc.stdout}\n{proc.stderr}")
         return json.loads(lines[-1][len("PROBE-RESULT "):])
 
