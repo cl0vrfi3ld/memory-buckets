@@ -426,7 +426,8 @@ Inside the Nix devshell (`direnv allow` or `nix develop`):
 - `check` runs the test suite (`uv run pytest tests/`);
 - `check-windows` runs it on Windows Python under Wine (`tests/wine.sh`, x86_64 Linux;
   the first run fetches Wine and a Windows CPython into `~/.cache/memory-buckets/wine`);
-- `lint` runs `ruff check .` and `ruff format --check .`;
+- `lint` runs `ruff check .` with the rules pinned in `pyproject.toml`, so every ruff version
+  checks the same thing (the code is not auto-formatted);
 - `run` executes a command inside the project venv (`uv run`).
 
 Two environment variables enable extra test coverage:
