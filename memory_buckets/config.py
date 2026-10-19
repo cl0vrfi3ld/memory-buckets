@@ -13,6 +13,8 @@ import os
 from dataclasses import dataclass, field, fields
 from typing import Any, Dict, Optional
 
+from .store import HISTORY_DAYS_DEFAULT, HISTORY_KEEP_DEFAULT
+
 logger = logging.getLogger("memory_buckets")
 
 CONFIG_KEY = "memory-buckets"
@@ -50,6 +52,8 @@ class Config:
     readonly: bool = False
     project_boost: float = 1.3
     search_limit: int = 8
+    history_keep: int = HISTORY_KEEP_DEFAULT  # newest versions of each file kept in .history/; 0 turns history off
+    history_days: int = HISTORY_DAYS_DEFAULT  # recorded versions older than this are dropped; 0 keeps them forever
 
     @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "Config":
@@ -92,6 +96,8 @@ _ENV = {
     "MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD": ("embeddings", "auto_download"),
     "MEMORY_BUCKETS_MODEL_DIR": ("embeddings", "local_model_dir"),
     "MEMORY_BUCKETS_STORE": (None, "store_path"),
+    "MEMORY_BUCKETS_HISTORY_KEEP": (None, "history_keep"),
+    "MEMORY_BUCKETS_HISTORY_DAYS": (None, "history_days"),
 }
 
 

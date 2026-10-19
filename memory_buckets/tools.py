@@ -257,7 +257,11 @@ def _mutate(ctx: Context, path: str, if_version: Optional[str],
             create: bool = False) -> Dict[str, Any]:
     validate_path(path)
     ctx.scope.check_write(path, append=append, create=create)
-    result = ctx.store.update(path, lambda current: check_content(path, edit(current)), if_version)
+    # An append never destroys content, so it isn't recorded in .history (an
+    # append's frontmatter rewrite still touches sources and edited_at, but the
+    # body only grows); overwrites and str_replace edits are.
+    result = ctx.store.update(path, lambda current: check_content(path, edit(current)), if_version,
+                              record_history=not append)
     if ctx.on_write:
         ctx.on_write(path)
     if ctx.scope.cross_project_write(path):

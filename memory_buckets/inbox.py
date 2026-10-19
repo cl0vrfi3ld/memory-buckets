@@ -155,4 +155,4 @@ def append(store: Store, heading: str, entries: Iterable[str], source: str) -> O
             raise StoreError("invalid_frontmatter", f"{PATH}: can't parse its frontmatter ({err}); "
                                                     "fix it by hand before adding to it") from None
 
-    return store.update(PATH, edit)["version"]
+    return store.update(PATH, edit, record_history=False)["version"]
