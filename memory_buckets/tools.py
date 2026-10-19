@@ -3,10 +3,12 @@
 Every result carries ``ok``. Errors are ``{"ok": false, "error": {"code", "message"}, ...}``:
 
 - ``conflict`` adds ``current: {path, version, content}`` so the agent can merge and retry;
-- ``out_of_scope`` adds ``allowed_prefixes``; the add-only refusal also adds ``add_only_buckets``.
+- ``out_of_scope`` adds ``allowed_prefixes``; the add-only refusal also adds ``add_only_buckets``;
+- ``threat_detected`` adds ``patterns``, the IDs of the Hermes threat patterns the
+  content matched.
 
 The contract codes come from ``store.py``. The tool layer adds ``out_of_scope``,
-``read_only`` and ``invalid_args``.
+``read_only``, ``invalid_args`` and ``threat_detected``.
 
 Write rights: a session writes fully inside ``scope.write_prefixes``.
 Into another known bucket it may only append to existing files
@@ -21,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from . import frontmatter, inbox
+from . import _compat, frontmatter, inbox
 from .config import Config
 from .index import Index
 from .scopes import Scope
@@ -252,12 +254,35 @@ def _body_text(body: str) -> str:
     return body if body.endswith("\n") or not body else body + "\n"
 
 
+def _checked(path: str, content: str) -> bytes:
+    """``check_content`` plus the threat scan, on the whole rendered file: the memory
+    files inlined into the system prompt are the ones an injection wants to reach, and
+    a session that has just read a hostile page can write to ``global/``. Scanning the
+    result rather than the arguments covers all three edit tools, and the frontmatter
+    description, which is also shown to the model. An edit that leaves an existing
+    match in place is refused too; ``memory_delete`` never scans, so a poisoned file
+    can still be removed."""
+    data = check_content(path, content)
+    patterns = _compat.scan_threats(content)
+    if patterns:
+        # Names the patterns, never quotes the content: the error goes back into the
+        # conversation, and the text that tripped the scan shouldn't be repeated there.
+        raise StoreError(
+            "threat_detected",
+            f"{path} was not saved: it matches threat pattern(s) {', '.join(patterns)}. Memory is injected "
+            "into the system prompt, so it can't hold injection or exfiltration text. Remove that text and "
+            "try again.",
+            patterns=patterns,
+        )
+    return data
+
+
 def _mutate(ctx: Context, path: str, if_version: Optional[str],
             edit: Callable[[Optional[bytes]], str], *, append: bool = False,
             create: bool = False) -> Dict[str, Any]:
     validate_path(path)
     ctx.scope.check_write(path, append=append, create=create)
-    result = ctx.store.update(path, lambda current: check_content(path, edit(current)), if_version)
+    result = ctx.store.update(path, lambda current: _checked(path, edit(current)), if_version)
     if ctx.on_write:
         ctx.on_write(path)
     if ctx.scope.cross_project_write(path):
