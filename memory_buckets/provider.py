@@ -20,6 +20,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date
@@ -92,6 +93,11 @@ class MemoryBucketsProvider(MemoryProvider):
         self._embed_again = False
         self._embed_thread = None
         self._shut = False
+        # queue_prefetch runs on Hermes's executor, which can outlive shutdown(): count the
+        # calls in flight so shutdown can wait for them (the event is set while none run).
+        self._prefetching = 0
+        self._prefetch_idle = threading.Event()
+        self._prefetch_idle.set()
 
     # -- identity and availability -----------------------------------------------
 
@@ -150,15 +156,21 @@ class MemoryBucketsProvider(MemoryProvider):
 
     @_traced
     def shutdown(self) -> None:
-        # Stop the embedding worker before closing SQLite: closing a connection another
-        # thread is using can crash the interpreter.
-        self._shut = True
+        # Stop the embedding worker and any queue_prefetch before closing SQLite: closing a
+        # connection another thread is using can crash the interpreter. Setting _shut under
+        # the lock means a prefetch either is counted before we look or never starts.
+        with self._lock:
+            self._shut = True
+        deadline = time.monotonic() + 10
         worker = self._embed_thread
         if worker is not None and worker.is_alive():
-            worker.join(timeout=10)
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
             if worker.is_alive():
                 logger.warning("memory-buckets: embedding worker still running at shutdown; leaving the index open")
                 return
+        if not self._prefetch_idle.wait(timeout=max(0.0, deadline - time.monotonic())):
+            logger.warning("memory-buckets: prefetch still running at shutdown; leaving the index open")
+            return
         if self.index is not None:
             self.index.close()
 
@@ -301,6 +313,11 @@ class MemoryBucketsProvider(MemoryProvider):
     @_traced
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         if self.index is not None and self.index.embedder is not None:
+            with self._lock:
+                if self._shut:  # the index may already be closed
+                    return
+                self._prefetching += 1
+                self._prefetch_idle.clear()
             try:
                 self.index.reconcile()
                 if self._embed_running.acquire(blocking=False):
@@ -310,6 +327,11 @@ class MemoryBucketsProvider(MemoryProvider):
                         self._embed_running.release()
             except Exception:
                 logger.warning("memory-buckets: background embedding failed", exc_info=True)
+            finally:
+                with self._lock:
+                    self._prefetching -= 1
+                    if not self._prefetching:
+                        self._prefetch_idle.set()
 
     def recall_status(self) -> Optional[RecallStatus]:
         return RecallStatus("memory-buckets", self._last_recall) if self._last_recall else None

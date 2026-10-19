@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import unittest
 from unittest import mock
 
@@ -465,6 +466,81 @@ class ProviderTest(StoreCase):
         self.assertIsNotNone(p._embed_thread)
         p.shutdown()
         self.assertFalse(p._embed_thread.is_alive())
+
+    def test_shutdown_waits_for_an_inflight_queue_prefetch(self):
+        # Hermes drains its executor only up to a timeout, so queue_prefetch can still be
+        # inside SQLite when shutdown runs; closing the index then can crash the interpreter.
+        p = self.make(embedder=FakeEmbedder())
+        entered, release = threading.Event(), threading.Event()
+
+        def slow_backlog(max_batches=1):
+            entered.set()
+            release.wait(10)
+            return 0
+
+        with mock.patch.object(p.index, "embed_backlog", slow_backlog), \
+                mock.patch.object(p.index, "close", wraps=p.index.close) as close:
+            prefetch = threading.Thread(target=p.queue_prefetch, args=("x",), kwargs={"session_id": "s1"})
+            prefetch.start()
+            self.assertTrue(entered.wait(10))
+            stopper = threading.Thread(target=p.shutdown)
+            stopper.start()
+            stopper.join(0.3)
+            self.assertTrue(stopper.is_alive(), "shutdown returned while queue_prefetch was running")
+            close.assert_not_called()
+            release.set()
+            prefetch.join(10)
+            stopper.join(10)
+            self.assertFalse(stopper.is_alive())
+            close.assert_called_once()
+
+    def test_shutdown_leaves_the_index_open_if_a_prefetch_outlasts_it(self):
+        p = self.make(embedder=FakeEmbedder())
+        stuck = mock.Mock()
+        stuck.wait.return_value = False  # what Event.wait returns on timeout
+        p._prefetch_idle = stuck
+        with mock.patch.object(p.index, "close") as close, self.assertLogs("memory_buckets", "WARNING") as logs:
+            p.shutdown()
+        close.assert_not_called()
+        self.assertTrue(any("prefetch still running at shutdown" in line for line in logs.output), logs.output)
+
+    def test_queue_prefetch_after_shutdown_does_nothing(self):
+        p = self.make(embedder=FakeEmbedder())
+        p.shutdown()
+        with mock.patch.object(p.index, "reconcile") as reconcile, \
+                mock.patch.object(p.index, "embed_backlog") as embed_backlog:
+            p.queue_prefetch("x", session_id="s1")
+        reconcile.assert_not_called()
+        embed_backlog.assert_not_called()
+        self.assertTrue(p._prefetch_idle.is_set())
+
+    def test_queue_prefetch_counts_even_when_it_fails(self):
+        p = self.make(embedder=FakeEmbedder())
+        with mock.patch.object(p.index, "reconcile", side_effect=RuntimeError("boom")), \
+                self.assertLogs("memory_buckets", "WARNING"):
+            p.queue_prefetch("x", session_id="s1")
+        self.assertTrue(p._prefetch_idle.is_set())
+
+    def test_shutdown_prefetch_wait_spends_the_shared_deadline_not_a_fresh_ten(self):
+        # Pins the `fresh_deadline` mutation from Kai's review of PR #37: the prefetch
+        # wait must spend what is left of the embedding worker's 10 seconds, not a fresh
+        # 10 of its own, or a worker join that ran down most of the budget would hand a
+        # prefetch nearly twice the cap. A fake clock burns 6 of the 10 before the wait.
+        p = self.make()
+        reads = {"n": 0}
+        waited = []
+
+        def fake_monotonic():
+            reads["n"] += 1
+            return 1000.0 if reads["n"] == 1 else 1006.0
+
+        p._prefetch_idle = mock.Mock()
+        p._prefetch_idle.wait.side_effect = lambda timeout=None: waited.append(timeout) or True
+        with mock.patch.object(prov.time, "monotonic", fake_monotonic), \
+                mock.patch.object(p.index, "close") as close:
+            p.shutdown()
+        self.assertEqual(waited, [4.0])
+        close.assert_called_once()
 
     def test_on_memory_write_mirrors_into_inbox(self):
         p = self.make()
