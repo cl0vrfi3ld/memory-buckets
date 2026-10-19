@@ -18,6 +18,16 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
+### Fixed
+
+- **The prompt block's file listing keeps recently edited files, not the ones that sort
+  first.** When the listing doesn't fit under `snapshot_max_chars`, the cut used to drop
+  whatever sorted last by path, so `global/topics/z*` always went before
+  `global/areas/a*`. It now drops the least recently edited, project files last, and the
+  lines that remain are still shown in path order. A file's age is its `edited_at` stamp,
+  falling back to its modification time for hand edits that carry none. No store or index
+  changes.
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
