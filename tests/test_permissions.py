@@ -39,9 +39,10 @@ class PrivateCase(unittest.TestCase):
             previous = os.umask(0o022)
             self.addCleanup(os.umask, previous)
 
-    def loosen(self):
+    def loosen(self, root=None):
         """Put the store back as an older version left it: umask 022, nobody's secret."""
-        for dirpath, dirnames, filenames in os.walk(self.root):
+        root = self.root if root is None else Path(root)
+        for dirpath, dirnames, filenames in os.walk(root):
             os.chmod(dirpath, 0o755)
             for name in filenames:
                 os.chmod(os.path.join(dirpath, name), 0o644)
@@ -124,6 +125,22 @@ class CreatedPrivateTest(PrivateCase):
         self.assertEqual(mode(self.root), 0o700)
         self.assertEqual(mode(self.root / "memories"), 0o700)
         self.assertEqual(mode(self.root / "memories" / "global"), 0o700)
+
+    def test_fetch_model_creates_the_store_root_private(self):
+        # static_model.fetch mkdirs <root>/.models with parents, and nothing else in
+        # that path goes through ensure_dir: on a fresh machine the root would take
+        # the umask's mode. The model itself stays public, shielded by the root.
+        def offline(store_root, **_):
+            dest = static_model.download_dir(store_root)  # what the real fetch mkdirs first
+            dest.mkdir(parents=True, exist_ok=True)
+            raise OSError("no network")
+
+        with mock.patch.object(static_model, "fetch", offline):
+            code, out = self.run_cli("fetch-model")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(mode(self.root), 0o700)
+        self.assertEqual(mode(self.root / store.MODELS_DIR), 0o755)
+        self.assertEqual(self.store.loose_modes(), [])
 
     def test_a_path_that_is_a_file_still_raises(self):
         (self.base / "taken").write_text("x", encoding="utf-8")
@@ -235,6 +252,37 @@ class LooseStoreTest(PrivateCase):
             self.start_provider()
         self.assertEqual(self.store.loose_modes(), [])
         self.assertIn("group and other access", " ".join(r.getMessage() for r in logs.records))
+
+
+@unittest.skipUnless(POSIX, "POSIX modes")
+class SymlinkedRootTest(PrivateCase):
+    """A store reached through a symlinked root (a legacy store behind a dotfile
+    symlink, ``cfg.store_path`` pointing at one) is still the user's store: the
+    permission walk resolves the root instead of skipping it."""
+
+    def test_a_loose_store_behind_a_symlinked_root_is_reported_and_fixed(self):
+        real = self.base / "vault"
+        vault = store.Store(real)
+        vault.write("global/profile.md", PROFILE, "new")
+        vault.write("proj-1/topics/nix.md", doc("nix", "Nix notes"), "new")
+        self.loosen(real)
+        self.assertEqual(mode(real), 0o755)
+        symlink_or_skip(self, real, self.root)  # self.base/memory-buckets -> vault
+        self.assertIn((".", 0o755), self.store.loose_modes())
+        self.assertIn(("memories/global/profile.md", 0o644), self.store.loose_modes())
+        code, out = self.run_cli("status")
+        self.assertEqual(code, 0, out)
+        line = next(l for l in out.splitlines() if l.startswith("permissions"))
+        self.assertIn("can be read by group or other", line)
+        self.assertIn("0755", line)
+        code, out = self.run_cli("migrate")
+        self.assertEqual(code, 0, out)
+        self.assertIn("group and other access", out)
+        self.assertEqual(mode(real), 0o700)
+        self.assertEqual(mode(real / "memories/global/profile.md"), 0o600)
+        self.assertEqual(mode(real / "memories/proj-1/topics/nix.md"), 0o600)
+        self.assertEqual(self.store.loose_modes(), [])
+        self.assertNotIn("permissions", self.run_cli("status")[1])
 
 
 class WindowsNoOpTest(PrivateCase):

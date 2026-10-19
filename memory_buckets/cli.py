@@ -498,6 +498,9 @@ def cmd_fetch_model(args) -> int:
     if found is not None and not args.force:
         _out(f"built-in model already available at {found}")
         return 0
+    # fetch mkdirs <root>/.models with parents, which would create the root itself at
+    # the umask's mode; every other creation path goes through the store's ensure_dir.
+    store.ensure_dir(store.root)
     try:
         dest = static_model.fetch(store.root, progress=lambda msg: _out(msg), timeout=120.0)
     except (OSError, static_model.ModelUnavailable) as err:

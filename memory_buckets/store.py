@@ -248,12 +248,15 @@ class Store:
         """``(path relative to the root, mode)`` for each directory and file under the root
         that group or other can reach, the root itself first (as ``.``). Empty on Windows.
         Symlinks are skipped, since a mode change would land on their target, and so is
-        ``.models``: public, hash-checked data that a private root already shields."""
-        if not private_modes() or not self.root.is_dir() or is_link(self.root):
+        ``.models``: public, hash-checked data that a private root already shields. The
+        root itself is resolved before the walk: it is the user's own configured path, so
+        a store behind a symlinked root is still their store, reported by its real modes."""
+        if not private_modes() or not self.root.is_dir():
             return []
+        root = Path(os.path.realpath(self.root))
         found = []
-        for dirpath, dirnames, filenames in os.walk(self.root):
-            dirnames[:] = sorted(d for d in dirnames if not (dirpath == str(self.root) and d == MODELS_DIR))
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(d for d in dirnames if not (dirpath == str(root) and d == MODELS_DIR))
             for name in [None] + sorted(filenames):
                 full = dirpath if name is None else os.path.join(dirpath, name)
                 try:
@@ -264,7 +267,7 @@ class Store:
                     continue  # a symlink, socket or the like
                 if not stat.S_IMODE(st.st_mode) & GROUP_OTHER:
                     continue
-                rel = os.path.relpath(full, self.root).replace(os.sep, "/")
+                rel = os.path.relpath(full, root).replace(os.sep, "/")
                 found.append((rel, stat.S_IMODE(st.st_mode)))
         return found
 
