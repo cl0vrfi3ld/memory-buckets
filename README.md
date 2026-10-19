@@ -133,7 +133,8 @@ $HERMES_HOME/memory-buckets/
 
 Each file covers one subject. Its frontmatter carries `name` (matching the filename
 stem), a one-line `description` telling the agent when to read the file, and optional
-`aliases` (other names for the subject). The body is plain Markdown bullets. Writes
+`aliases` (other names for the subject; an alias may contain a comma). The body is
+plain Markdown bullets. Writes
 made through the plugin also record `sources` and a UTC `edited_at` timestamp; edits
 you make by hand in Obsidian or an editor are picked up automatically on the next
 search or turn.
