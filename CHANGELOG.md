@@ -18,6 +18,15 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
+### Fixed
+
+- **Long queries keep their keyword leg.** The FTS half of hybrid search only
+  ever saw the first 32 tokens of a query, so a key term past that point (a
+  question at the end of a pasted log, say) matched nothing: a long message was
+  effectively vector-only. `_active_tokens` now samples the first and last 32
+  tokens, order-preserving, before stopword filtering, mirroring the embedder's
+  own head/tail pre-truncation. Query-side only; nothing indexed changes.
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.

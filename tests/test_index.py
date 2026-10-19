@@ -383,6 +383,55 @@ class FileRankAndCoverageTest(StoreCase):
         self.assertLess(paths.index("global/topics/full.md"), paths.index("global/topics/spread.md"))
 
 
+class ActiveTokensTest(unittest.TestCase):
+    """_active_tokens pins: short-query behaviour must not move when the
+    head/tail sampling for long queries lands."""
+
+    def test_single_token_passes_through(self):
+        self.assertEqual(idx._active_tokens("wrens"), ["wrens"])
+
+    def test_stopword_only_query_falls_back_to_all_tokens(self):
+        self.assertEqual(idx._active_tokens("the"), ["the"])
+
+    def test_bare_single_digit_dropped_from_multiword_queries(self):
+        self.assertEqual(idx._active_tokens("clo gpt 2"), ["clo", "gpt"])
+
+    def test_lone_single_digit_still_searches(self):
+        self.assertEqual(idx._active_tokens("2"), ["2"])
+
+    def test_dedupe_keeps_first_occurrence_order(self):
+        self.assertEqual(idx._active_tokens("wrens nest wrens shed"), ["wrens", "nest", "shed"])
+
+
+class LongQueryTokenSamplingTest(StoreCase):
+    """The FTS leg must not lose a key term just because it sits past token
+    32 of a long query: _active_tokens samples head and tail."""
+
+    def setUp(self):
+        super().setUp()
+        self.put("global/topics/wrens.md", doc("wrens", "Back garden birds",
+                                               "- wrens nest behind the shed\n"))
+
+    def make(self):
+        index = idx.Index(self.store, None)  # embeddings off: isolate the keyword leg
+        self.addCleanup(index.close)
+        return index
+
+    def test_long_query_keeps_head_and_tail_only(self):
+        tokens = [f"t{i}" for i in range(70)]
+        self.assertEqual(idx._active_tokens(" ".join(tokens)), tokens[:32] + tokens[-32:])
+
+    def test_key_term_past_token_32_still_matches(self):
+        query = " ".join(f"filler{i}" for i in range(40)) + " where do the wrens nest"
+        hits = list(self.make().search(query, ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual([h["path"] for h in hits], ["global/topics/wrens.md"])
+
+    def test_600_word_message_with_key_term_at_the_end_still_matches(self):
+        query = " ".join(f"filler{i}" for i in range(600)) + " where do the wrens nest"
+        hits = list(self.make().search(query, ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual([h["path"] for h in hits], ["global/topics/wrens.md"])
+
+
 class HintsProjectAndRescueTest(StoreCase):
     """hints() boosts the session project and rescues files named exactly by a
     stem or alias even when their embedding similarity is weak."""
