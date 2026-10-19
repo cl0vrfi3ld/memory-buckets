@@ -216,7 +216,8 @@ The prompt block contains:
 If the prompt block would exceed `snapshot_max_chars`, it trims the file listing
 first, then drops `global/preferences.md`, `<project>/preferences.md`, and
 `<project>/profile.md` in that order. `global/profile.md` and the project header are
-always kept.
+always kept. When even the profile cannot fit, the block keeps its head and ends with
+a line saying how much was cut and pointing at `memory_read` for the rest.
 
 The agent gets seven tools: `memory_list`, `memory_read`, `memory_search`,
 `memory_write`, `memory_str_replace`, `memory_append`, and `memory_delete`. Every
