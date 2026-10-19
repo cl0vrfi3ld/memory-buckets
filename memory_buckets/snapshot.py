@@ -5,8 +5,9 @@ in full, then, when the session has a project, the project index: generated
 here from the Hermes project (name, description, folders) and the bucket's own
 ``profile.md`` and ``preferences.md`` in full. No file holds it. Then a path +
 description listing of the other files the session reads by default (project
-files first). Capped at ``snapshot_max_chars``. When over the cap, drop listing
-lines first, then whole files, in ``drop_order()``'s order. The global profile and the
+files first, each group in path order). Capped at ``snapshot_max_chars``. When over
+the cap, drop listing lines first, least recently edited first (project files last),
+then whole files, in ``drop_order()``'s order. The global profile and the
 project header are never dropped. A file or description that matches one of Hermes's
 threat patterns is replaced by a ``[BLOCKED: ...]`` line (see ``blocked``). The provider
 freezes the result per session id for prefix caching. When the session later moves
@@ -26,7 +27,7 @@ from .config import Config
 from .index import Index
 from .projects import Project
 from .scopes import Scope
-from .store import GLOBAL, Store, StoreError, stem
+from .store import GLOBAL, Store, StoreError, edited_at, stem
 
 logger = logging.getLogger("memory_buckets")
 
@@ -225,6 +226,21 @@ def _body(store: Store, path: str) -> Optional[str]:
     return _screened(path, body) if body else None
 
 
+def _recency(store: Store, path: str, mtime: float) -> float:
+    """When the file was last edited, as a Unix time: its ``edited_at`` stamp, else the
+    file's mtime. Hand edits carry no stamp, and a file whose frontmatter can't be
+    parsed has none to read."""
+    try:
+        data = store.read_bytes(path)
+        if data is None:
+            return mtime
+        fm, _ = frontmatter.parse(data.decode("utf-8", errors="replace"))
+    except (StoreError, frontmatter.FrontmatterError):
+        return mtime
+    stamped = edited_at(fm)
+    return mtime if stamped is None else stamped
+
+
 def _profile_state(store: Store, path: str) -> str:
     """missing | broken | empty | full: what the tools can do with a profile.
     ``broken`` means the write path's own validation would refuse the file — no
@@ -362,6 +378,18 @@ def build(
     if scope.project:
         defaults.sort(key=lambda pd: (not pd[0].startswith(f"{scope.project}/"), pd[0]))
     listing = [f"- {p}: {_screened(p, d)}" if d else f"- {p}" for p, d in defaults]
+    # When the cap cuts the listing, recently edited files survive, not whatever sorts
+    # first. Project files still outrank global ones. `survival` holds listing indexes,
+    # most deserving first; `render` shows the kept ones back in path order.
+    mtimes = index.mtimes()
+    stamps = {p: _recency(store, p, mtimes.get(p, 0.0)) for p, _ in defaults}
+    survival = sorted(  # stable: equal times keep path order
+        range(len(defaults)),
+        key=lambda i: (
+            bool(scope.project) and not defaults[i][0].startswith(f"{scope.project}/"),
+            -stamps[defaults[i][0]],
+        ),
+    )
     has_inbox = any(p == INBOX for p, _ in listing_files)
 
     def render(shown, kept, dropped):
@@ -379,7 +407,7 @@ def build(
             parts.append(TOO_LONG + ", ".join(dropped))
         omitted = len(listing) - kept
         if kept or omitted:
-            lines = ["### Other files", *listing[:kept]]
+            lines = ["### Other files", *(listing[i] for i in sorted(survival[:kept]))]
             if omitted:
                 lines.append(
                     f"- … and {omitted} more files. Call memory_list to see all of them."

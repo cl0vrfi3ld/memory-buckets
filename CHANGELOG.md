@@ -90,6 +90,14 @@ change the store's layout; the plugin migrates the store itself (see
   parse (so the tools refuse to edit it). It is ignored when reading and kept in
   place when the file is rewritten.
 
+### Changed
+
+- When the prompt block's file listing doesn't fit under `snapshot_max_chars`, it now
+  keeps the most recently edited files instead of the ones that sort first by path.
+  Project files still come before global ones, and the lines that remain are shown in
+  path order. A file's age is its `edited_at` stamp, falling back to its modification
+  time. No store or index changes.
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.

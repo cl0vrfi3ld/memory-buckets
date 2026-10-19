@@ -152,12 +152,25 @@ def stem(path: str) -> str:
 
 
 EDITED_AT = "edited_at"
+EDITED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def stamp(fm) -> None:
     """Set ``edited_at`` to now (UTC, ISO 8601). Every writer that changes a file's
     content calls this; hand edits (Obsidian, an editor) don't, so it's best-effort."""
-    fm.set(EDITED_AT, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+    fm.set(EDITED_AT, datetime.now(timezone.utc).strftime(EDITED_AT_FORMAT))
+
+
+def edited_at(fm) -> Optional[float]:
+    """The ``edited_at`` stamp as a Unix time, or None when it is absent or isn't in
+    the format ``stamp`` writes (a hand-written date, say)."""
+    value = fm.get(EDITED_AT)
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, EDITED_AT_FORMAT).replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
 
 
 def scope_of(path: str) -> str:

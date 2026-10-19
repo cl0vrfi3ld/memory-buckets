@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 
 from .helpers import StoreCase, doc
@@ -236,6 +237,103 @@ class SnapshotTest(StoreCase):
         self.assertIn("- Sam, they/them", snap.text)
         self.assertIn("memory_read when they are relevant: global/preferences.md", snap.text)
         self.assertNotIn("global/preferences.md", snap.paths)
+
+    @staticmethod
+    def stamped(path, epoch, body="- a fact\n"):
+        """A memory file whose ``edited_at`` is ``epoch`` seconds after the Unix epoch."""
+        when = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        name = path.rsplit("/", 1)[-1][:-3]
+        return doc(name, "A rather long description of this particular file", body, f"edited_at: {when}\n")
+
+    def age(self, *paths):
+        """Make fixture files from ``setUp`` the oldest in the store, so they never win a recency test."""
+        for path in paths:
+            os.utime(self.store.memories / path, (0, 0))
+
+    def listed(self, text):
+        """The paths under ``### Other files``, in the order shown."""
+        lines = self.section(text, "Other files").split("\n\n", 1)[0].splitlines()
+        return [line[2:].split(":", 1)[0] for line in lines if line.startswith("- ") and "more files" not in line]
+
+    def test_cap_keeps_the_most_recently_edited_files(self):
+        # Issue #3: the cut used to drop whatever sorted last. 200 files, edited in name
+        # order, so the alphabetical survivors (t-000...) are the oldest ones.
+        for i in range(200):
+            self.put(f"global/topics/t-{i:03}.md", self.stamped(f"global/topics/t-{i:03}.md", 1_700_000_000 + i * 60))
+        self.age("global/topics/nix.md")
+        self.index.reconcile()
+        listed = self.listed(self.build(snapshot_max_chars=5500).text)
+        self.assertTrue(10 < len(listed) < 190, len(listed))
+        newest = [f"global/topics/t-{i:03}.md" for i in range(200 - len(listed), 200)]
+        self.assertEqual(listed, newest)  # the newest ones, and shown in path order
+
+    def test_edited_at_beats_path_order_whatever_the_write_order(self):
+        # Files are written oldest-last, so neither creation order nor mtime order
+        # matches the stamps: only edited_at can produce this result.
+        for i, epoch in enumerate((1_700_000_900, 1_700_000_100, 1_700_000_500)):
+            self.put(f"global/topics/t-{i}.md", self.stamped(f"global/topics/t-{i}.md", epoch))
+        self.age("global/topics/nix.md")
+        self.index.reconcile()
+        full = self.build(snapshot_max_chars=100_000).text
+        cap = len(full) - 1
+        while len(self.listed(self.build(snapshot_max_chars=cap).text)) > 1:
+            cap -= 1
+        self.assertEqual(self.listed(self.build(snapshot_max_chars=cap).text), ["global/topics/t-0.md"])
+
+    def test_files_without_a_stamp_fall_back_to_mtime(self):
+        # Hand-written files carry no edited_at. Old stamped files must lose to a newer
+        # unstamped one and beat an older one.
+        for i in range(60):
+            self.put(f"global/topics/t-{i:03}.md", self.stamped(f"global/topics/t-{i:03}.md", 1_700_000_000 + i))
+        fresh = self.put("global/topics/zz-hand-edited.md", doc("zz-hand-edited", "A rather long description of this file"))
+        stale = self.put("global/topics/zy-old-hand-edit.md", doc("zy-old-hand-edit", "A rather long description of this file"))
+        os.utime(fresh, (1_800_000_000, 1_800_000_000))
+        os.utime(stale, (1_600_000_000, 1_600_000_000))
+        self.index.reconcile()
+        listed = self.listed(self.build(snapshot_max_chars=4600).text)
+        self.assertIn("global/topics/zz-hand-edited.md", listed)
+        self.assertNotIn("global/topics/zy-old-hand-edit.md", listed)
+        self.assertNotIn("global/topics/t-000.md", listed)  # the cap really did cut
+        self.assertIn("global/topics/t-059.md", listed)
+
+    def test_an_unreadable_stamp_falls_back_to_mtime(self):
+        # A hand-written date is not a stamp; neither is frontmatter that won't parse.
+        # Neither may break the snapshot, and both rank by mtime.
+        for i in range(60):
+            self.put(f"global/topics/t-{i:03}.md", self.stamped(f"global/topics/t-{i:03}.md", 1_700_000_000 + i))
+        dated = self.put("global/topics/zz-dated.md",
+                         doc("zz-dated", "A rather long description of this file", extra="edited_at: last Tuesday\n"))
+        broken = self.put("global/topics/zy-broken.md", "- no frontmatter at all\n")
+        for target in (dated, broken):
+            os.utime(target, (1_800_000_000, 1_800_000_000))
+        self.index.reconcile()
+        listed = self.listed(self.build(snapshot_max_chars=4600).text)
+        self.assertIn("global/topics/zz-dated.md", listed)
+        self.assertIn("global/topics/zy-broken.md", listed)
+
+    def test_project_files_outrank_newer_global_files_in_the_cut(self):
+        for i in range(15):
+            self.put(f"proj-1/topics/p-{i:03}.md", self.stamped(f"proj-1/topics/p-{i:03}.md", 1_700_000_000 + i))
+        for i in range(60):
+            self.put(f"global/topics/g-{i:03}.md", self.stamped(f"global/topics/g-{i:03}.md", 1_800_000_000 + i))
+        self.age("proj-1/topics/deploy.md", "global/topics/nix.md")
+        self.index.reconcile()
+        listed = self.listed(self.build(project="proj-1", snapshot_max_chars=5500).text)
+        project = [p for p in listed if p.startswith("proj-1/")]
+        other = listed[len(project):]
+        # Every project file is older than every global file and still survives, shown first.
+        self.assertEqual(project, ["proj-1/topics/deploy.md", *(f"proj-1/topics/p-{i:03}.md" for i in range(15))])
+        self.assertTrue(0 < len(other) < 60, len(other))
+        # The room left over goes to the newest global files, in path order.
+        self.assertEqual(other, [f"global/topics/g-{i:03}.md" for i in range(60 - len(other), 60)])
+
+    def test_listing_that_fits_is_unchanged_by_recency(self):
+        # Nothing is cut, so the order is plain path order, newest or not.
+        self.put("global/topics/a.md", self.stamped("global/topics/a.md", 1_700_000_000))
+        self.put("global/topics/b.md", self.stamped("global/topics/b.md", 1_800_000_000))
+        self.index.reconcile()
+        self.assertEqual(self.listed(self.build().text),
+                         ["global/topics/a.md", "global/topics/b.md", "global/topics/nix.md"])
 
     def test_listing_fills_the_cap(self):
         # Regression: the trim assumed ~40 characters a line and cut the listing far below the cap.
