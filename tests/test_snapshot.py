@@ -7,6 +7,7 @@ from unittest import mock
 from .helpers import StoreCase, doc
 from memory_buckets import config, index, scopes, snapshot
 from memory_buckets.projects import Project
+from memory_buckets.store import Store
 
 
 def header_of(text, bucket):
@@ -336,6 +337,34 @@ class SnapshotTest(StoreCase):
         listed = self.listed(self.build(snapshot_max_chars=4600).text)
         self.assertIn("global/topics/zz-dated.md", listed)
         self.assertIn("global/topics/zy-broken.md", listed)
+
+    def test_a_file_that_became_unreadable_still_lists_by_mtime(self):
+        # A listed file can turn unreadable after it was indexed (its permissions
+        # changed): reconcile has no reason to drop it, so its stamp is unreachable,
+        # not absent. Falling back to the mtime keeps the snapshot buildable; a raise
+        # here would cost the session its whole memory block, because the provider
+        # catches every exception. Mocked rather than chmod so it holds as root and
+        # on Windows.
+        for i in range(60):
+            path = f"global/topics/t-{i:03}.md"
+            self.put(path, self.stamped(path, 1_700_000_000 + i))
+        sealed = self.put("global/topics/zz-sealed.md",
+                          self.stamped("global/topics/zz-sealed.md", 1_600_000_000))
+        os.utime(sealed, (1_800_000_000, 1_800_000_000))  # fresh mtime the store can no longer read past
+        self.age("global/topics/nix.md")
+        self.index.reconcile()
+        original_read_bytes = Store.read_bytes
+
+        def read_bytes(store, path):
+            if path == "global/topics/zz-sealed.md":
+                raise PermissionError(13, "Permission denied", path)
+            return original_read_bytes(store, path)
+
+        with mock.patch.object(Store, "read_bytes", read_bytes):
+            listed = self.listed(self.build(snapshot_max_chars=4600).text)
+        self.assertIn("global/topics/zz-sealed.md", listed)
+        self.assertIn("global/topics/t-059.md", listed)
+        self.assertNotIn("global/topics/t-000.md", listed)
 
     def test_project_files_outrank_newer_global_files_in_the_cut(self):
         for i in range(15):

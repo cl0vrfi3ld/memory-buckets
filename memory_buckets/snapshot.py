@@ -180,13 +180,16 @@ def _body(store: Store, path: str) -> Optional[str]:
 def _recency(store: Store, path: str, mtime: float) -> float:
     """When the file was last edited, as a Unix time: its ``edited_at`` stamp, else the
     file's mtime. Hand edits carry no stamp, and a file whose frontmatter can't be
-    parsed has none to read."""
+    parsed has none to read. A listed file can also turn unreadable after it was
+    indexed (its permissions changed): its stamp is unreachable, not absent, and
+    raising here would cost the session its whole memory block, so it ranks by the
+    mtime with the rest."""
     try:
         data = store.read_bytes(path)
         if data is None:
             return mtime
         fm, _ = frontmatter.parse(data.decode("utf-8", errors="replace"))
-    except (StoreError, frontmatter.FrontmatterError):
+    except (OSError, StoreError, frontmatter.FrontmatterError):
         return mtime
     stamped = edited_at(fm)
     return mtime if stamped is None else stamped
