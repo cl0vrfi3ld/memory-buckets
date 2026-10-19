@@ -146,14 +146,19 @@ edit and every `memory_delete` first saves the previous bytes to
 `.history/<path>/`, before the change is applied. Appends and creations record
 nothing: they add, never destroy. A failed history write is logged and ignored, so
 it can never break a save. Retention keeps the newest `history_keep` versions per
-file and drops anything older than `history_days`; `history_keep: 0` turns history
-off entirely.
+file and drops anything older than `history_days`; `history_keep: 0` stops new
+recording, and what is already in `.history/` stays.
 
 `hermes memory-buckets history PATH` lists the recorded versions of one file, and
 `hermes memory-buckets restore PATH [VERSION]` writes one back through the same
 compare-and-swap path the tools use, so a restore is itself recorded and a
 concurrent change is refused rather than clobbered. Restoring works after a delete
 too: it recreates the file.
+
+Deleting is no longer erasing: the deleted bytes stay in `.history/<path>/` until
+the retention limits drop them, and so does anything that backs up the store
+directory. To erase a file's history for good, remove its directory under
+`.history/`.
 
 Not covered: files you edit by hand. The plugin only records its own writes, so a
 hand edit in Obsidian or an editor that overwrites or deletes a memory file leaves

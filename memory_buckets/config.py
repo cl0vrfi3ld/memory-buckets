@@ -71,6 +71,15 @@ class Config:
                     _assign(cfg.embeddings, f.name, emb[f.name], f.type)
         if "write_policy" in data and str(data["write_policy"]).strip().lower() == "confined":
             _warn_confined_once()
+        for name, default in (("history_keep", HISTORY_KEEP_DEFAULT), ("history_days", HISTORY_DAYS_DEFAULT)):
+            value = getattr(cfg, name)
+            if value < 0:
+                # Negative retention is bad config, not a shorter retention:
+                # history_days would prune the entry just recorded, and
+                # history_keep would record nothing while claiming to keep some.
+                logger.warning("memory-buckets: %s=%s is negative; using the default (%s)",
+                               name, value, default)
+                setattr(cfg, name, default)
         return cfg
 
 

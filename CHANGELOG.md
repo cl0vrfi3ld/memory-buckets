@@ -19,7 +19,14 @@ change the store's layout; the plugin migrates the store itself (see
   nothing. Retention keeps the newest `history_keep` versions per file (default 20)
   and drops anything older than `history_days` (default 90); `history_keep: 0`
   turns history off. A history write that fails is logged and never breaks the
-  memory write. Hand edits outside the plugin are not recorded (README: History).
+  memory write. Restoring by a version token that was recorded more than once (the
+  same bytes written again later) uses the newest entry; a prefix matching several
+  different tokens is refused as ambiguous. Out-of-range retention settings are
+  bad config: a negative `history_keep` or `history_days` falls back to the
+  default, and a `history_days` too large for a timedelta no longer warns on
+  every write. Deleting no longer erases: the deleted bytes stay in `.history/`
+  until the retention limits drop them (README: History covers purging). Hand
+  edits outside the plugin are not recorded (README: History).
 - **Drift detection for the Hermes internals the plugin depends on.** The Hermes
   integration probe now imports and calls the private code behind the desktop workspace
   override, the gateway per-turn cwd, the TUI status line and project lookup, and fails

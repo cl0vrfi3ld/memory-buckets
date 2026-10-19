@@ -407,7 +407,15 @@ class Store:
         names = sorted(name for name in os.listdir(target) if name.endswith(".md"))
         if not names:
             return
-        max_age = timedelta(days=self.history_days) if self.history_days else None
+        # A non-positive history_days means no age limit (0 already does): a
+        # negative one would prune the entry just recorded, and one too large
+        # for a timedelta would raise OverflowError on every recorded write.
+        max_age = None
+        if self.history_days > 0:
+            try:
+                max_age = timedelta(days=self.history_days)
+            except OverflowError:
+                max_age = None
         now = datetime.now(timezone.utc)
         kept = 0
         for name in reversed(names):  # newest first
@@ -450,8 +458,11 @@ class Store:
         """Write a recorded version back through ``update``, so the content it
         replaces is recorded too and a concurrent change is refused, not clobbered.
         ``entry_version`` picks the version token from ``history()``; None picks
-        the newest. A no-op returning ``unchanged: True`` when the file already
-        holds that content. Restoring after a delete recreates the file and
+        the newest. Several entries can hold the same token (the same bytes
+        recorded more than once): the newest is used, and only a prefix that
+        matches several different tokens is refused as ambiguous. A no-op
+        returning ``unchanged: True`` when the file already holds that content.
+        Restoring after a delete recreates the file and
         reports ``recreated: True`` (nothing was replaced, so nothing new is
         recorded; the deleted bytes are already in ``.history``)."""
         entries = self.history(path)
@@ -465,12 +476,15 @@ class Store:
                 matches = [e for e in entries if e["version"].startswith(entry_version)]
             if not matches:
                 raise StoreError("not_found", f"{path}: no recorded version matches {entry_version!r}")
-            if len(matches) > 1:
+            # Several entries can hold the same token: the same bytes recorded
+            # more than once. They are interchangeable, so the newest wins; only
+            # different tokens matching one prefix are genuinely ambiguous.
+            if len({e["version"] for e in matches}) > 1:
                 raise StoreError(
                     "ambiguous_version",
                     f"{path}: several recorded versions match {entry_version!r}; give the full version",
                 )
-            entry = matches[0]
+            entry = matches[0]  # history() is newest first
         try:
             data = (self._history_dir(path) / entry["file"]).read_bytes()
         except OSError as err:

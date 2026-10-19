@@ -9,9 +9,10 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from .helpers import StoreCase, doc, run_hermes_cli
-from memory_buckets import cli, config, index, inbox, scopes, store, tools
+from memory_buckets import cli, config, inbox, index, scopes, store, tools
 from memory_buckets.store import StoreError, version
+
+from .helpers import StoreCase, doc, run_hermes_cli
 
 PATH = "global/topics/nix.md"
 
@@ -105,14 +106,78 @@ class HistoryTest(StoreCase):
         self.assertEqual(caught.exception.code, "not_found")
 
     def test_restore_with_an_ambiguous_prefix(self):
-        # Two entries, and a one-character prefix matching both.
-        self.store.update(PATH, lambda cur: cur + b"- a\n")
-        self.store.update(PATH, lambda cur: cur + b"- b\n")
-        entries = self.store.history(PATH)
-        prefix = os.path.commonprefix([e["version"] for e in entries])[:1]
+        # Two recorded versions whose tokens genuinely share a prefix: restoring
+        # by it is refused as ambiguous; a longer prefix matching one entry
+        # restores that entry.
+        first, second = self._pair_with_a_shared_token_prefix()
+        self.store.update(PATH, lambda cur: first, self.v1)  # records v1
+        self.store.update(PATH, lambda cur: second, version(first))  # records first's token
+        self.store.update(PATH, lambda cur: b"- final\n", version(second))  # records second's token
+        tokens = [e["version"] for e in self.store.history(PATH)]
+        shared = os.path.commonprefix([version(first), version(second)])
+        self.assertTrue(shared, "the pair is chosen to share a prefix")
         with self.assertRaises(StoreError) as caught:
-            self.store.restore(PATH, prefix)
+            self.store.restore(PATH, shared)
         self.assertEqual(caught.exception.code, "ambiguous_version")
+        unique = ""
+        for size in range(1, len(version(first)) + 1):
+            candidate = version(first)[:size]
+            if sum(t.startswith(candidate) for t in tokens) == 1:
+                unique = candidate
+                break
+        self.assertTrue(unique)
+        self.store.restore(PATH, unique)
+        self.assertEqual(self.store.read_bytes(PATH), first)
+
+    def _pair_with_a_shared_token_prefix(self):
+        """Two payloads whose version tokens share their first character, so a
+        genuine shared prefix exists to be ambiguous about."""
+        seen = {}
+        for i in range(64):
+            data = f"- pad {i}\n".encode()
+            head = version(data)[:1]
+            if head in seen:
+                return seen[head], data
+            seen[head] = data
+        self.fail("no pair of payloads shares a version token prefix")
+
+    def test_restore_with_a_repeated_token(self):
+        # The same bytes recorded twice (write A, B, A, B) leave two entries
+        # with one full version token. They hold the same content, so
+        # restoring by that token uses the newest instead of refusing.
+        a, b = b"- alpha\n", b"- beta\n"
+        self.store.update(PATH, lambda cur: b, self.v1)      # records v1
+        self.store.update(PATH, lambda cur: a, version(b))  # records b's token
+        self.store.update(PATH, lambda cur: b, version(a))  # records a's token
+        self.store.update(PATH, lambda cur: a, version(b))  # records b's token again
+        tokens = [e["version"] for e in self.store.history(PATH)]
+        self.assertEqual(tokens.count(version(b)), 2, "the same bytes are recorded twice")
+        got = self.store.restore(PATH, version(b))
+        self.assertFalse(got["unchanged"])
+        self.assertEqual(self.store.read_bytes(PATH), b)
+
+    def test_restore_refuses_a_concurrent_change(self):
+        # A competing writer lands between restore's read of the current bytes
+        # and its compare-and-swap: the restore must refuse, and the competing
+        # content must survive it.
+        real_update = store.Store.update
+        pre = None
+
+        def compete_then_restore(path, fn, if_version=None, record_history=True):
+            real_update(self.store, PATH, lambda cur: pre + b"- competing\n", version(pre))
+            return real_update(self.store, path, fn, if_version=if_version,
+                               record_history=record_history)
+
+        self.store.update(PATH, lambda cur: cur + b"- extra\n")
+        pre = self.store.read_bytes(PATH)
+        self.store.update = compete_then_restore
+        try:
+            with self.assertRaises(StoreError) as caught:
+                self.store.restore(PATH)
+        finally:
+            del self.store.update
+        self.assertEqual(caught.exception.code, "conflict")
+        self.assertEqual(self.store.read_bytes(PATH), pre + b"- competing\n")
 
     @unittest.skipIf(sys.platform == "win32", "chmod can't make a directory unwritable there")
     def test_unwritable_history_does_not_break_the_write(self):
@@ -169,6 +234,26 @@ class RetentionTest(StoreCase):
         (entry_dir / "stray.md").write_text("x", encoding="utf-8")
         keep.update(PATH, lambda cur: cur + b"- two\n", v)["version"]
         self.assertTrue((entry_dir / "stray.md").exists())
+
+    def test_negative_history_days_keep_what_was_recorded(self):
+        # A negative history_days is bad config (the store treats it like 0, no
+        # age limit); before the guard it pruned the entry just recorded,
+        # because timedelta(days=-1) is truthy and "now minus any entry time"
+        # beats a negative age.
+        keep = store.Store(self.store.root, history_days=-1)
+        v = keep.write(PATH, doc("nix", "Nix"), "new")["version"]
+        keep.update(PATH, lambda cur: cur + b"- x\n", v)
+        self.assertEqual([e["version"] for e in keep.history(PATH)], [v])
+
+    def test_absurd_history_days_stay_quiet(self):
+        # A history_days too large for a timedelta is bad config too; before
+        # the guard it raised OverflowError on every recorded write (caught,
+        # so a warning per write) and the age sweep never ran.
+        keep = store.Store(self.store.root, history_days=10**12)
+        v = keep.write(PATH, doc("nix", "Nix"), "new")["version"]
+        with self.assertNoLogs("memory_buckets.store", level="WARNING"):
+            keep.update(PATH, lambda cur: cur + b"- x\n", v)
+        self.assertEqual([e["version"] for e in keep.history(PATH)], [v])
 
 
 class ToolsHistoryTest(StoreCase):
@@ -268,6 +353,15 @@ class ConfigHistoryTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_HISTORY_KEEP": "3", "MEMORY_BUCKETS_HISTORY_DAYS": "7"}):
             cfg = config.load({"history_keep": 5})
         self.assertEqual((cfg.history_keep, cfg.history_days), (3, 7))
+
+    def test_negative_values_fall_back_to_the_defaults(self):
+        # A negative retention setting isn't a shorter retention: history_days
+        # would prune the entry just recorded and history_keep would record
+        # nothing while appearing to keep some. Both are bad config.
+        env = {"MEMORY_BUCKETS_HISTORY_KEEP": "-3", "MEMORY_BUCKETS_HISTORY_DAYS": "-1"}
+        with mock.patch.dict(os.environ, env), self.assertLogs("memory_buckets", level="WARNING"):
+            cfg = config.load({})
+        self.assertEqual((cfg.history_keep, cfg.history_days), (20, 90))
 
 
 if __name__ == "__main__":
