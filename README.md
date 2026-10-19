@@ -320,6 +320,39 @@ and Nix installs without `skills.external_dirs`, paste the prompt printed by
 `hermes memory-buckets import-prompt`. Avoid saving that prompt as a custom skill in
 `~/.hermes/skills/`, as a local copy will shadow updates to the bundled skill.
 
+## Tidying memory
+
+Memory only grows. After a few months the same fact can sit in two files, "currently doing
+X" lines stop being true, and a long file makes search noisier. `/tidy-memory` is a bundled
+skill that looks at your files as a whole and proposes fixes. It only runs when you ask.
+
+**It asks before it changes anything.** It reads your files, then replies with a numbered
+list of proposed changes, grouped by file, and stops. It writes nothing until you answer
+with `all`, `none` or the numbers you want. It then applies exactly those, and ends with
+what it changed and what it left alone. Conflicts are never covered by `all`: it asks you
+which fact is right.
+
+It looks for:
+- the same fact in more than one file;
+- facts that contradict each other;
+- time words that have gone stale, such as "currently", "this semester" or "next week";
+- finished one-off tasks;
+- files of about 8 KB or more, which it proposes to split by subject;
+- descriptions that do not say when to read the file.
+
+It works on `global/` and the current project's files. It never touches
+`global/inbox.md` (use `/sort-imports` for that) and never edits, or adds to, another
+project's files. The tools refuse edits and deletes in another project's bucket, but not
+additions, and they do not stop edits to the inbox. So these limits rest on the skill's
+wording. Read the list before you answer; the skill is a plan you approve, not a sandbox.
+
+To run it, type `/tidy-memory` or ask the agent to tidy your memory. It registers the same
+way as `/sort-imports`: the slash command needs the plugin's `skills` directory in
+`skills.external_dirs` (see above). Pip and Nix installs need that entry to use it at all:
+Hermes does not serve their skills through `skill_view`, and there is no paste-in prompt
+for this skill. Back up your store first, as for the import: applying a proposal edits
+files and can delete them.
+
 ## Reference
 
 ### Commands
