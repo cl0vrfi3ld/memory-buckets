@@ -8,6 +8,14 @@ change the store's layout; the plugin migrates the store itself (see
 
 ## [Unreleased]
 
+### Fixed
+
+- **The built-in model's per-token row cache is bounded.** Rows are `array("f")`
+  (about 2 KB each) instead of tuples of boxed floats (~16 KB), and the cache clears
+  at 4,096 rows. Encoding a corpus of 20,000 distinct tokens through `potion-retrieval-32M`
+  now raises the process's RSS by 61 MB instead of the 445 MB it did on main, so the
+  embedding backlog no longer parks a growing, unreachable cache in every gateway process.
+
 ### Added
 
 - **Drift detection for the Hermes internals the plugin depends on.** The Hermes
