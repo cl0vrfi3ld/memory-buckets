@@ -265,5 +265,25 @@ if AIAgent is not None and isinstance(sessions, dict):
                 agent._memory_manager.shutdown_all()
 out["internals_problems"] = internals
 
+# Setup contract (issue #28), run last: get_config_schema feeds `hermes memory setup`;
+# save_config must reach config.yaml through Hermes's writer, so unrelated keys survive the
+# round trip. It writes plugins.memory-buckets (readonly: true), and the plugin reads that
+# back, so earlier sections must not run against the config it leaves behind.
+from hermes_cli.config import load_config  # noqa: E402
+
+out["schema_keys"] = [f.get("key") for f in p1.get_config_schema()]
+before = json.loads(json.dumps(load_config()))
+# The wizard hands every answer over as a string; coercion is part of the contract.
+p1.save_config({"search_limit": "5", "embeddings.backend": "off", "readonly": "true"}, str(home))
+after = load_config()
+block = after.get("plugins", {}).get("memory-buckets")
+out["save_config_kept"] = (
+    isinstance(block, dict)
+    and block.get("search_limit") == 5
+    and block.get("embeddings") == {"backend": "off"}
+    and block.get("readonly") is True
+    and {k: v for k, v in after.items() if k != "plugins"}
+    == {k: v for k, v in before.items() if k != "plugins"})
+
 manager.shutdown_all()
 print("PROBE-RESULT " + json.dumps(out), file=result_stream)
