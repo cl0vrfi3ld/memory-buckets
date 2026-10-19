@@ -20,12 +20,14 @@ server or GPU.
    ```
    `--no-enable` skips the general-plugin prompt (`memory.provider` is what
    activates a memory provider).
-2. Set it as your memory provider in `~/.hermes/config.yaml`
-   (`%LOCALAPPDATA%\hermes\config.yaml` on Windows):
-   ```yaml
-   memory:
-     provider: memory-buckets
+2. Set it as your memory provider:
+   ```sh
+   hermes config set memory.provider memory-buckets
    ```
+   Plugin settings live under `plugins.memory-buckets` in config.yaml and are set the
+   same way (`hermes config set plugins.memory-buckets.readonly true`), or walk through
+   them with `hermes memory setup`. Never hand-edit config.yaml: a stray indent breaks
+   the live gateway.
 3. Start a new session (`/new`) or restart the gateway.
 4. Check that it loaded: `hermes memory-buckets status`.
 
@@ -35,8 +37,8 @@ and Nix installs bundle the model at build time; see [Install](#install).
 
 ## Install
 
-Whichever install method you use, enable the provider by setting
-`memory.provider: memory-buckets` in `config.yaml`.
+Whichever install method you use, enable the provider with
+`hermes config set memory.provider memory-buckets`.
 
 Requirements are Linux, macOS or Windows, Python 3.10+, and a `sqlite3` module compiled
 with FTS5 (`hermes memory-buckets diagnose` checks this). On Windows the plugin runs on
@@ -511,7 +513,9 @@ restore PATH [VERSION]                  write a recorded version back (itself re
 
 ### Configuration
 
-All settings are optional and live under `plugins.memory-buckets` in `config.yaml`:
+All settings are optional and live under `plugins.memory-buckets` in `config.yaml`;
+set them with `hermes config set plugins.memory-buckets.<key> <value>`, or walk through
+them with `hermes memory setup`:
 
 | Key | Default | Effect |
 |---|---|---|
