@@ -243,18 +243,23 @@ checks memory against Hermes's threat patterns (`tools.threat_patterns`, `strict
   contains a match is refused until the match is gone; `memory_delete` always works.
 - **The prompt.** Hand edits and synced files skip the write check, so the snapshot
   checks too. A matching `profile.md` or `preferences.md` appears as
-  `[BLOCKED: <path> matched <pattern ids>; fix or delete it]` instead of its text, and
-  a matching description in the file listing is replaced the same way. A file longer
-  than the scanner reads at once (`tools.threat_patterns` checks only the first
-  `MAX_SCAN_CHARS` characters, and the tools cap writes well under that) is blocked
-  the same way with an "over the threat-scan window" line, so a padded file cannot
-  slip an injection past the window. The file itself
+  `[BLOCKED: <path> matched <pattern ids>; tell the user to fix or delete it]` instead
+  of its text, and a matching description in the file listing is replaced the same way.
+  A file longer than the scanner reads at once (`tools.threat_patterns` checks only
+  the first `MAX_SCAN_CHARS` characters, and the tools cap writes well under that) is
+  blocked the same way with an "over the threat-scan window" line, so a padded file
+  cannot slip an injection past the window. The file itself
   is left alone and `memory_read` still returns it, so you can see what tripped the
   scan. The plugin logs a warning naming the file. The snapshot is frozen per session,
   so the block clears in the next session (or after Hermes compresses the conversation)
   once you have fixed the file.
+- **Prefetch hints.** A hint carries a file's description into the model's context on
+  every relevant turn, so hint descriptions are screened the same way as the listing:
+  a matching one is replaced by the `[BLOCKED: ...]` line.
 - **No scanner.** Outside Hermes, or on a Hermes without `tools.threat_patterns`,
-  nothing is scanned.
+  nothing is scanned. A Hermes that ships the scanner but renames only its
+  `MAX_SCAN_CHARS` constant still scans, and caps prompt-bound text at
+  `store.MAX_FILE_BYTES` characters instead, with a warning.
 
 Pattern matching is heuristic: it catches common injection and exfiltration phrasing,
 not every attack, and it can reject harmless text that happens to match (a note quoting

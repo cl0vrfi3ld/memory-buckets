@@ -63,17 +63,31 @@ except ImportError:  # not running inside Hermes
         return threading.Thread(target=target, args=args, kwargs=kwargs, name=name, daemon=daemon)
 
 
-# The window comes with the scanner: ``scan_for_threats`` reads only this many leading
-# characters of its input, so callers must not pass longer text off as scanned.
+# The scanner itself, imported on its own: a Hermes that renames only the window
+# constant below must not take the scanner with it and switch all scanning off.
 try:
-    from tools.threat_patterns import MAX_SCAN_CHARS as scan_window_chars
     from tools.threat_patterns import scan_for_threats as _scan_for_threats
 except Exception:  # not in Hermes, or a Hermes without the shared pattern library
     # Exception, not ImportError: outside Hermes ``tools`` can be someone else's package,
     # and whatever its __init__ raises must not stop this plugin loading.
     _scan_for_threats = None
+
+# The window comes with the scanner: ``scan_for_threats`` reads only this many leading
+# characters of its input, so callers must not pass longer text off as scanned.
+if _scan_for_threats is None:
     # No scanner means no window either: nothing is scanned, so callers fail open.
     scan_window_chars = None
+else:
+    try:
+        from tools.threat_patterns import MAX_SCAN_CHARS as scan_window_chars
+    except Exception:
+        # The scanner is here but its window constant is gone or renamed. Scanning must
+        # keep working, yet text of unknown size may not pass as scanned, so fail closed
+        # on size with the one bound no tool write can exceed: store caps writes at
+        # MAX_FILE_BYTES bytes, and a UTF-8 file never has more characters than bytes.
+        from .store import MAX_FILE_BYTES as scan_window_chars
+        logger.warning("memory-buckets: Hermes's threat scanner has no MAX_SCAN_CHARS; "
+                       "capping scanned text at %s characters instead", scan_window_chars)
 
 THREAT_SCAN_AVAILABLE = _scan_for_threats is not None
 _scan_failure_logged = False

@@ -26,6 +26,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import _compat
 from . import config as config_mod
 from . import inbox, migrate, projects, scopes, snapshot, tools
 from ._compat import (TUI_PLATFORMS, MemoryProvider, RecallStatus, spawn_context_thread, status_muted,
@@ -290,7 +291,11 @@ class MemoryBucketsProvider(MemoryProvider):
                 hints = []
         if hints:
             self._last_recall = len(hints)
-            lines = [f"- {path}: {desc}" if desc else f"- {path}" for path, desc, _ in hints]
+            # A hint description enters the model's context exactly like a listing
+            # line, so it gets the same screen: the description the snapshot would
+            # show as [BLOCKED: ...] must not arrive here verbatim.
+            lines = [f"- {path}: {snapshot._screened(path, desc)}" if desc else f"- {path}"
+                     for path, desc, _ in hints]
             parts.append("Memory files that may be relevant to this message. Read them with memory_read if they could help "
                          "you answer:\n" + "\n".join(lines))
         if state.nudge_due and not scope.read_only:
@@ -428,6 +433,17 @@ class MemoryBucketsProvider(MemoryProvider):
         previous = (metadata or {}).get("previous_content")
         if action in ("replace", "remove") and previous:
             entry += f" (was: {previous})"
+        window = _compat.scan_window_chars
+        patterns = _compat.scan_threats(entry)
+        if patterns or (window is not None and len(entry) > window):
+            # A matched or oversize built-in entry must not be copied into the store raw:
+            # the inbox is listed, and its entries are refiled through the scanned write
+            # tools. The original stays in built-in memory for the user to review by hand.
+            logger.warning("memory-buckets: kept a built-in memory %s on %s out of the inbox "
+                           "(matched %s or over the threat-scan window)", action, target,
+                           ", ".join(patterns) or "an oversize entry")
+            entry = (f"[blocked: a built-in memory {action} on {target} matched threat pattern(s) "
+                     "or is over the threat-scan window; tell the user to review it by hand]")
         try:
             inbox.append(self.store, f"mirrored from built-in memory {date.today().isoformat()}", [entry],
                          source=f"builtin:{self._state().platform}")

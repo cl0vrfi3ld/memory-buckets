@@ -27,16 +27,32 @@ change the store's layout; the plugin migrates the store itself (see
     description included. `memory_delete` is never blocked, so a bad file can be
     removed.
   - A file inlined into the system prompt that matches (a hand edit, a synced file) is
-    replaced there by `[BLOCKED: <path> matched <pattern ids>; fix or delete it]`, and a
-    matching description in the file listing is replaced the same way. A warning is
-    logged. The file on disk is untouched and `memory_read` still returns it.
+    replaced there by `[BLOCKED: <path> matched <pattern ids>; tell the user to fix or
+    delete it]`, and a matching description in the file listing is replaced the same
+    way. A warning is logged. The file on disk is untouched and `memory_read` still
+    returns it.
+  - Prefetch hints carry descriptions into the model's context on every relevant turn,
+    so they are screened too: a matching hint description is replaced by the same
+    `[BLOCKED: ...]` line.
   - A file longer than the scanner reads at once (`tools.threat_patterns` truncates
     its input at `MAX_SCAN_CHARS` characters) is blocked the same way rather than
     inlined with its tail unchecked. The tools cap writes well under that
     (`store.MAX_FILE_BYTES`), so only a hand edit or a synced file can get there.
+  - The scanner and its `MAX_SCAN_CHARS` window are imported separately: a Hermes that
+    renames only the constant keeps scanning, and caps prompt-bound text at
+    `store.MAX_FILE_BYTES` characters instead, with a warning. Both names are watched
+    by the Hermes internals probe.
+  - Built-in memory writes mirrored into `global/inbox.md` are screened too: a matched
+    or oversize entry is mirrored as a placeholder telling the model to have the user
+    review it, never as the raw text.
   - Without the scanner (a bare Python, or a Hermes that doesn't ship it) nothing is
     scanned and memory behaves as before. A scanner that raises is logged once and
     treated the same way.
+  - Upgrading applies the scan to an existing store for the first time, so a file you
+    never changed can newly match: one matching line removes that whole file from the
+    system prompt (and the strict scope also matches some ordinary phrasings; see the
+    README). Nothing is deleted, `memory_read` still returns the file, and fixing the
+    line puts it back.
 
 ## [0.4.0] - 2026-10-16
 

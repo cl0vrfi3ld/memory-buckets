@@ -171,15 +171,16 @@ def rules(scope: Scope, config: Config, projects: List[str]) -> str:
 def blocked(path: str, patterns: List[str]) -> str:
     """What stands in for a file the threat scan rejected. It names the file and the
     patterns, never the text, so the model learns the file is bad without reading it.
-    The user still sees (and ``memory_read`` still returns) the real file."""
-    return f"[BLOCKED: {path} matched {', '.join(patterns)}; fix or delete it]"
+    The user still sees (and ``memory_read`` still returns) the real file, so the model
+    is told to pass the problem on rather than fetch the file to fix it."""
+    return f"[BLOCKED: {path} matched {', '.join(patterns)}; tell the user to fix or delete it]"
 
 
 def blocked_too_large(path: str, window: int) -> str:
     """What stands in for a file longer than the scanner reads at once, so not one
     that was scanned and passed. Like ``blocked`` it names the file, never the text,
     and the real file stays readable."""
-    return f"[BLOCKED: {path} is over the {window}-character threat-scan window; fix or delete it]"
+    return f"[BLOCKED: {path} is over the {window}-character threat-scan window; tell the user to fix or delete it]"
 
 
 def _screened(path: str, text: str) -> str:

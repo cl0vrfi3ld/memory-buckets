@@ -157,6 +157,13 @@ def expect(label, got, want):
         internals.append(f"{label}: expected {want!r}, got {got!r}")
 
 
+# The threat scanner the plugin imports at load time, on its own and with its window
+# constant: a rename of either would switch scanning off or uncap the scan window, and
+# both have a silent fallback in the plugin, so both are watched.
+need("tools.threat_patterns", "scan_for_threats")
+need("tools.threat_patterns", "MAX_SCAN_CHARS")
+
+
 # Desktop workspace override and gateway per-turn cwd: signatures first, then behaviour through
 # the plugin's own lookup, so a changed return shape fails too, not only a changed signature.
 sessions = need("tui_gateway.server", "_sessions")
