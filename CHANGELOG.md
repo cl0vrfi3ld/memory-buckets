@@ -17,12 +17,6 @@ change the store's layout; the plugin migrates the store itself (see
   no status line, an unscoped session) and a Hermes refactor looked like behaviour drift.
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
-- **Setup support for `hermes memory setup`.** The provider reports its twelve
-  non-secret settings through `get_config_schema()` (types, defaults and the minimums
-  the code already enforces) and writes them to `plugins.memory-buckets` through
-  Hermes's own config writer in `save_config()`, so unrelated config.yaml keys survive.
-  The README quick start and install steps now use `hermes config set` instead of a
-  hand-edited config.yaml snippet.
 
 - **Pre-compression nudge.** Facts mentioned since the last save and never filed were
   lost when Hermes compressed the conversation. The provider now implements
@@ -77,6 +71,13 @@ change the store's layout; the plugin migrates the store itself (see
   you to say which to apply, and applies only those. It never touches `global/inbox.md`
   or another project's files. It registers like `/sort-imports`, with no code change.
   See [Tidying memory](README.md#tidying-memory).
+
+- **Setup support for `hermes memory setup`.** The provider reports its twelve
+  non-secret settings through `get_config_schema()` (types, defaults and the minimums
+  the code already enforces) and writes them to `plugins.memory-buckets` through
+  Hermes's own config writer in `save_config()`, so unrelated config.yaml keys survive.
+  The README quick start and install steps now use `hermes config set` instead of a
+  hand-edited config.yaml snippet.
 
 ### Fixed
 
@@ -138,6 +139,13 @@ change the store's layout; the plugin migrates the store itself (see
 - `hermes memory-buckets status` warns about files over the 48 KiB cap, which
   `lint` already reported: no memory tool can rewrite one as it stands.
 
+- **Long queries keep their keyword leg.** The FTS half of hybrid search only
+  ever saw the first 32 tokens of a query, so a key term past that point (a
+  question at the end of a pasted log, say) matched nothing: a long message was
+  effectively vector-only. `_active_tokens` now samples the first and last 32
+  tokens, order-preserving, before stopword filtering, mirroring the embedder's
+  own head/tail pre-truncation. Query-side only; nothing indexed changes.
+
 ### Changed
 
 - When the prompt block's file listing doesn't fit under `snapshot_max_chars`, it now
@@ -162,15 +170,6 @@ change the store's layout; the plugin migrates the store itself (see
   `run_benchmark` now returns a nested result per store and split instead of a flat
   dict. The numbers are in the README's new
   [Retrieval quality](README.md#retrieval-quality) section.
-
-### Fixed
-
-- **Long queries keep their keyword leg.** The FTS half of hybrid search only
-  ever saw the first 32 tokens of a query, so a key term past that point (a
-  question at the end of a pasted log, say) matched nothing: a long message was
-  effectively vector-only. `_active_tokens` now samples the first and last 32
-  tokens, order-preserving, before stopword filtering, mirroring the embedder's
-  own head/tail pre-truncation. Query-side only; nothing indexed changes.
 
 ## [0.4.0] - 2026-10-16
 
