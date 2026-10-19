@@ -41,6 +41,11 @@ HINT_COOLDOWN_TURNS = 5
 NUDGE = ("Memory check: has this conversation produced new durable facts about the user or their work? If yes, "
          "save them now with the memory tools, following your memory instructions. If no, do nothing. Do not "
          "mention this check to the user.")
+# Fed to Hermes's compression summary prompt (on_pre_compress's return contract, checked against
+# agent/memory_provider.py on current Hermes main): the summary keeps facts that were never filed,
+# so the agent still has them when the queued NUDGE fires after compression.
+PRE_COMPRESS_NOTE = ("Keep any durable facts about the user or their projects from this conversation that have not "
+                     "yet been saved to memory, so they can still be saved after compression.")
 
 
 def _sqlite_has_fts5() -> bool:
@@ -217,9 +222,12 @@ class MemoryBucketsProvider(MemoryProvider):
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
+        # A pending filing reminder rides over too: Hermes may rotate the id when it compresses,
+        # and on_pre_compress has just set the flag on the OLD id, which the next turn would
+        # otherwise lose. A reset is a genuinely new conversation, so it starts clean.
         self._remember(new_session_id, SessionState(
             platform=previous.platform, agent_context=previous.agent_context, cwd=previous.cwd,
-            status=previous.status,
+            status=previous.status, nudge_due=previous.nudge_due and not reset,
         ))
         self._current = new_session_id
 
@@ -247,6 +255,21 @@ class MemoryBucketsProvider(MemoryProvider):
         state.turns += 1
         if interval > 0 and state.turns % interval == 0:
             state.nudge_due = True
+
+    @_traced
+    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+        """Hermes is about to compress the transcript: facts mentioned since the last save and
+        never filed would die with it. Make the turn after compression carry the NUDGE (even
+        mid-interval) and hand the summary prompt a line asking it to keep the unsaved ones.
+        ``messages`` is not read and there is no model call here: filing stays the agent's job,
+        this only closes the gap. Sessions that turned reminders off (interval 0) or cannot
+        write (read-only) opt out here too, as they do for the interval nudge."""
+        if self.store is None or self.config is None or self.config.nudge_interval <= 0:
+            return ""
+        if self._read_scope().read_only:
+            return ""
+        self._state().nudge_due = True
+        return PRE_COMPRESS_NOTE
 
     @_traced
     def prefetch(self, query: str, *, session_id: str = "") -> str:

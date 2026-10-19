@@ -17,6 +17,18 @@ change the store's layout; the plugin migrates the store itself (see
   no status line, an unscoped session) and a Hermes refactor looked like behaviour drift.
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
+- **Pre-compression nudge.** Facts mentioned since the last save and never filed were
+  lost when Hermes compressed the conversation. The provider now implements
+  `on_pre_compress`: it queues the filing reminder for the turn after compression (even if
+  `nudge_interval` has not come round) and returns a line for the summary prompt asking it
+  to keep durable facts that haven't been saved. No model calls, and the transcript isn't
+  read. Read-only sessions and `nudge_interval: 0` skip both.
+
+### Fixed
+
+- A pending filing reminder now carries over when Hermes reassigns the session id without
+  a reset (compression that rotates the id), instead of being dropped with the old
+  session's state. `/new` and `/reset` still clear it.
 
 ## [0.4.0] - 2026-10-16
 

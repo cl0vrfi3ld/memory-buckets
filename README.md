@@ -228,7 +228,12 @@ and preferences match the message, and injects their paths and descriptions as h
 (never the file bodies). Once a file has been hinted, read, or written, prefetch
 holds it back for the next four turns so the agent isn't nagged with the same hint on
 every message. Every `nudge_interval` turns (default 10), a short reminder also asks
-the agent to save any new durable facts from the conversation.
+the agent to save any new durable facts from the conversation. Before Hermes compresses
+the conversation, the plugin queues that reminder for the next turn as well and adds a
+line to the summary prompt asking it to keep durable facts that haven't been saved yet,
+so facts mentioned since the last save survive the summary. It makes no model calls and
+does not read the transcript. Read-only sessions get neither, and neither does a session
+with `nudge_interval` set to `0`.
 
 ### Embeddings
 
@@ -347,7 +352,7 @@ All settings are optional and live under `plugins.memory-buckets` in `config.yam
 |---|---|---|
 | `readonly` | `false` | make every session read-only |
 | `cron_writes` | `false` | allow cron sessions to write (cron, subagent, and flush contexts are otherwise read-only) |
-| `nudge_interval` | `10` | user turns between reminders to file durable facts (`0` disables reminders) |
+| `nudge_interval` | `10` | user turns between reminders to file durable facts, and whether one is also queued before compression (`0` disables both) |
 | `snapshot_max_chars` | `12000` | character cap on the system prompt block |
 | `prefetch_min_similarity` | `<model default>` | minimum cosine similarity for prefetch hints (`0.27` for the built-in model; see [Embeddings](#embeddings)) |
 | `prefetch_max_hints` | `4` | maximum prefetch hints per turn |
