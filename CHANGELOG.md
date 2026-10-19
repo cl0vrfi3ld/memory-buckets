@@ -41,6 +41,14 @@ change the store's layout; the plugin migrates the store itself (see
     scanned and memory behaves as before. A scanner that raises is logged once and
     treated the same way.
 
+- `hermes memory-buckets status` reports what the agent can't see or edit:
+  `ignored` counts files outside the path rules (spaces, capitals, underscores,
+  nesting below `topics/`, stray top-level files) and symlinks, and `frontmatter`
+  counts files whose frontmatter the tools reject. Both point at `lint`, which
+  lists them. Neither changes the exit code.
+
+- The README says which files are read, and what the naming rules are.
+
 ### Fixed
 
 - **Closing the session no longer closes the index under a running `queue_prefetch`.**
@@ -77,6 +85,10 @@ change the store's layout; the plugin migrates the store itself (see
   `prefetch` hints, and the frozen block is untouched, so prefix caching still works.
   `Snapshot` records the bucket it was built for (`Snapshot.project`). A resumed chat
   has no snapshot to compare with, so it gets no note (documented in the README).
+
+- A whole-line `#` comment in the frontmatter no longer makes the file fail to
+  parse (so the tools refuse to edit it). It is ignored when reading and kept in
+  place when the file is rewritten.
 
 ## [0.4.0] - 2026-10-16
 
