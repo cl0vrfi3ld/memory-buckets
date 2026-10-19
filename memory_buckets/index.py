@@ -13,6 +13,7 @@ file, with the session's project boosted.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -29,7 +30,9 @@ from .store import GLOBAL, Store, scope_of, stem, version
 
 logger = logging.getLogger("memory_buckets")
 
-SCHEMA_VERSION = "4"
+# 5: files.aliases went from ", "-joined text to a JSON array, so an alias such
+# as "Smith, John" stays one alias. An older cache is dropped and rebuilt.
+SCHEMA_VERSION = "5"
 CHUNK_CHARS = 300
 RRF_K = 60
 CANDIDATES = 200
@@ -177,6 +180,17 @@ def _embed_text(rel: str, ord_: int, heading: str, text: str, description: str, 
     if stem(rel) not in _GENERIC_STEMS:
         return f"{stem(rel).replace('-', ' ')}\n{text}"
     return text
+
+
+def _aliases_stored(value: Optional[str]) -> List[str]:
+    """The alias list as stored: a JSON array since schema 5. Before that it was
+    comma-joined text, which split an alias such as Smith, John in two. A bad
+    value reads as no aliases; a schema mismatch drops the whole cache anyway."""
+    try:
+        loaded = json.loads(value) if value else []
+    except ValueError:
+        return []
+    return [a for a in loaded if isinstance(a, str)] if isinstance(loaded, list) else []
 
 
 def _active_tokens(query: str) -> List[str]:
@@ -376,7 +390,7 @@ class Index:
             con.execute("INSERT INTO chunks_fts(rowid, text, heading) VALUES(?, ?, ?)",
                         (cur.lastrowid, fts_text, heading))
         con.execute("INSERT INTO files VALUES(?, ?, ?, ?, ?, ?)",
-                    (rel, version(data), mtime, size, description, ", ".join(aliases)))
+                    (rel, version(data), mtime, size, description, json.dumps(aliases)))
 
     # -- embeddings ------------------------------------------------------------
 
@@ -401,7 +415,7 @@ class Index:
                 break
             try:
                 vectors = self.embedder.embed_documents([
-                    _embed_text(path, ord_, heading, text, desc, aliases.split(", ") if aliases else [])
+                    _embed_text(path, ord_, heading, text, desc, _aliases_stored(aliases))
                     for _, path, ord_, heading, text, desc, aliases in rows
                 ])
             except EmbeddingError:
@@ -637,7 +651,7 @@ class Index:
                 terms.append(stem_.replace("-", " "))
                 terms.append(stem_)
             terms.extend(
-                a for a in (t.strip() for t in (aliases or "").split(","))
+                a for a in _aliases_stored(aliases)
                 if len(a) >= 3 and a.lower() not in _STOPWORDS
             )
             if not any(re.search(r"(?<!\w)" + re.escape(t.lower()) + r"(?!\w)", lowered) for t in terms):
