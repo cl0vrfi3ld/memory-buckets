@@ -8,7 +8,8 @@ description listing of the other files the session reads by default (project
 files first). Capped at ``snapshot_max_chars``. When over the cap, drop listing
 lines first, then whole files, in ``drop_order()``'s order. The global profile and the
 project header are never dropped. A file or description that matches one of Hermes's
-threat patterns is replaced by a ``[BLOCKED: ...]`` line (see ``blocked``). The
+threat patterns, or is longer than the scanner reads, is replaced by a
+``[BLOCKED: ...]`` line (see ``blocked`` and ``blocked_too_large``). The
 provider freezes the result per session id for prefix caching.
 """
 
@@ -174,10 +175,29 @@ def blocked(path: str, patterns: List[str]) -> str:
     return f"[BLOCKED: {path} matched {', '.join(patterns)}; fix or delete it]"
 
 
+def blocked_too_large(path: str, window: int) -> str:
+    """What stands in for a file longer than the scanner reads at once, so not one
+    that was scanned and passed. Like ``blocked`` it names the file, never the text,
+    and the real file stays readable."""
+    return f"[BLOCKED: {path} is over the {window}-character threat-scan window; fix or delete it]"
+
+
 def _screened(path: str, text: str) -> str:
-    """``text`` as it may enter the prompt: unchanged, or the ``blocked`` line if it
-    matches a threat pattern. Hand edits and synced files never pass the write-time
-    scan in ``tools``, so the prompt is checked here as well."""
+    """``text`` as it may enter the prompt: unchanged, or a ``blocked`` line if it
+    matches a threat pattern or is longer than the scanner reads. Hand edits and
+    synced files never pass the write-time scan in ``tools``, so the prompt is
+    checked here as well."""
+    window = _compat.scan_window_chars
+    if window is not None and len(text) > window:
+        # The scanner truncates its input to ``window`` characters, so the tail of a
+        # longer file would enter the prompt unchecked, and no slicing closes that:
+        # the patterns accept unbounded filler words, so a crafted match can span
+        # any cut. The tools cap writes at store.MAX_FILE_BYTES, well under the
+        # window, so a longer file was hand-edited or synced in, never written by
+        # them. Refuse it whole rather than inline what was never fully checked.
+        logger.warning("memory-buckets: %s is over the %s-character threat-scan window; keeping it out of the system prompt",
+                       path, window)
+        return blocked_too_large(path, window)
     patterns = _compat.scan_threats(text)
     if not patterns:
         return text

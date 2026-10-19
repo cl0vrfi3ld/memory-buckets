@@ -30,6 +30,10 @@ change the store's layout; the plugin migrates the store itself (see
     replaced there by `[BLOCKED: <path> matched <pattern ids>; fix or delete it]`, and a
     matching description in the file listing is replaced the same way. A warning is
     logged. The file on disk is untouched and `memory_read` still returns it.
+  - A file longer than the scanner reads at once (`tools.threat_patterns` truncates
+    its input at `MAX_SCAN_CHARS` characters) is blocked the same way rather than
+    inlined with its tail unchecked. The tools cap writes well under that
+    (`store.MAX_FILE_BYTES`), so only a hand edit or a synced file can get there.
   - Without the scanner (a bare Python, or a Hermes that doesn't ship it) nothing is
     scanned and memory behaves as before. A scanner that raises is logged once and
     treated the same way.

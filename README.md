@@ -244,7 +244,11 @@ checks memory against Hermes's threat patterns (`tools.threat_patterns`, `strict
 - **The prompt.** Hand edits and synced files skip the write check, so the snapshot
   checks too. A matching `profile.md` or `preferences.md` appears as
   `[BLOCKED: <path> matched <pattern ids>; fix or delete it]` instead of its text, and
-  a matching description in the file listing is replaced the same way. The file itself
+  a matching description in the file listing is replaced the same way. A file longer
+  than the scanner reads at once (`tools.threat_patterns` checks only the first
+  `MAX_SCAN_CHARS` characters, and the tools cap writes well under that) is blocked
+  the same way with an "over the threat-scan window" line, so a padded file cannot
+  slip an injection past the window. The file itself
   is left alone and `memory_read` still returns it, so you can see what tripped the
   scan. The plugin logs a warning naming the file. The snapshot is frozen per session,
   so the block clears in the next session (or after Hermes compresses the conversation)
@@ -254,7 +258,8 @@ checks memory against Hermes's threat patterns (`tools.threat_patterns`, `strict
 
 Pattern matching is heuristic: it catches common injection and exfiltration phrasing,
 not every attack, and it can reject harmless text that happens to match (a note quoting
-an injection example, say).
+an injection example, say, or a curl example naming a `$TOKEN`, or a line about
+`authorized_keys`).
 
 ### Embeddings
 

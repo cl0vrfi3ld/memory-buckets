@@ -63,12 +63,17 @@ except ImportError:  # not running inside Hermes
         return threading.Thread(target=target, args=args, kwargs=kwargs, name=name, daemon=daemon)
 
 
+# The window comes with the scanner: ``scan_for_threats`` reads only this many leading
+# characters of its input, so callers must not pass longer text off as scanned.
 try:
+    from tools.threat_patterns import MAX_SCAN_CHARS as scan_window_chars
     from tools.threat_patterns import scan_for_threats as _scan_for_threats
 except Exception:  # not in Hermes, or a Hermes without the shared pattern library
     # Exception, not ImportError: outside Hermes ``tools`` can be someone else's package,
     # and whatever its __init__ raises must not stop this plugin loading.
     _scan_for_threats = None
+    # No scanner means no window either: nothing is scanned, so callers fail open.
+    scan_window_chars = None
 
 THREAT_SCAN_AVAILABLE = _scan_for_threats is not None
 _scan_failure_logged = False

@@ -5,8 +5,13 @@ with the real one's signature (``scan_for_threats(content, scope)``, a list of p
 """
 
 import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from .helpers import StoreCase, doc
@@ -200,6 +205,59 @@ class SnapshotTest(ThreatCase):
                 mock.patch.object(_compat, "_scan_failure_logged", False), \
                 self.assertLogs("memory_buckets", "WARNING"):
             self.assertIn("- Sam, they/them", self.build().text)
+
+    def test_a_file_over_the_scan_window_is_blocked_whole(self):
+        # Hermes's scanner reads only the first scan_window_chars characters of its
+        # input, so an injection past that point in a longer hand edit would ride
+        # into the prompt unchecked. The file is refused whole instead.
+        window = 65_536
+        body = "- filler line\n" * 6_000 + f"- {INJECTION}\n"
+        self.assertGreater(len(body), window)
+        self.put("global/profile.md", doc("profile", "Who the user is", body))
+        with mock.patch.object(_compat, "scan_window_chars", window), \
+                self.assertLogs("memory_buckets", "WARNING") as logs:
+            snap = self.build()
+        self.assertIn(f"[BLOCKED: global/profile.md is over the {window}-character threat-scan window; fix or delete it]", snap.text)
+        self.assertNotIn("previous instructions", snap.text)
+        self.assertNotIn("filler", snap.text, "nothing of a file past the scan window may enter the prompt")
+        self.assertIn("global/profile.md", " ".join(r.getMessage() for r in logs.records))
+        self.assertIn("global/profile.md", snap.paths, "still counts as inlined, so prefetch will not hint it")
+
+    def test_no_window_means_no_size_check(self):
+        # The window comes from the loaded scanner: without one there is nothing to
+        # enforce, and the plugin fails open on size as it does on patterns.
+        body = "- filler line\n" * 6_000 + f"- {INJECTION}\n"
+        self.put("global/profile.md", doc("profile", "Who the user is", body))
+        with mock.patch.object(_compat, "scan_window_chars", None), \
+                mock.patch.object(_compat, "_scan_for_threats", None):
+            snap = self.build()
+        self.assertIn(INJECTION, snap.text)
+        self.assertNotIn("BLOCKED", snap.text)
+
+
+class ImportFallbackTest(unittest.TestCase):
+    """The import-time fallback in _compat: someone else's ``tools`` package raising
+    at import must not stop the plugin loading. A subprocess, because the test
+    process has already imported memory_buckets."""
+
+    def test_a_raising_tools_package_leaves_the_plugin_importable(self):
+        repo = Path(__file__).resolve().parent.parent
+        with tempfile.TemporaryDirectory() as tmp:
+            tools_dir = Path(tmp) / "tools"
+            tools_dir.mkdir()
+            (tools_dir / "__init__.py").write_text("raise RuntimeError('not a scanner')\n", encoding="utf-8")
+            env = dict(os.environ)
+            parts = [tmp, str(repo)]
+            if env.get("PYTHONPATH"):
+                parts.append(env["PYTHONPATH"])
+            env["PYTHONPATH"] = os.pathsep.join(parts)
+            got = subprocess.run(
+                [sys.executable, "-c",
+                 "from memory_buckets import _compat; print(_compat.THREAT_SCAN_AVAILABLE)"],
+                env=env, capture_output=True, text=True, timeout=120, check=False,
+            )
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(got.stdout.split(), ["False"], "the scanner must report absent, not break the import")
 
 
 if __name__ == "__main__":
