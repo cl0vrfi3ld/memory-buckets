@@ -222,6 +222,10 @@ The agent gets seven tools: `memory_list`, `memory_read`, `memory_search`,
 `memory_write`, `memory_str_replace`, `memory_append`, and `memory_delete`. Every
 write is compare-and-swap against a content hash version; on a conflict, the tool
 returns the file's current version and content so the agent can merge and retry.
+Writes are capped at 48 KiB per file. `memory_read` returns at most 48 KiB per file
+too: a file over that size (possible through a hand edit or a sync, which no tool can
+rewrite as it stands) comes back in pages, with `truncated` and `next_offset` set,
+and an `offset` argument continues it.
 
 On each user turn, `prefetch` checks whether any files outside the inlined profiles
 and preferences match the message, and injects their paths and descriptions as hints
