@@ -417,7 +417,7 @@ class CliTest(StoreCase):
         lines = out.getvalue().splitlines()
         self.assertEqual(code, 0)
         self.assertTrue(lines[0].endswith("global/people/sam.md: Who Sam is"))
-        self.assertTrue(any(l.startswith("------  prefetch_min_similarity = 0.5") for l in lines))
+        self.assertTrue(any(ln.startswith("------  prefetch_min_similarity = 0.5") for ln in lines))
 
     def test_no_command(self):
         with contextlib.redirect_stderr(io.StringIO()):
