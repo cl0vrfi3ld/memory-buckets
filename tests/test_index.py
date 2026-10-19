@@ -420,6 +420,31 @@ class FileRankAndCoverageTest(StoreCase):
         self.assertLess(paths.index("global/topics/full.md"), paths.index("global/topics/spread.md"))
 
 
+class LongQueryTokenSamplingTest(StoreCase):
+    """The FTS leg must not lose a key term just because it sits past token
+    32 of a long query: _active_tokens samples head and tail."""
+
+    def setUp(self):
+        super().setUp()
+        self.put("global/topics/wrens.md", doc("wrens", "Back garden birds",
+                                               "- wrens nest behind the shed\n"))
+
+    def make(self):
+        index = idx.Index(self.store, None)
+        self.addCleanup(index.close)
+        return index
+
+    def test_key_term_past_token_32_still_matches(self):
+        query = " ".join(f"filler{i}" for i in range(40)) + " where do the wrens nest"
+        hits = list(self.make().search(query, ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual([h["path"] for h in hits], ["global/topics/wrens.md"])
+
+    def test_600_word_message_with_key_term_at_the_end_still_matches(self):
+        query = " ".join(f"filler{i}" for i in range(600)) + " where do the wrens nest"
+        hits = list(self.make().search(query, ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual([h["path"] for h in hits], ["global/topics/wrens.md"])
+
+
 class HintsProjectAndRescueTest(StoreCase):
     """hints() boosts the session project and rescues files named exactly by a
     stem or alias even when their embedding similarity is weak."""
