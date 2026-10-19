@@ -18,14 +18,6 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
-### Fixed
-
-- `lint` in the devshell passes. The ruff rules are pinned in `pyproject.toml`
-  (`select = ["E4", "E7", "E9", "F"]`, `line-length = 140`), so a newer ruff no longer
-  adds hundreds of findings, and the four in the tests are fixed. The
-  `ruff format --check` step is gone from `lint`: the tree was never formatted that way,
-  and reformatting it would touch 34 files.
-
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
