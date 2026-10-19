@@ -18,6 +18,24 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
+### Fixed
+
+- A `global/profile.md` too big to inline no longer floods the system prompt block:
+  an always-kept file that doesn't fit under `snapshot_max_chars` is cut to its head,
+  ending with a line that says how much was cut and points at `memory_read` for the
+  rest (#17).
+- `memory_read` returns at most 48 KiB per file. `MAX_FILE_BYTES` was checked on
+  writes only, so a hand-edited or synced file over the cap came back whole and could
+  take most of the context window in one call. Larger files now come back in pages,
+  with `truncated`, `total_bytes` and `next_offset`, and an optional `offset`
+  argument reads the next page (#17).
+- Frontmatter aliases with a comma, such as `Smith, John`, are stored in the search
+  index as a JSON array instead of `", "`-joined text, so they stay one alias and
+  prefetch stops rescuing the file on `John` alone. The index schema version is now
+  5: an existing cache is dropped and rebuilt automatically (#17).
+- `hermes memory-buckets status` warns about files over the 48 KiB cap, which
+  `lint` already reported: no memory tool can rewrite one as it stands (#17).
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
