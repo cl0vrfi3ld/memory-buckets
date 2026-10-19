@@ -61,8 +61,8 @@ change the store's layout; the plugin migrates the store itself (see
     key ids, `sk-` API keys, GitHub, GitLab and Slack tokens, PEM private key blocks, and
     `password`, `secret`, `token` or `api_key` followed by `:` or `=` and a value that
     looks like a credential. A memory that only mentions the word password is fine. The
-    list is local (Hermes ships no reusable one), runs before the threat scan, and also
-    screens built-in memory mirrored into `global/inbox.md`, which becomes a placeholder.
+    list is local, runs before the threat scan, and also screens built-in memory
+    mirrored into `global/inbox.md`, which becomes a placeholder.
   - Files were created `0666` and directories with the default mode, so under the usual
     umask the store was `0644`/`0755`: readable by every account on the machine. The
     store root and everything the plugin creates in it, the search index included, are

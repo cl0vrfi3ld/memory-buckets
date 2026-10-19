@@ -281,17 +281,22 @@ read it.
   - GitHub (`ghp_...`, `github_pat_...`, and `gho_`, `ghu_`, `ghs_`, `ghr_`), GitLab
     (`glpat-`) and Slack (`xoxb-` and the like, `xapp-`) tokens;
   - PEM private key blocks;
-  - `password`, `secret`, `token` or `api_key` followed by `:` or `=` and a value that
-    looks like one: a single word of six or more characters with a letter and a digit,
-    such as `hunter2`. Paths, URLs, `$VAR`, `<placeholder>`, `MY_ENV_VAR` and function
-    calls are not credentials, so "token: kept in the password manager" is writable.
+  - `password`, `passwd`, `secret`, `token` or `api_key` (also `api-key`) followed by `:`
+    or `=` and a value that looks like one: a single word of six or more characters with
+    a letter and a digit, such as `hunter2`. Paths (absolute or relative), URLs, `$VAR`,
+    `<placeholder>`, `MY_ENV_VAR` and function calls are not credentials, so "token: kept
+    in the password manager" and "secret: config/secrets.yaml" are writable.
 
   The whole file is scanned, description included, and an edit that leaves a credential
   already in a file is refused until it is gone; `memory_delete` always works. Built-in
   memory mirrored into `global/inbox.md` is checked too, and a match is mirrored as a
   placeholder. The list is local, needs no Hermes, and runs before the threat scan. It is
-  heuristic as well: it misses a password that is only letters or only digits, and any
-  secret without a recognisable shape. Files already in the store are not scanned.
+  heuristic as well: it misses a password that is only letters or only digits, one that
+  contains `/` (it reads as a path), and any secret without a recognisable shape; and it
+  refuses some ordinary text whose value has the same shape as a password, such as a
+  digit-bearing identifier in code (`const token = lexer2`) or hyphenated policy and
+  version wording (`password: min-12chars`, `Token: v2.3.1-beta`). Files already in the
+  store are not scanned.
 - **The store is private.** On Linux and macOS the store root and every directory the
   plugin creates inside it are `0700`, and its files `0600`, even under a permissive umask. That
   includes the search index, which holds the text of every memory. `hermes memory-buckets

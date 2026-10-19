@@ -43,6 +43,8 @@ POSITIVES = [
     ("GITHUB_TOKEN=abc123def456ghi", "credential_assignment"),
     ("Token: 8f3a9c1d2e", "credential_assignment"),
     ("api_key: k9X2mQ7wLp", "credential_assignment"),
+    ("password: P@ssw0rd/x1", "credential_assignment"),  # symbols: not a path
+    ("password: Abc123/xyz789!", "credential_assignment"),
 ]
 
 # Memories a real user keeps. Each one is a control for a pattern above.
@@ -73,6 +75,30 @@ NEGATIVES = [
     "A token bucket limits the request rate",
     "token = model.to_str_tokens(tokens[0, pos:pos+1])[0]",
     "secret = load_secret(path2)",
+    "secret: config/secrets2.yaml",
+    "token: vault/prod2",
+    "api_key: secrets/openai2.txt",
+    "token: example.com/v2/callback",  # a bare host/path: no scheme, still a URL-shaped note
+]
+
+
+# Ordinary lines the value rule refuses on purpose: each value has the shape of a
+# password (one word, 6+, letters and digits), and nothing about the value alone
+# separates them, so they are the rule's documented cost (README, "Credentials and
+# permissions"). Pinned here so the choice is deliberate, not drift.
+DOCUMENTED_REFUSALS = [
+    "const token = lexer2;",
+    "token = tokens2[i]",
+    "secret = next_secret2",
+    "password = input_password2",
+    "api_key = cfg.api_key2",
+    "password: min-12chars",
+    "password: rotate-every-90days",
+    "token: 2FA-enabled",
+    "Token: v2.3.1-beta",
+    "token = 4096tokens",
+    "Password: see-1password",
+    "secret: prod-db-credentials-2",
 ]
 
 
@@ -103,9 +129,20 @@ class ScanTest(unittest.TestCase):
         # Long runs of the characters the patterns repeat over: quadratic backtracking
         # would show up here as a test that never finishes.
         for run in ("a" * 60_000, "a-" * 30_000, "token" * 12_000, "sk-" * 20_000, "password:" * 7_000,
-                    "-----BEGIN PRIVATE KEY-----\n" * 2_000):
+                    "-----BEGIN PRIVATE KEY-----\n" * 2_000,
+                    "-----BEGIN PRIVATE KEY----- " + " " * 960_000,
+                    "-----BEGIN PRIVATE KEY-----" + " \n" * 480_000):
             with self.subTest(run=run[:12]):
                 credentials.scan(run)
+
+    def test_a_pem_with_windows_line_endings_is_found(self):
+        body = "A" * 32 + "\r\n-----END PRIVATE KEY-----"
+        self.assertEqual(credentials.scan("-----BEGIN PRIVATE KEY-----\r\n" + body), ["private_key"])
+
+    def test_code_and_policy_text_are_refused_and_that_is_the_documented_cost(self):
+        for text in DOCUMENTED_REFUSALS:
+            with self.subTest(text=text):
+                self.assertEqual(credentials.scan(text), ["credential_assignment"])
 
 
 class ThreatlessCase(StoreCase):

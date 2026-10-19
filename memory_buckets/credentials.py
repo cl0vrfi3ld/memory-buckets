@@ -39,8 +39,10 @@ _PREFIXED: Tuple[Tuple[str, "re.Pattern[str]"], ...] = (
     ("slack_token", re.compile(_START + r"(?:xox[abprs]|xapp)-[A-Za-z0-9-]{20,}")),
     # The header plus something that looks like key material, not the header alone: a note
     # that explains what a PEM header is should be writable. Up to three lines may sit
-    # between them (``Proc-Type`` and ``DEK-Info`` on a legacy encrypted key).
-    ("private_key", re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----\s+(?:[^\n]*\n){0,3}?[A-Za-z0-9+/=]{32,}")),
+    # between them (``Proc-Type`` and ``DEK-Info`` on a legacy encrypted key), and every
+    # repeat is bounded (at most 8 whitespace characters, lines of at most 200), so a
+    # header followed by a long run of whitespace stays linear, as the module promises.
+    ("private_key", re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----\s{1,8}(?:[^\n]{0,200}\n){0,3}?[A-Za-z0-9+/=]{32,}")),
 )
 
 # ``password: x``, ``GITHUB_TOKEN=x``, ``"secret": "x"``, ``**Password**: x``. The keyword must
@@ -53,6 +55,7 @@ _ASSIGNMENT = re.compile(
 )
 _ENV_NAME = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")  # SHOUTY_SNAKE: says where a value lives
 _CALL = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\(")  # ``lex(src)``: code assigning to a variable called token
+_PATH = re.compile(r"[\w.~-]+(/[\w.~-]+)+/?")  # ``vault/prod2``, ``config/secrets.yaml``: where, not what
 _LETTER = re.compile(r"[A-Za-z]")
 _DIGIT = re.compile(r"[0-9]")
 
@@ -60,16 +63,20 @@ _DIGIT = re.compile(r"[0-9]")
 def _is_credential(value: str) -> bool:
     """Whether the word after ``password:`` looks like a password and not a note about one.
 
-    One word, six or more characters, with a letter and a digit. That takes ``hunter2`` and
-    ``P@ssw0rd!`` and leaves ``password: ask Ivy``, ``token: kept in 1Password`` and any
-    path, URL, ``$VAR``, ``<placeholder>``, ``MY_ENV_VAR`` or function call: the notes the
-    refusal asks the agent to write instead, and code. The cost is a miss on a letters-only
-    or digits-only value; refusing every colon after the word password would block far more
-    than it protects."""
+    One word, six or more characters, with a letter and a digit. That takes ``hunter2``
+    and ``P@ssw0rd!`` and leaves ``password: ask Ivy``, ``token: kept in 1Password`` and
+    any path (absolute or relative), URL, ``$VAR``, ``<placeholder>``, ``MY_ENV_VAR`` or
+    function call: the notes the refusal asks the agent to write instead, and code. The
+    cost is a miss on a letters-only or digits-only value, and on a password containing
+    ``/`` (it reads as a path); refusing every colon after the word password would block
+    far more than it protects. What stays refused, on purpose, are values that merely
+    share the password's shape: a code identifier bearing a digit (``const token =
+    lexer2``) and hyphenated policy or version wording (``password: min-12chars``);
+    nothing about the value alone tells them apart, and the README says so."""
     value = value.rstrip(".,;:)]}>*")
     if len(value) < 6 or value[0] in "$<{%*/~.(" or "://" in value:
         return False
-    if _ENV_NAME.fullmatch(value) or _CALL.search(value):
+    if _ENV_NAME.fullmatch(value) or _CALL.search(value) or _PATH.fullmatch(value):
         return False
     return bool(_LETTER.search(value) and _DIGIT.search(value))
 
