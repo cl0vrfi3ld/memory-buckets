@@ -6,6 +6,9 @@ from . import PLUGIN_DIR, memory_buckets
 from memory_buckets import _compat, frontmatter, snapshot, tools
 
 
+BUNDLED_SKILLS = ["sort-imports", "tidy-memory"]
+
+
 class _Ctx:
     def __init__(self, name=None, register_skill=None, register_command=None):
         self.name = name
@@ -49,8 +52,13 @@ class RegisterTest(unittest.TestCase):
             self.assertTrue((provider.store.memories / "global").is_dir(), "store exists as soon as it's active")
             provider.shutdown()
 
-    def test_registers_the_skill_and_no_slash_commands(self):
-        skill_md = PLUGIN_DIR / "skills/sort-imports/SKILL.md"
+    def test_registers_the_skills_and_no_slash_commands(self):
+        for skill in BUNDLED_SKILLS:
+            with self.subTest(skill=skill):
+                self._check_skill_registers(skill)
+
+    def _check_skill_registers(self, skill):
+        skill_md = PLUGIN_DIR / f"skills/{skill}/SKILL.md"
         fm, _ = frontmatter.parse(skill_md.read_text(encoding="utf-8"))
         as_dict = getattr(fm, "as_dict", None)
         expected_fm = as_dict() if callable(as_dict) else dict(fm.pairs())
@@ -70,26 +78,50 @@ class RegisterTest(unittest.TestCase):
                     commands.__setitem__(name, handler)
                 )
                 memory_buckets.register(ctx)
-                [(name, path, description, fm_dict)] = ctx.skills
-                self.assertEqual(name, "sort-imports")
+                self.assertEqual([s[0] for s in ctx.skills], BUNDLED_SKILLS)
+                [(name, path, description, fm_dict)] = [s for s in ctx.skills if s[0] == skill]
+                self.assertEqual(name, skill)
                 self.assertEqual(path, skill_md)
                 self.assertTrue(path.is_file())
                 self.assertEqual(description, expected_desc)
                 self.assertTrue(description)
                 self.assertEqual(fm_dict, expected_fm)
-                self.assertEqual(fm_dict["name"], "sort-imports")
+                self.assertEqual(fm_dict["name"], skill)
                 self.assertEqual(fm_dict["description"], expected_desc)
                 self.assertEqual(snapshot.SORT_SKILL, "memory-buckets:sort-imports")
                 self.assertEqual(ctx.commands, {}, "the skill is the only slash command; the plugin registers none")
+
+    def test_skill_directories_are_all_registered(self):
+        on_disk = sorted(d.name for d in (PLUGIN_DIR / "skills").iterdir() if (d / "SKILL.md").is_file())
+        self.assertEqual(on_disk, BUNDLED_SKILLS, "a new skill needs adding to BUNDLED_SKILLS here")
+
+    def test_tidy_memory_asks_before_changing_anything(self):
+        text = (PLUGIN_DIR / "skills/tidy-memory/SKILL.md").read_text(encoding="utf-8")
+        _, body = frontmatter.parse(text)
+        first_paragraph = body.split("\n\n")[1]  # after the "# Tidy the memory" heading
+        self.assertIn("asks before it changes anything", first_paragraph)
+
+    def test_tidy_memory_wording_follows_the_style_rules(self):
+        import re
+        text = (PLUGIN_DIR / "skills/tidy-memory/SKILL.md").read_text(encoding="utf-8")
+        self.assertNotIn("\u2014", text, "no em dashes")
+        self.assertNotIn("\u2013", text, "no en dashes")
+        for word in ("robust", "seamless", "leverage", "crucial", "utilize", "organize", "behavior", "color"):
+            self.assertNotRegex(text.lower(), rf"\b{word}", word)
+        mentioned = set(re.findall(r"\bmemory_[a-z_]+", text))
+        self.assertLessEqual(mentioned, set(tools.TOOL_NAMES), "every memory_* name is a real tool")
+        self.assertTrue({"memory_write", "memory_str_replace", "memory_append", "memory_delete"} <= mentioned)
+        self.assertIn("until the user has answered your proposal", text)
+        self.assertIn("global/inbox.md", text)
 
     def test_register_skill_falls_back_to_two_arg_stub(self):
         ctx = _Ctx()
         ctx.skills = []
         ctx.register_skill = lambda name, path: ctx.skills.append((name, path))
         memory_buckets.register(ctx)
-        [(name, path)] = ctx.skills
-        self.assertEqual(name, "sort-imports")
-        self.assertTrue(path.is_file())
+        self.assertEqual([name for name, _ in ctx.skills], BUNDLED_SKILLS)
+        for _, path in ctx.skills:
+            self.assertTrue(path.is_file())
         self.assertEqual(snapshot.SORT_SKILL, "memory-buckets:sort-imports")
 
     def test_entry_point_namespace_skips_register_skill(self):

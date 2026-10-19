@@ -65,6 +65,13 @@ change the store's layout; the plugin migrates the store itself (see
   turns history off. A history write that fails is logged and never breaks the
   memory write. Hand edits outside the plugin are not recorded (README: History).
 
+- **`/tidy-memory` skill.** A bundled skill that finds duplicate facts, contradictions,
+  stale time words ("currently", "this semester"), finished one-off tasks, files over
+  about 8 KB and vague descriptions. It proposes the fixes as a numbered list, waits for
+  you to say which to apply, and applies only those. It never touches `global/inbox.md`
+  or another project's files. It registers like `/sort-imports`, with no code change.
+  See [Tidying memory](README.md#tidying-memory).
+
 ### Fixed
 
 - **Closing the session no longer closes the index under a running `queue_prefetch`.**
