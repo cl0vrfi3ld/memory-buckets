@@ -426,7 +426,8 @@ Inside the Nix devshell (`direnv allow` or `nix develop`):
 - `check` runs the test suite (`uv run pytest tests/`);
 - `check-windows` runs it on Windows Python under Wine (`tests/wine.sh`, x86_64 Linux;
   the first run fetches Wine and a Windows CPython into `~/.cache/memory-buckets/wine`);
-- `lint` runs `ruff check .` and `ruff format --check .`;
+- `lint` runs `ruff check .` with the rules pinned in `pyproject.toml`, so every ruff version
+  checks the same thing (the code is not auto-formatted);
 - `run` executes a command inside the project venv (`uv run`).
 
 Two environment variables enable extra test coverage:
@@ -442,6 +443,10 @@ Two environment variables enable extra test coverage:
   names that moved.
 - `MEMORY_BUCKETS_MODEL_DIR=<path to potion-retrieval-32M>` enables the real-model
   embedding and retrieval tests.
+
+Every other `MEMORY_BUCKETS_*` variable in your shell is ignored by the tests
+(`tests/conftest.py` clears them), so a `MEMORY_BUCKETS_STORE` you use day to day can't
+fail them.
 
 To run the synthetic retrieval and prefetch benchmark added in 0.3.0:
 
