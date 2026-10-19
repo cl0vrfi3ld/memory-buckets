@@ -455,14 +455,11 @@ parity against Hugging Face `tokenizers`. `tests/smoke.sh` runs a manual end-to-
 chat test against a throwaway profile (never `~/.hermes`); it's a bash script, so it
 runs on Linux and macOS only.
 
-CI runs on the GitHub mirror: git.cl0vr.co has Actions enabled but no runner, and
-every branch pushed there is mirrored to GitHub, so that is where the checks appear.
-`.github/workflows/test.yml` runs the test suite with the real model on Linux and
-macOS (Python 3.11 and 3.14, Hermes's supported range), and
-`.github/workflows/windows.yml` runs the suite on Windows x64 (Python 3.10 and 3.14)
-and arm64 (3.14) with the real model, and the Hermes integration tests against the
-Hermes release pinned in `HERMES_REF`. Bump that pin when Hermes releases. Hermes
-refuses to build as a wheel, so the job installs an editable checkout.
+Windows runs in CI: `.github/workflows/windows.yml` on the GitHub mirror runs the test
+suite on Windows x64 (Python 3.10 and 3.14) and arm64 (3.14) with the real model, and
+the Hermes integration tests against the Hermes release pinned in `HERMES_REF`. Bump
+that pin when Hermes releases. Hermes refuses to build as a wheel, so the job installs
+an editable checkout.
 
 `.github/workflows/hermes-main.yml` runs the same Hermes integration tests on Linux
 against Hermes `main` every Monday (and on demand), separately from the pinned job. A red

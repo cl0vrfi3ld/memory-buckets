@@ -10,11 +10,6 @@ change the store's layout; the plugin migrates the store itself (see
 
 ### Added
 
-- **Per-push CI for Linux and macOS.** A workflow on the GitHub mirror runs the full
-  test suite, real-model tests included, on Linux and macOS (Python 3.11 and 3.14)
-  for every push and pull request. Before, per-push CI existed only for Windows, and
-  the Linux check was a local `nix flake check`.
-
 - **Drift detection for the Hermes internals the plugin depends on.** The Hermes
   integration probe now imports and calls the private code behind the desktop workspace
   override, the gateway per-turn cwd, the TUI status line and project lookup, and fails
