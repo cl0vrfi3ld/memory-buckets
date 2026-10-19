@@ -18,6 +18,13 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
+### Fixed
+
+- The tests ignore `MEMORY_BUCKETS_*` variables set in the shell (`MEMORY_BUCKETS_STORE`
+  used to fail 25 of them). `tests/conftest.py` clears them for every test and keeps the
+  ones the real-model tests opt into: `MEMORY_BUCKETS_MODEL_DIR`,
+  `MEMORY_BUCKETS_MODEL_F32` and `MEMORY_BUCKETS_REFERENCE_TOKENIZER`.
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
