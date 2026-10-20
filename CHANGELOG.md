@@ -17,12 +17,6 @@ change the store's layout; the plugin migrates the store itself (see
   no status line, an unscoped session) and a Hermes refactor looked like behaviour drift.
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
-- **`/tidy-memory` skill.** A bundled skill that finds duplicate facts, contradictions,
-  stale time words ("currently", "this semester"), finished one-off tasks, files of about
-  8 KB or more, and descriptions that do not say when to read the file. It proposes the
-  fixes as a numbered list, writes nothing until you say which to apply, then applies only
-  those. It skips `global/inbox.md` and other projects' files. It registers like
-  `/sort-imports`, with no code change. See [Tidying memory](README.md#tidying-memory).
 
 ## [0.4.0] - 2026-10-16
 
