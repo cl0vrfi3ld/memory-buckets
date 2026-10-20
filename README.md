@@ -232,44 +232,20 @@ the agent to save any new durable facts from the conversation.
 
 ### Threat scanning
 
-Memory is injected into the system prompt, and a session that has just read a hostile
-web page or repository can write to `global/`. Like Hermes's built-in memory, the plugin
-checks memory against Hermes's threat patterns (`tools.threat_patterns`, `strict` scope):
+A session that has just read a hostile web page or repository can write to `global/`,
+so, like Hermes's built-in memory, the plugin screens memory with Hermes's own threat
+patterns (`tools.threat_patterns`, `strict` scope). On a match:
 
-- **Writes.** `memory_write`, `memory_append` and `memory_str_replace` refuse content
-  that matches, with the error code `threat_detected` and the matching pattern IDs in
-  `patterns` (for example `prompt_injection`, for "ignore all previous instructions").
-  The whole file is scanned, including its description. Editing a file that already
-  contains a match is refused until the match is gone; `memory_delete` always works.
-- **The prompt.** Hand edits and synced files skip the write check, so the snapshot
-  checks too. A matching `profile.md` or `preferences.md` appears as
-  `[BLOCKED: <path> matched <pattern ids>; tell the user to fix or delete it]` instead
-  of its text, and a matching description in the file listing is replaced the same way.
-  A file longer than the scanner reads at once (`tools.threat_patterns` checks only
-  the first `MAX_SCAN_CHARS` characters, and the tools cap writes well under that) is
-  blocked the same way with an "over the threat-scan window" line, so a padded file
-  cannot slip an injection past the window. The file itself
-  is left alone and `memory_read` still returns it, so you can see what tripped the
-  scan (`memory_list` and `memory_search` also return unscreened text when called
-  directly). The plugin logs a warning naming the file. The snapshot is frozen per session,
-  so the block clears in the next session (or after Hermes compresses the conversation)
-  once you have fixed the file.
-- **Prefetch hints.** A hint carries a file's description into the model's context on
-  every relevant turn, so hint descriptions are screened the same way as the listing.
-  A matching one is dropped with a warning: the hint block invites `memory_read`, and
-  the model must not be nudged towards a file the scan rejected.
-- **Built-in memory mirror.** A built-in memory write that matches, or is over the
-  threat-scan window, is skipped with a warning and not mirrored into
-  `global/inbox.md`.
-- **No scanner.** Outside Hermes, or on a Hermes without `tools.threat_patterns`,
-  nothing is scanned. A Hermes that ships the scanner but renames only its
-  `MAX_SCAN_CHARS` constant still scans, and caps prompt-bound text at
-  `store.MAX_FILE_BYTES` characters instead, with a warning.
+- **Writes.** `memory_write`, `memory_append` and `memory_str_replace` refuse the
+  content with the error code `threat_detected` and the pattern IDs in `patterns`.
+- **The prompt.** Matching prompt-bound text (hand-edited or synced files, and their
+  listing descriptions) is replaced by a `[BLOCKED: <path> matched <pattern ids>;
+  tell the user to fix or delete it]` stand-in; `memory_read` still returns the file.
+- **Hints.** A matching hint description is dropped with a warning, and a matching
+  built-in memory write is never mirrored into `global/inbox.md`.
 
-Pattern matching is heuristic: it catches common injection and exfiltration phrasing,
-not every attack, and it can reject harmless text that happens to match (a note quoting
-an injection example, say, or a curl example naming a `$TOKEN`, or a line about
-`authorized_keys`).
+Matching is heuristic, so harmless text can be blocked; the tests and the docstrings
+carry the detail.
 
 ### Embeddings
 
