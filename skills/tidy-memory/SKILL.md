@@ -24,7 +24,7 @@ Find these problems. Propose one fix for each. Apply only the fixes the user app
 
 ## Rules
 
-- Reading is always fine. Writing needs the user's answer to your proposal.
+- Reading is fine, except global/inbox.md (see the next rule). Writing needs the user's answer to your proposal.
 - Work only on global/ and the current project's files. memory_list shows these by default.
 - Never touch global/inbox.md. Do not read it, change it or propose changes to it. /sort-imports handles it.
 - Never touch another project's files. Do not edit them. Do not add a line to them. Do not create files in them. The tools may allow it. You must not.
@@ -84,8 +84,9 @@ Follow these steps in order.
    - Write each item as one or two short lines. Give the kind, quote the line, and say what you would do.
    - Put an item that involves two files under the first file it names.
    - If an item adds a line to another file, say so in the item.
+   - A duplicate item must name any detail you would move. If the copy you would remove holds detail the kept copy lacks, quote that detail and say you will add it to the kept file. If there is no such detail, say nothing.
    - Write a conflict as a question the user can answer by number.
-   - Show at most 15 items. If there are more, say so and offer a second round.
+   - Show at most 15 items. If there are more, say so and offer a second round. A second round starts again at Step 1, because the files and their versions may have changed.
    - End with this question: "Which of these should I apply? Say all, none, or the numbers."
    - Then stop. Do not call any tool. Wait for the user.
 
@@ -96,7 +97,7 @@ Follow these steps in order.
        2. Stale wording. "- Currently learning OCaml". Reword to "- Learning OCaml".
 
 4. **Read the answer.** Apply only what the user approved.
-   - "None" means stop. Change nothing.
+   - "None" means stop. Change nothing. Reply with the sections under Final reply, with "nothing" under Changed.
    - "All" means every item except the conflicts. A conflict needs a choice.
    - A numbered answer means those items only.
    - If the user changes an item, do what they said.
@@ -108,9 +109,9 @@ Follow these steps in order.
    - Before you edit a file, call memory_read on it. Use that version as if_version.
    - **Remove a line.** Call memory_str_replace. Set old to the whole line, with no newline. Set new to an empty string.
    - **Reword a line.** Call memory_str_replace. Set old to the whole old line plus a newline. Set new to the whole new line plus a newline.
-   - **Keep detail.** If the copy you remove holds detail the kept copy lacks, call memory_append on the kept file first. Then remove the copy.
+   - **Keep detail.** Do this only if the approved item says you will move that detail. Call memory_append on the kept file first. Then remove the copy. If the item did not mention the detail, do not append it. Remove the copy and list the lost detail under Check these.
    - **Change a description.** Call memory_write with the same path and the new description. Set body to the file's text after the closing "---" of the frontmatter, unchanged. Leave aliases out. The tool keeps the file's existing aliases and other frontmatter.
-   - **Rewrite a file.** Use this when many lines change, or when memory_str_replace will not match. Call memory_write with the file's current description. Set body to the text after the closing "---", with your changes made. Leave aliases out. The tool keeps the file's existing aliases and other frontmatter.
+   - **Rewrite a file.** Use this when many lines change, or when memory_str_replace will not match. Call memory_write with the file's current description. Set body to the text after the closing "---", with your changes made. Copy every line you were not asked to change exactly, character for character. Do not tidy, reorder or reword anything else. Leave aliases out. The tool keeps the file's existing aliases and other frontmatter.
    - **Split a file.** First create each new file with memory_write and if_version "new". Give each one a description that starts with "Read when". Only after that, remove the moved lines from the old file. Never remove a line before it is saved in its new file.
    - **Delete a file.** Only when the user approved it and every line is already saved elsewhere. Call memory_delete.
 
