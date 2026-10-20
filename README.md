@@ -444,6 +444,10 @@ Two environment variables enable extra test coverage:
 - `MEMORY_BUCKETS_MODEL_DIR=<path to potion-retrieval-32M>` enables the real-model
   embedding and retrieval tests.
 
+Every other `MEMORY_BUCKETS_*` variable in your shell is ignored by the tests
+(`tests/conftest.py` clears them), so a `MEMORY_BUCKETS_STORE` you use day to day can't
+fail them.
+
 To run the synthetic retrieval and prefetch benchmark added in 0.3.0:
 
 ```sh
