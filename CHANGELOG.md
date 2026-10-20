@@ -17,12 +17,6 @@ change the store's layout; the plugin migrates the store itself (see
   no status line, an unscoped session) and a Hermes refactor looked like behaviour drift.
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
-- **Setup support for `hermes memory setup`.** The provider reports its twelve
-  non-secret settings through `get_config_schema()` (types, defaults and advisory
-  minimums) and writes them to `plugins.memory-buckets` through
-  Hermes's own config writer in `save_config()`, so unrelated config.yaml keys survive.
-  The README quick start and install steps now use `hermes config set` instead of a
-  hand-edited config.yaml snippet.
 
 ## [0.4.0] - 2026-10-16
 
