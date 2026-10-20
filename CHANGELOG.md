@@ -17,6 +17,19 @@ change the store's layout; the plugin migrates the store itself (see
   no status line, an unscoped session) and a Hermes refactor looked like behaviour drift.
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
+- **Threat scanning for memory.** Writes and prompt-bound text now go through the same
+  prompt-injection scan Hermes's built-in memory uses.
+  - `memory_write`, `memory_append` and `memory_str_replace` refuse content that matches,
+    with a new `threat_detected` error listing the pattern IDs in `patterns` (the text is
+    not quoted). `memory_delete` is never blocked.
+  - Matching prompt-bound text (a hand-edited or synced file, or a listing description) is
+    replaced by a `[BLOCKED: ...]` stand-in, and matching hint descriptions are dropped.
+    Oversize files are treated the same, so padding can't hide an injection. The file on
+    disk is untouched and `memory_read` still returns it. Matching or oversize built-in
+    writes are not mirrored into `global/inbox.md`.
+  - Upgrading scans an existing store for the first time, so a file you never changed can
+    newly match. One matching line removes the file from the prompt; nothing is deleted,
+    and fixing the line puts it back.
 
 ### Fixed
 

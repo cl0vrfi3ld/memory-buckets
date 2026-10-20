@@ -27,6 +27,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import _compat
 from . import config as config_mod
 from . import inbox, migrate, projects, scopes, snapshot, tools
 from ._compat import (TUI_PLATFORMS, MemoryProvider, RecallStatus, spawn_context_thread, status_muted,
@@ -300,9 +301,21 @@ class MemoryBucketsProvider(MemoryProvider):
             except Exception:
                 logger.warning("memory-buckets: prefetch hints failed", exc_info=True)
                 hints = []
-        if hints:
-            self._last_recall = len(hints)
-            lines = [f"- {path}: {desc}" if desc else f"- {path}" for path, desc, _ in hints]
+        lines = []
+        for path, desc, _ in hints:
+            if not desc:
+                lines.append(f"- {path}")
+                continue
+            # A hint description enters the model's context exactly like a listing
+            # line, so it gets the same screen. A blocked one is dropped rather
+            # than shown (the warning is logged in _screened): this whole block
+            # invites memory_read, and the model must not be nudged towards a
+            # file the scan rejected.
+            shown = snapshot._screened(path, desc)
+            if not shown.startswith("[BLOCKED:"):
+                lines.append(f"- {path}: {shown}")
+        if lines:
+            self._last_recall = len(lines)
             parts.append("Memory files that may be relevant to this message. Read them with memory_read if they could help "
                          "you answer:\n" + "\n".join(lines))
         if state.nudge_due and not scope.read_only:
@@ -443,13 +456,27 @@ class MemoryBucketsProvider(MemoryProvider):
 
     @_traced
     def on_memory_write(self, action: str, target: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
-        """Mirror built-in memory writes into global/inbox.md while built-in memory is still on."""
+        """Mirror built-in memory writes into global/inbox.md while built-in memory is still on.
+        A matched or oversize entry is skipped with a warning and not mirrored."""
         if self.store is None:
             return
         entry = f"[{target} {action}] {content}".strip()
         previous = (metadata or {}).get("previous_content")
         if action in ("replace", "remove") and previous:
             entry += f" (was: {previous})"
+        window = _compat.scan_window_chars
+        patterns = _compat.scan_threats(entry)
+        if patterns or (window is not None and len(entry) > window):
+            # A matched or oversize built-in entry must not be copied into the store,
+            # not even as a placeholder: the inbox is a real file, and anything
+            # written to it must be text a later read can trust. For `add` the
+            # original stays in built-in memory for the user to review by hand; for
+            # `replace` and `remove` the previous content has already left it, and
+            # this warning is the only record.
+            logger.warning("memory-buckets: kept a built-in memory %s on %s out of the inbox "
+                           "(matched %s or over the threat-scan window)", action, target,
+                           ", ".join(patterns) or "an oversize entry")
+            return
         try:
             inbox.append(self.store, f"mirrored from built-in memory {date.today().isoformat()}", [entry],
                          source=f"builtin:{self._state().platform}")

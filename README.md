@@ -230,6 +230,23 @@ holds it back for the next four turns so the agent isn't nagged with the same hi
 every message. Every `nudge_interval` turns (default 10), a short reminder also asks
 the agent to save any new durable facts from the conversation.
 
+### Threat scanning
+
+A session that has just read a hostile web page or repository can write to `global/`,
+so, like Hermes's built-in memory, the plugin screens memory with Hermes's own threat
+patterns (`tools.threat_patterns`, `strict` scope). On a match:
+
+- **Writes.** `memory_write`, `memory_append` and `memory_str_replace` refuse the
+  content with the error code `threat_detected` and the pattern IDs in `patterns`.
+- **The prompt.** Matching prompt-bound text (hand-edited or synced files, and their
+  listing descriptions) is replaced by a `[BLOCKED: <path> matched <pattern ids>;
+  tell the user to fix or delete it]` stand-in; `memory_read` still returns the file.
+- **Hints.** A matching hint description is dropped with a warning, and a matching
+  built-in memory write is never mirrored into `global/inbox.md`.
+
+Matching is heuristic, so harmless text can be blocked; the tests and the docstrings
+carry the detail.
+
 ### Embeddings
 
 Embeddings use
