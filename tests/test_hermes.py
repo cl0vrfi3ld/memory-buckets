@@ -100,6 +100,31 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertEqual(out["project_scope"]["source"], "hermes-project")
         self.assertEqual(out["project_scope"]["writes"], ["proj-1/", "global/"])
         self.assertIsNone(out["elsewhere_scope"])
+        # The real threat matcher. tests/test_threats.py patches _compat._scan_for_threats
+        # with a hand-written FakeScanner (outside Hermes there is no tools.threat_patterns),
+        # so these probe fields are the only coverage of the real one: the plugin must have
+        # resolved to Hermes's own scanner, Hermes must still flag the canonical injection
+        # line, and flagged text must be blocked through the plugin's wiring.
+        self.assertTrue(out["threat_scan_available"], "the plugin loaded no threat scanner")
+        self.assertTrue(out["plugin_scan_is_real"], "the plugin did not resolve to Hermes's own scanner")
+        self.assertTrue(out["scan_window_matches"], "the plugin's scan window is not Hermes's MAX_SCAN_CHARS")
+        self.assertIn("prompt_injection", out["injection_patterns"],
+                      "Hermes's matcher no longer flags test_threats.py's canonical INJECTION line")
+        refused = out["write_refused"]
+        self.assertFalse(refused["ok"], refused)
+        self.assertEqual(refused["error"]["code"], "threat_detected")
+        self.assertIn("prompt_injection", refused["patterns"])
+        self.assertIn("prompt_injection", refused["error"]["message"])
+        self.assertNotIn("previous instructions", refused["error"]["message"],
+                         "a refusal must not quote the flagged text")
+        self.assertFalse(out["evil_on_disk"], "a refused write reached the disk")
+        self.assertTrue(out["prompt_has_clean_profile"], "the clean profile stopped inlining")
+        self.assertTrue(out["prompt_blocked_body"],
+                        "a flagged file body was not replaced by the [BLOCKED: ...] stand-in")
+        self.assertTrue(out["prompt_blocked_description"],
+                        "a flagged description was not replaced by the [BLOCKED: ...] stand-in")
+        self.assertFalse(out["prompt_leaks"], "flagged text reached the system prompt")
+        self.assertFalse(out["prefetch_leaks"], "flagged text reached the prefetch output")
 
 
 if __name__ == "__main__":

@@ -2,6 +2,11 @@
 
 Outside Hermes there is no ``tools.threat_patterns``, so these tests install a stand-in
 with the real one's signature (``scan_for_threats(content, scope)``, a list of pattern IDs).
+
+The stand-in is an approximation, not coverage of the real patterns: the real matcher runs
+only in ``tests/hermes_probe.py`` (asserted by ``tests/test_hermes.py``, gated on
+``HERMES_PYTHON``), which also pins it to still flag this module's ``INJECTION`` and to
+block it through the plugin's own wiring.
 """
 
 import json
