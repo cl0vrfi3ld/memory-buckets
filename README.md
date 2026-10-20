@@ -266,47 +266,6 @@ not every attack, and it can reject harmless text that happens to match (a note 
 an injection example, say, or a curl example naming a `$TOKEN`, or a line about
 `authorized_keys`).
 
-### Credentials and permissions
-
-Memory is plain Markdown that sync tools copy around and the model reads back on later
-turns. It should not hold credentials, and nobody else on the machine should be able to
-read it.
-
-- **Credentials are refused.** `memory_write`, `memory_append` and `memory_str_replace`
-  refuse content that looks like a credential, with the error code `secret_detected` and
-  the families it matched in `patterns`. The error does not repeat the text, and tells the
-  agent to note where the user keeps the credential instead. The families:
-  - AWS access key ids (`AKIA...`, `ASIA...`);
-  - `sk-` API keys;
-  - GitHub (`ghp_...`, `github_pat_...`, and `gho_`, `ghu_`, `ghs_`, `ghr_`), GitLab
-    (`glpat-`) and Slack (`xoxb-` and the like, `xapp-`) tokens;
-  - PEM private key blocks;
-  - `password`, `passwd`, `secret`, `token` or `api_key` (also `api-key`) followed by `:`
-    or `=` and a value that looks like one: a single word of six or more characters with
-    a letter and a digit, such as `hunter2`. Paths (absolute or relative), URLs, `$VAR`,
-    `<placeholder>`, `MY_ENV_VAR` and function calls are not credentials, so "token: kept
-    in the password manager" and "secret: config/secrets.yaml" are writable.
-
-  The whole file is scanned, description included, and an edit that leaves a credential
-  already in a file is refused until it is gone; `memory_delete` always works. Built-in
-  memory mirrored into `global/inbox.md` is checked too, and a match is mirrored as a
-  placeholder. The list is local, needs no Hermes, and runs before the threat scan. It is
-  heuristic as well: it misses a password that is only letters or only digits, one that
-  contains `/` (it reads as a path), and any secret without a recognisable shape; and it
-  refuses some ordinary text whose value has the same shape as a password, such as a
-  digit-bearing identifier in code (`const token = lexer2`) or hyphenated policy and
-  version wording (`password: min-12chars`, `Token: v2.3.1-beta`). Files already in the
-  store are not scanned.
-- **The store is private.** On Linux and macOS the store root and every directory the
-  plugin creates inside it are `0700`, and its files `0600`, even under a permissive umask. That
-  includes the search index, which holds the text of every memory. `hermes memory-buckets
-  status` warns when anything under the store can be read by group or other, and `migrate`
-  removes that access (it never adds any, and skips symlinks and paths it cannot change).
-  Writable sessions run `migrate` on startup, so an older store is made private the next
-  time Hermes starts. That includes a store you share with another account on purpose,
-  such as a `store_path` on a shared drive. Windows is unchanged, and the downloaded model
-  in `.models/` is not checked.
-
 ### Embeddings
 
 Embeddings use
@@ -469,10 +428,6 @@ original under `_backup/<version>/`. You can preview pending changes with
 
 The SQLite cache at `.index/memory.sqlite` also rebuilds itself automatically whenever
 the index schema changes (most recently schema v4 in 0.3.0).
-
-A store made before the plugin kept it private (directories `0755`, files `0644` under
-the usual umask) is made private by the same migration: see
-[Credentials and permissions](#credentials-and-permissions).
 
 For stores created on 0.1.0 or earlier:
 - Leftover `<project>/index.md` files (replaced in 0.1.0 by the generated project
