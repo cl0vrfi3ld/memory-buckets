@@ -17,42 +17,19 @@ change the store's layout; the plugin migrates the store itself (see
   no status line, an unscoped session) and a Hermes refactor looked like behaviour drift.
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
-- **Threat scanning for memory.** Built-in memory already runs Hermes's prompt-injection
-  patterns over every write and over what it loads into the prompt; memory-buckets did
-  neither, and `global/profile.md` and `global/preferences.md` go into every system
-  prompt. It now uses the same scanner (`tools.threat_patterns`, `strict` scope):
-  - `memory_write`, `memory_append` and `memory_str_replace` refuse content that
-    matches, with a new `threat_detected` error that lists the pattern IDs in
-    `patterns` and does not repeat the text. The whole file is scanned, frontmatter
-    description included. `memory_delete` is never blocked, so a bad file can be
-    removed.
-  - A file inlined into the system prompt that matches (a hand edit, a synced file) is
-    replaced there by `[BLOCKED: <path> matched <pattern ids>; tell the user to fix or
-    delete it]`, and a matching description in the file listing is replaced the same
-    way. A warning is logged. The file on disk is untouched and `memory_read` still
-    returns it.
-  - Prefetch hints carry descriptions into the model's context on every relevant turn,
-    so they are screened too: a matching hint description is dropped with a warning
-    (the hint block invites `memory_read`, and the model must not be nudged towards a
-    file the scan rejected).
-  - A file longer than the scanner reads at once (`tools.threat_patterns` truncates
-    its input at `MAX_SCAN_CHARS` characters) is blocked the same way rather than
-    inlined with its tail unchecked. The tools cap writes well under that
-    (`store.MAX_FILE_BYTES`), so only a hand edit or a synced file can get there.
-  - The scanner and its `MAX_SCAN_CHARS` window are imported separately: a Hermes that
-    renames only the constant keeps scanning, and caps prompt-bound text at
-    `store.MAX_FILE_BYTES` characters instead, with a warning.
-  - Built-in memory writes mirrored into `global/inbox.md` are screened too: a matched
-    or oversize entry is skipped with a warning and not mirrored, never copied in as
-    the raw text or as a placeholder.
-  - Without the scanner (a bare Python, or a Hermes that doesn't ship it) nothing is
-    scanned and memory behaves as before. A scanner that raises is logged once and
-    treated the same way.
-  - Upgrading applies the scan to an existing store for the first time, so a file you
-    never changed can newly match: one matching line removes that whole file from the
-    system prompt (and the strict scope also matches some ordinary phrasings; see the
-    README). Nothing is deleted, `memory_read` still returns the file, and fixing the
-    line puts it back.
+- **Threat scanning for memory.** Writes and prompt-bound text now go through the same
+  prompt-injection scan Hermes's built-in memory uses.
+  - `memory_write`, `memory_append` and `memory_str_replace` refuse content that matches,
+    with a new `threat_detected` error listing the pattern IDs in `patterns` (the text is
+    not quoted). `memory_delete` is never blocked.
+  - Matching prompt-bound text (a hand-edited or synced file, or a listing description) is
+    replaced by a `[BLOCKED: ...]` stand-in, and matching hint descriptions are dropped.
+    Oversize files are treated the same, so padding can't hide an injection. The file on
+    disk is untouched and `memory_read` still returns it. Matching or oversize built-in
+    writes are not mirrored into `global/inbox.md`.
+  - Upgrading scans an existing store for the first time, so a file you never changed can
+    newly match. One matching line removes the file from the prompt; nothing is deleted,
+    and fixing the line puts it back.
 
 ## [0.4.0] - 2026-10-16
 
