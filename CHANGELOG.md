@@ -32,19 +32,19 @@ change the store's layout; the plugin migrates the store itself (see
     way. A warning is logged. The file on disk is untouched and `memory_read` still
     returns it.
   - Prefetch hints carry descriptions into the model's context on every relevant turn,
-    so they are screened too: a matching hint description is replaced by the same
-    `[BLOCKED: ...]` line.
+    so they are screened too: a matching hint description is dropped with a warning
+    (the hint block invites `memory_read`, and the model must not be nudged towards a
+    file the scan rejected).
   - A file longer than the scanner reads at once (`tools.threat_patterns` truncates
     its input at `MAX_SCAN_CHARS` characters) is blocked the same way rather than
     inlined with its tail unchecked. The tools cap writes well under that
     (`store.MAX_FILE_BYTES`), so only a hand edit or a synced file can get there.
   - The scanner and its `MAX_SCAN_CHARS` window are imported separately: a Hermes that
     renames only the constant keeps scanning, and caps prompt-bound text at
-    `store.MAX_FILE_BYTES` characters instead, with a warning. Both names are watched
-    by the Hermes internals probe.
+    `store.MAX_FILE_BYTES` characters instead, with a warning.
   - Built-in memory writes mirrored into `global/inbox.md` are screened too: a matched
-    or oversize entry is mirrored as a placeholder telling the model to have the user
-    review it, never as the raw text.
+    or oversize entry is skipped with a warning and not mirrored, never copied in as
+    the raw text or as a placeholder.
   - Without the scanner (a bare Python, or a Hermes that doesn't ship it) nothing is
     scanned and memory behaves as before. A scanner that raises is logged once and
     treated the same way.

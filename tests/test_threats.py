@@ -139,8 +139,9 @@ class WriteTest(ThreatCase):
 
     def test_a_failing_scanner_does_not_block_writes(self):
         boom = mock.Mock(side_effect=ValueError("unknown scope 'strict'"))  # an older Hermes
+        # create=True: a main without the flag must fail on behaviour, not in setup.
         with mock.patch.object(_compat, "_scan_for_threats", boom), \
-                mock.patch.object(_compat, "_scan_failure_logged", False), \
+                mock.patch.object(_compat, "_scan_failure_logged", False, create=True), \
                 self.assertLogs("memory_buckets", "WARNING") as logs:
             first = self.call("memory_append", path="global/profile.md", lines=["one"])
             second = self.call("memory_append", path="global/profile.md", lines=["two"])
@@ -156,8 +157,8 @@ class SnapshotTest(ThreatCase):
         self.put("proj-1/profile.md", doc("profile", "What proj-1 is", "- a web app\n"))
         self.put("proj-1/preferences.md", doc("preferences", "How to work on proj-1", "- run the linter\n"))
 
-    def build(self, project=None):
-        c = config.Config()
+    def build(self, project=None, cfg=None):
+        c = cfg if cfg is not None else config.Config()
         return snapshot.build(self.store, self.index, scopes.resolve(c, project, "primary"), c)
 
     def test_a_hand_edited_profile_is_blocked_but_still_readable(self):
@@ -216,8 +217,9 @@ class SnapshotTest(ThreatCase):
         self.assertNotIn("BLOCKED", text)
 
     def test_a_failing_scanner_does_not_break_the_snapshot(self):
+        # create=True: a main without the flag must fail on behaviour, not in setup.
         with mock.patch.object(_compat, "_scan_for_threats", mock.Mock(side_effect=RuntimeError("boom"))), \
-                mock.patch.object(_compat, "_scan_failure_logged", False), \
+                mock.patch.object(_compat, "_scan_failure_logged", False, create=True), \
                 self.assertLogs("memory_buckets", "WARNING"):
             self.assertIn("- Sam, they/them", self.build().text)
 
@@ -241,12 +243,14 @@ class SnapshotTest(ThreatCase):
 
     def test_no_window_means_no_size_check(self):
         # The window comes from the loaded scanner: without one there is nothing to
-        # enforce, and the plugin fails open on size as it does on patterns.
+        # enforce, and the plugin fails open on size as it does on patterns. The cap
+        # is raised so the 84k profile stays in the snapshot whatever main does to
+        # files over the default cap (PR #53 cuts at 12,000 characters).
         body = "- filler line\n" * 6_000 + f"- {INJECTION}\n"
         self.put("global/profile.md", doc("profile", "Who the user is", body))
         with mock.patch.object(_compat, "scan_window_chars", None, create=True), \
                 mock.patch.object(_compat, "_scan_for_threats", None, create=True):
-            snap = self.build()
+            snap = self.build(cfg=config.Config(snapshot_max_chars=200_000))
         self.assertIn(INJECTION, snap.text)
         self.assertNotIn("BLOCKED", snap.text)
 
@@ -260,16 +264,18 @@ class PrefetchTest(ThreatCase):
         self.put("global/profile.md", doc("profile", "Who the user is", "- Sam, they/them\n"))
         self.put("global/people/sam.md", doc("sam", f"Who Sam is. {INJECTION}", "- Sam likes climbing\n"))
 
-    def test_a_poisoned_description_is_blocked_in_prefetch_hints(self):
+    def test_a_poisoned_description_is_dropped_from_prefetch_hints(self):
+        # The hint block invites memory_read, so a blocked hint is dropped rather
+        # than shown: the model must not be nudged towards a file the scan rejected.
         p = self.make_provider(embedder=FakeEmbedder())
         p.config.prefetch_min_similarity = 0.3
         with self.assertLogs("memory_buckets", "WARNING"):
-            listing = p.system_prompt_block()  # the listing gets the [BLOCKED] line
+            listing = p.system_prompt_block()  # the listing still gets the [BLOCKED] line
             out = p.prefetch("Sam likes climbing", session_id="s1")
-        self.assertIn("- global/people/sam.md: [BLOCKED: global/people/sam.md matched prompt_injection", out)
-        self.assertIn("- global/people/sam.md: [BLOCKED: global/people/sam.md matched prompt_injection", listing)
+        self.assertEqual(out, "", "no hint block when the only hint is blocked")
         self.assertNotIn("previous instructions", out)
-        self.assertEqual(p.recall_status().count, 1, "the hint is still counted")
+        self.assertIsNone(p.recall_status(), "the dropped hint is not counted")
+        self.assertIn("- global/people/sam.md: [BLOCKED: global/people/sam.md matched prompt_injection", listing)
 
     def test_clean_hint_descriptions_are_untouched(self):
         self.put("global/people/sam.md", doc("sam", "Who Sam is", "- Sam likes climbing\n"))
@@ -281,24 +287,70 @@ class PrefetchTest(ThreatCase):
 
 
 class InboxMirrorTest(ThreatCase):
-    """The built-in-memory mirror is a write path into the store, so the entry it
-    copies in gets the same screen the write tools apply."""
+    """The built-in-memory mirror is a write path into the store, so a matched or
+    oversize entry is refused the way the write tools refuse one: skipped with a
+    warning, never copied into global/inbox.md, not even as a placeholder."""
 
-    def test_a_poisoned_builtin_entry_is_mirrored_as_a_placeholder(self):
+    def test_a_poisoned_builtin_entry_is_not_mirrored(self):
         p = self.make_provider()
-        with self.assertLogs("memory_buckets", "WARNING"):
+        inbox = self.store.memories / "global" / "inbox.md"
+        before = inbox.read_text(encoding="utf-8") if inbox.exists() else None
+        with self.assertLogs("memory_buckets", "WARNING") as logs:
             p.on_memory_write("replace", "global/profile.md", "new content",
                               {"previous_content": INJECTION})
-        content = self.store.read("global/inbox.md")["content"]
-        self.assertIn("[blocked: a built-in memory replace on global/profile.md", content)
-        self.assertIn("tell the user to review it by hand", content)
-        self.assertNotIn("previous instructions", content)
+        after = inbox.read_text(encoding="utf-8") if inbox.exists() else None
+        self.assertEqual(after, before, "the inbox is untouched")
+        self.assertIsNone(after, "starting empty, the blocked mirror does not create it")
+        logged = " ".join(r.getMessage() for r in logs.records)
+        self.assertIn("global/profile.md", logged)
+        self.assertIn("replace", logged)
+
+    def test_an_oversize_builtin_entry_is_not_mirrored_either(self):
+        p = self.make_provider()
+        with mock.patch.object(_compat, "scan_window_chars", 10, create=True), \
+                self.assertLogs("memory_buckets", "WARNING"):
+            p.on_memory_write("add", "global/profile.md", "likes tea and a good deal more besides")
+        self.assertFalse((self.store.memories / "global" / "inbox.md").exists())
 
     def test_a_clean_builtin_entry_is_mirrored_as_before(self):
         p = self.make_provider()
         p.on_memory_write("add", "global/profile.md", "likes tea")
         content = self.store.read("global/inbox.md")["content"]
         self.assertIn("[global/profile.md add] likes tea", content)
+
+
+class NothingBlockedOnDiskTest(ThreatCase):
+    """``[BLOCKED: ...]`` stands in for rejected text in the prompt only. Whichever
+    path does the blocking (a write, a snapshot file, a prefetch hint, a built-in
+    memory mirror), no file in the store may end up holding it."""
+
+    def test_no_blocked_text_reaches_the_store(self):
+        self.put("global/profile.md", doc("profile", "Who the user is", f"- Sam\n- {INJECTION}\n"))
+        self.put("global/people/sam.md", doc("sam", f"Who Sam is. {INJECTION}", "- Sam likes climbing\n"))
+        c = config.Config()
+        ctx = tools.Context(self.store, self.index, scopes.resolve(c, None, "primary"), c,
+                            source="telegram")
+        with self.assertLogs("memory_buckets", "WARNING"):
+            refused = tools.handle("memory_write", {"path": "global/topics/bad.md", "description": "Bad",
+                                                    "body": f"- {INJECTION}\n", "if_version": "new"}, ctx)
+            p = self.make_provider(embedder=FakeEmbedder())
+            p.config.prefetch_min_similarity = 0.3
+            listing = p.system_prompt_block()  # a blocked snapshot file and description
+            hints = p.prefetch("Sam likes climbing", session_id="s1")  # a blocked prefetch hint
+            p.on_memory_write("replace", "global/profile.md", "new content",
+                              {"previous_content": INJECTION})  # a blocked mirror
+        self.assertEqual(refused["error"]["code"], "threat_detected")
+        self.assertFalse((self.store.memories / "global" / "topics" / "bad.md").exists())
+        self.assertIn("[BLOCKED:", listing, "the prompt still names the blocked files")
+        self.assertEqual(hints, "")
+        for path in sorted(self.store.memories.rglob("*")):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("[BLOCKED:", text, f"{path} holds prompt-only blocked text")
+            self.assertNotIn("[blocked:", text, f"{path} holds prompt-only blocked text")
+        self.assertFalse((self.store.memories / "global" / "inbox.md").exists(),
+                         "the blocked mirror write must not create the inbox")
 
 
 class ImportFallbackTest(unittest.TestCase):

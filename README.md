@@ -250,12 +250,17 @@ checks memory against Hermes's threat patterns (`tools.threat_patterns`, `strict
   blocked the same way with an "over the threat-scan window" line, so a padded file
   cannot slip an injection past the window. The file itself
   is left alone and `memory_read` still returns it, so you can see what tripped the
-  scan. The plugin logs a warning naming the file. The snapshot is frozen per session,
+  scan (`memory_list` and `memory_search` also return unscreened text when called
+  directly). The plugin logs a warning naming the file. The snapshot is frozen per session,
   so the block clears in the next session (or after Hermes compresses the conversation)
   once you have fixed the file.
 - **Prefetch hints.** A hint carries a file's description into the model's context on
-  every relevant turn, so hint descriptions are screened the same way as the listing:
-  a matching one is replaced by the `[BLOCKED: ...]` line.
+  every relevant turn, so hint descriptions are screened the same way as the listing.
+  A matching one is dropped with a warning: the hint block invites `memory_read`, and
+  the model must not be nudged towards a file the scan rejected.
+- **Built-in memory mirror.** A built-in memory write that matches, or is over the
+  threat-scan window, is skipped with a warning and not mirrored into
+  `global/inbox.md`.
 - **No scanner.** Outside Hermes, or on a Hermes without `tools.threat_patterns`,
   nothing is scanned. A Hermes that ships the scanner but renames only its
   `MAX_SCAN_CHARS` constant still scans, and caps prompt-bound text at
