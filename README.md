@@ -127,7 +127,6 @@ $HERMES_HOME/memory-buckets/
     global/     profile.md preferences.md inbox.md  topics/ areas/ people/
     <project>/  profile.md preferences.md            topics/ areas/ people/
   _backup/<version>/               originals kept before a store migration
-  .history/                        previous bytes of overwritten and deleted files
   .index/memory.sqlite             search and vector cache (safe to delete)
   .models/                         downloaded embedding model, when not bundled
 ```
@@ -138,33 +137,6 @@ stem), a one-line `description` telling the agent when to read the file, and opt
 made through the plugin also record `sources` and a UTC `edited_at` timestamp; edits
 you make by hand in Obsidian or an editor are picked up automatically on the next
 search or turn.
-
-### History
-
-Every overwrite (`memory_write` over an existing file), every `memory_str_replace`
-edit and every `memory_delete` first saves the previous bytes to
-`.history/<path>/`, before the change is applied. Appends and creations record
-nothing: they add, never destroy. A failed history write is logged and ignored, so
-it can never break a save. Retention keeps the newest `history_keep` versions per
-file and drops anything older than `history_days`; `history_keep: 0` stops new
-recording, and what is already in `.history/` stays.
-
-`hermes memory-buckets history PATH` lists the recorded versions of one file, and
-`hermes memory-buckets restore PATH [VERSION]` writes one back through the same
-compare-and-swap path the tools use, so a restore is itself recorded and a
-concurrent change is refused rather than clobbered. Restoring works after a delete
-too: it recreates the file.
-
-Deleting is no longer erasing: the deleted bytes stay in `.history/<path>/` until
-the retention limits drop them, and so does anything that backs up the store
-directory. To erase a file's history for good, remove its directory under
-`.history/`.
-
-Not covered: files you edit by hand. The plugin only records its own writes, so a
-hand edit in Obsidian or an editor that overwrites or deletes a memory file leaves
-no recoverable copy. The store is a plain directory, so a filesystem-level backup
-remains the complete answer; `.history/` is a safety net for a bad agent write, not
-a backup system.
 
 ### Projects
 
@@ -365,8 +337,6 @@ hints QUERY [--limit N] [--threshold T] show raw prefetch similarities to tune p
 fetch-model [--force]                   download the built-in embedding model now
 import [--from HERMES_HOME] [--dry-run] append built-in MEMORY.md/USER.md entries to global/inbox.md
 import-prompt                           print the prompt for sorting global/inbox.md
-history PATH                            list the recorded versions of one memory file (.history/)
-restore PATH [VERSION]                  write a recorded version back (itself recorded; default: newest)
 ```
 
 ### Configuration
@@ -383,15 +353,12 @@ All settings are optional and live under `plugins.memory-buckets` in `config.yam
 | `prefetch_max_hints` | `4` | maximum prefetch hints per turn |
 | `search_limit` | `8` | default `memory_search` result count |
 | `project_boost` | `1.3` | score multiplier for the session's own bucket in search and prefetch hints |
-| `history_keep` | `20` | newest recorded versions kept per file in `.history/` (`0` turns history off) |
-| `history_days` | `90` | recorded versions older than this are dropped (`0` keeps them forever) |
 | `store_path` | `$HERMES_HOME/memory-buckets` | store directory (custom paths outside `$HERMES_HOME` are also included in `hermes backup`) |
 | `embeddings.backend` | `local` | `local` (built-in model) or `off` (keyword search only) |
 | `embeddings.auto_download` | `true` | download the model in the background when not bundled |
 | `embeddings.local_model_dir` | | load the model from this directory instead |
 
 Environment variable overrides: `MEMORY_BUCKETS_STORE`,
-`MEMORY_BUCKETS_HISTORY_KEEP`, `MEMORY_BUCKETS_HISTORY_DAYS`,
 `MEMORY_BUCKETS_EMBEDDINGS_BACKEND`, `MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD`, and
 `MEMORY_BUCKETS_MODEL_DIR`. Setting `MEMORY_BUCKETS_TRACE=1` logs every provider hook
 call.
