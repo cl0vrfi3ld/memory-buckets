@@ -18,13 +18,6 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
-### Fixed
-
-- Frontmatter aliases with a comma, such as `Smith, John`, are stored in the search
-  index as a JSON array instead of `", "`-joined text, so they stay one alias and
-  prefetch stops rescuing the file on `John` alone. The index schema version is now
-  5: an existing cache is dropped and rebuilt automatically (#17).
-
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
