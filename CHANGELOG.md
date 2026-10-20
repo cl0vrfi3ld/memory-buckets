@@ -24,6 +24,16 @@ change the store's layout; the plugin migrates the store itself (see
   The README quick start and install steps now use `hermes config set` instead of a
   hand-edited config.yaml snippet.
 
+### Fixed
+
+- **Boolean settings accept the same spellings everywhere.** A boolean in
+  `plugins.memory-buckets` or in a `MEMORY_BUCKETS_*` variable now recognises the
+  short spellings — `y`, `t`, `n`, `f`, `off` and friends — so
+  `MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD=y` enables the background download
+  instead of disabling it. A value that isn't recognisable as a boolean at all
+  (say `banana`) now warns and leaves the setting at its default, instead of
+  quietly becoming off.
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.

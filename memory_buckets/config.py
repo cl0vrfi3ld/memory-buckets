@@ -17,6 +17,12 @@ logger = logging.getLogger("memory_buckets")
 
 CONFIG_KEY = "memory-buckets"
 
+# Booleans arrive as text from env vars, the setup wizard and hand-edited YAML.
+# One pair of spelling tables, shared with provider._coerce, so the load side
+# and the save side accept exactly the same words.
+BOOL_TRUE_SPELLINGS = ("1", "true", "yes", "on", "y", "t")
+BOOL_FALSE_SPELLINGS = ("0", "false", "no", "off", "n", "f")
+
 _confined_warned = False
 
 
@@ -74,7 +80,17 @@ def _assign(obj: Any, name: str, value: Any, type_name: Any) -> None:
     kind = type_name if isinstance(type_name, str) else getattr(type_name, "__name__", "str")
     try:
         if kind == "bool":
-            value = value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "yes", "on")
+            # Same spellings as provider._coerce; unrecognised text warns and
+            # leaves the field at its default instead of becoming False.
+            if not isinstance(value, bool):
+                lowered = str(value).strip().lower()
+                if lowered in BOOL_TRUE_SPELLINGS:
+                    value = True
+                elif lowered in BOOL_FALSE_SPELLINGS:
+                    value = False
+                else:
+                    logger.warning("memory-buckets: ignoring bad config value %s=%r", name, value)
+                    return
         elif kind == "int":
             value = int(value)
         elif kind == "float":
