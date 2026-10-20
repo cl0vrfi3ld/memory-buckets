@@ -18,6 +18,15 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
+### Fixed
+
+- **Closing the session no longer closes the index under a running `queue_prefetch`.**
+  Hermes drains its background executor only up to a timeout, so a prefetch could still be
+  reading SQLite when `shutdown()` closed the connection, which can crash the interpreter.
+  `shutdown()` now waits for prefetches in flight, within the same 10 seconds it gives the
+  embedding worker, and leaves the index open, with a warning, if one outlasts that. A
+  `queue_prefetch` that starts after `shutdown()` does nothing.
+
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
