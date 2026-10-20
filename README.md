@@ -7,8 +7,7 @@ modelled on Claude's memory system: one Markdown file per subject, organised int
 `global` bucket and one bucket per [Hermes project](#projects), read on demand.
 
 The store is a plain directory of Markdown files with YAML frontmatter that you can
-open directly as an Obsidian vault (only files that follow the
-[path rules](#the-store) are read). Search is hybrid, combining SQLite FTS5 with a
+open directly as an Obsidian vault. Search is hybrid, combining SQLite FTS5 with a
 static embedding model that runs in-process in pure stdlib Python without an external
 server or GPU.
 
@@ -138,21 +137,6 @@ stem), a one-line `description` telling the agent when to read the file, and opt
 made through the plugin also record `sources` and a UTC `edited_at` timestamp; edits
 you make by hand in Obsidian or an editor are picked up automatically on the next
 search or turn.
-
-Only files at the paths in the tree above are read. A file name is lowercase letters
-and digits joined by single hyphens, plus `.md`, and `topics/`, `areas/` and `people/`
-hold files directly, with no subfolders. So `global/topics/My Note.md`,
-`global/topics/ex_luna.md`, `global/topics/nix/flakes.md` and `global/notes.md` are
-all skipped: the agent can't search, read or edit them, and no error says so on the
-way. `hermes memory-buckets status` counts them (`ignored`) and `lint` lists each one,
-so rename a file like that to fit (`my-note.md`, `ex-luna.md`). Hidden files and
-folders, such as Obsidian's `.obsidian/`, are left out of both.
-
-Frontmatter that the tools can't use (no `name` or `description`, a `name` that
-doesn't match the file, a duplicate key, no closing `---`) makes the tools refuse to
-edit the file, and `status` counts those too (`frontmatter`). A whole-line `#`
-comment in the frontmatter is fine: it's ignored when reading and kept when the
-plugin rewrites the file.
 
 ### Projects
 
@@ -343,7 +327,7 @@ and Nix installs without `skills.external_dirs`, paste the prompt printed by
 `hermes memory-buckets` is available whenever `memory.provider` is `memory-buckets`:
 
 ```
-status                                  store, index, embeddings, Hermes config, unlinked buckets, files the index skips
+status                                  store, index, embeddings, Hermes config, unlinked buckets
 diagnose [--platform P]                 check why an agent would or wouldn't see the memory tools
 lint                                    check paths, frontmatter, duplicate stems, and [[links]]
 migrate [--dry-run]                     migrate a store from an older version (also runs on startup)

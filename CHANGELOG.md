@@ -18,23 +18,6 @@ change the store's layout; the plugin migrates the store itself (see
   A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
   from the job pinned to a Hermes release.
 
-## [Unreleased]
-
-### Added
-
-- `hermes memory-buckets status` reports what the agent can't see or edit:
-  `ignored` counts files outside the path rules (spaces, capitals, underscores,
-  nesting below `topics/`, stray top-level files) and symlinks, and `frontmatter`
-  counts files whose frontmatter the tools reject. Both point at `lint`, which
-  lists them. Neither changes the exit code.
-- The README says which files are read, and what the naming rules are.
-
-### Fixed
-
-- A whole-line `#` comment in the frontmatter no longer makes the file fail to
-  parse (so the tools refuse to edit it). It is ignored when reading and kept in
-  place when the file is rewritten.
-
 ## [0.4.0] - 2026-10-16
 
 Windows support. No store or index changes: upgrading needs no migration.
