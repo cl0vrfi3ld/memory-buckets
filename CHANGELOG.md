@@ -8,25 +8,6 @@ change the store's layout; the plugin migrates the store itself (see
 
 ## [Unreleased]
 
-Test tooling only: the plugin, the store and the index are unchanged.
-
-### Changed
-
-- **`tests/bench_retrieval.py` no longer saturates.** Every metric was 1.0 on its
-  23-chunk store because every query reused its target file's words, so it could catch
-  no regression. It now reports three splits separately: exact (the existing queries,
-  12/13 search top-1 where it was 13/13), paraphrase (16 queries sharing no content
-  word with their target, 6/16 top-1) and negative (greetings, acknowledgements and
-  off-topic turns, one hint in 15). A second, large store adds 400 filler files so the
-  prompt's file listing truncates and only queries whose target it does not show are
-  scored, and each store sweeps `prefetch_min_similarity` (0.25 keeps the same single
-  false positive as the 0.27 default with better recall). `run_benchmark` returns a
-  nested result per store and split, and the numbers are in the README's new
-  [Retrieval quality](README.md#retrieval-quality) section.
-  `tests/test_bench_retrieval.py` guards the corpus: a paraphrase that shares a word
-  with its target, a negative that names a file, or a filler store that fits in the
-  prompt fails a test, and the real-model tests hold floors for each split.
-
 ### Added
 
 - **Drift detection for the Hermes internals the plugin depends on.** The Hermes
