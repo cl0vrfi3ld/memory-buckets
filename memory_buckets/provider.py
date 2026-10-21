@@ -127,7 +127,7 @@ class MemoryBucketsProvider(MemoryProvider):
         # Create the store up front (not just on first write), so it exists as soon as the
         # provider is active and the log says where it went (profiles move HERMES_HOME).
         try:
-            (self.store.memories / GLOBAL).mkdir(parents=True, exist_ok=True)
+            self.store.ensure_dir(self.store.memories / GLOBAL)
             logger.info("memory-buckets: active, store at %s (platform=%s, context=%s)", root,
                         kwargs.get("platform") or "cli", kwargs.get("agent_context") or "primary")
         except OSError as err:
