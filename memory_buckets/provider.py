@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import _compat
 from . import config as config_mod
-from . import inbox, migrate, projects, scopes, snapshot, tools
+from . import credentials, inbox, migrate, projects, scopes, snapshot, tools
 from ._compat import (TUI_PLATFORMS, MemoryProvider, RecallStatus, spawn_context_thread, status_muted,
                       tui_status_callback)
 from .embeddings import make_embedder, min_similarity
@@ -476,6 +476,14 @@ class MemoryBucketsProvider(MemoryProvider):
             logger.warning("memory-buckets: kept a built-in memory %s on %s out of the inbox "
                            "(matched %s or over the threat-scan window)", action, target,
                            ", ".join(patterns) or "an oversize entry")
+            return
+        families = credentials.scan(entry)
+        if families:
+            # The same rule as the write tools, on the one write path that skips them: a
+            # credential pasted into built-in memory must not be copied into the synced
+            # store, not even as a placeholder (the threat branch above says why).
+            logger.warning("memory-buckets: kept a built-in memory %s on %s out of the inbox "
+                           "(it looks like a credential: %s)", action, target, ", ".join(families))
             return
         try:
             inbox.append(self.store, f"mirrored from built-in memory {date.today().isoformat()}", [entry],
