@@ -7,22 +7,27 @@ here from the Hermes project (name, description, folders) and the bucket's own
 description listing of the other files the session reads by default (project
 files first). Capped at ``snapshot_max_chars``. When over the cap, drop listing
 lines first, then whole files, in ``drop_order()``'s order. The global profile and the
-project header are never dropped. The provider freezes the result per session
-id for prefix caching.
+project header are never dropped. A file or description that matches one of Hermes's
+threat patterns, or is longer than the scanner reads, is replaced by a
+``[BLOCKED: ...]`` line (see ``blocked`` and ``blocked_too_large``). The
+provider freezes the result per session id for prefix caching.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional, Set
 
-from . import frontmatter
+from . import _compat, frontmatter
 from .config import Config
 from .index import Index
 from .projects import Project
 from .scopes import Scope
 from .store import GLOBAL, Store, StoreError, stem
+
+logger = logging.getLogger("memory_buckets")
 
 PROFILE = f"{GLOBAL}/profile.md"
 PREFERENCES = f"{GLOBAL}/preferences.md"
@@ -163,6 +168,45 @@ def rules(scope: Scope, config: Config, projects: List[str]) -> str:
     return "\n\n".join([READING, SAVING, where, elsewhere])
 
 
+def blocked(path: str, patterns: List[str]) -> str:
+    """What stands in for a file the threat scan rejected. It names the file and the
+    patterns, never the text, so the model learns the file is bad without reading it.
+    The user still sees (and ``memory_read`` still returns) the real file, so the model
+    is told to pass the problem on rather than fetch the file to fix it."""
+    return f"[BLOCKED: {path} matched {', '.join(patterns)}; tell the user to fix or delete it]"
+
+
+def blocked_too_large(path: str, window: int) -> str:
+    """What stands in for a file longer than the scanner reads at once, so not one
+    that was scanned and passed. Like ``blocked`` it names the file, never the text,
+    and the real file stays readable."""
+    return f"[BLOCKED: {path} is over the {window}-character threat-scan window; tell the user to fix or delete it]"
+
+
+def _screened(path: str, text: str) -> str:
+    """``text`` as it may enter the prompt: unchanged, or a ``blocked`` line if it
+    matches a threat pattern or is longer than the scanner reads. Hand edits and
+    synced files never pass the write-time scan in ``tools``, so the prompt is
+    checked here as well."""
+    window = _compat.scan_window_chars
+    if window is not None and len(text) > window:
+        # The scanner truncates its input to ``window`` characters, so the tail of a
+        # longer file would enter the prompt unchecked, and no slicing closes that:
+        # the patterns accept unbounded filler words, so a crafted match can span
+        # any cut. The tools cap writes at store.MAX_FILE_BYTES, well under the
+        # window, so a longer file was hand-edited or synced in, never written by
+        # them. Refuse it whole rather than inline what was never fully checked.
+        logger.warning("memory-buckets: %s is over the %s-character threat-scan window; keeping it out of the system prompt",
+                       path, window)
+        return blocked_too_large(path, window)
+    patterns = _compat.scan_threats(text)
+    if not patterns:
+        return text
+    logger.warning("memory-buckets: %s matched threat pattern(s) %s; keeping it out of the system prompt",
+                   path, ", ".join(patterns))
+    return blocked(path, patterns)
+
+
 def _body(store: Store, path: str) -> Optional[str]:
     try:
         text = store.read(path)["content"]
@@ -173,7 +217,7 @@ def _body(store: Store, path: str) -> Optional[str]:
     except frontmatter.FrontmatterError:
         body = text
     body = body.strip()
-    return body or None
+    return _screened(path, body) if body else None
 
 
 def _profile_state(store: Store, path: str) -> str:
@@ -312,7 +356,7 @@ def build(
     ]
     if scope.project:
         defaults.sort(key=lambda pd: (not pd[0].startswith(f"{scope.project}/"), pd[0]))
-    listing = [f"- {p}: {d}" if d else f"- {p}" for p, d in defaults]
+    listing = [f"- {p}: {_screened(p, d)}" if d else f"- {p}" for p, d in defaults]
     has_inbox = any(p == INBOX for p, _ in listing_files)
 
     def render(shown, kept, dropped):

@@ -178,7 +178,6 @@ class ToolsTest(StoreCase):
         self.assertEqual(fm.get("sources"), ["telegram@*"])
 
     def test_every_edit_stamps_edited_at(self):
-        import re
         from unittest import mock
         stamp_re = r"(?m)^edited_at: \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$"
         self.assertNotIn("edited_at", self.content("global/topics/nix.md"))
