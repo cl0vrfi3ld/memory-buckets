@@ -20,14 +20,16 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import _compat
 from . import config as config_mod
-from . import inbox, migrate, projects, scopes, snapshot, tools
+from . import credentials, inbox, migrate, projects, scopes, snapshot, tools
 from ._compat import (TUI_PLATFORMS, MemoryProvider, RecallStatus, spawn_context_thread, status_muted,
                       tui_status_callback)
 from .embeddings import make_embedder, min_similarity
@@ -92,6 +94,11 @@ class MemoryBucketsProvider(MemoryProvider):
         self._embed_again = False
         self._embed_thread = None
         self._shut = False
+        # queue_prefetch runs on Hermes's executor, which can outlive shutdown(): count the
+        # calls in flight so shutdown can wait for them (the event is set while none run).
+        self._prefetching = 0
+        self._prefetch_idle = threading.Event()
+        self._prefetch_idle.set()
 
     # -- identity and availability -----------------------------------------------
 
@@ -150,15 +157,21 @@ class MemoryBucketsProvider(MemoryProvider):
 
     @_traced
     def shutdown(self) -> None:
-        # Stop the embedding worker before closing SQLite: closing a connection another
-        # thread is using can crash the interpreter.
-        self._shut = True
+        # Stop the embedding worker and any queue_prefetch before closing SQLite: closing a
+        # connection another thread is using can crash the interpreter. Setting _shut under
+        # the lock means a prefetch either is counted before we look or never starts.
+        with self._lock:
+            self._shut = True
+        deadline = time.monotonic() + 10
         worker = self._embed_thread
         if worker is not None and worker.is_alive():
-            worker.join(timeout=10)
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
             if worker.is_alive():
                 logger.warning("memory-buckets: embedding worker still running at shutdown; leaving the index open")
                 return
+        if not self._prefetch_idle.wait(timeout=max(0.0, deadline - time.monotonic())):
+            logger.warning("memory-buckets: prefetch still running at shutdown; leaving the index open")
+            return
         if self.index is not None:
             self.index.close()
 
@@ -288,9 +301,21 @@ class MemoryBucketsProvider(MemoryProvider):
             except Exception:
                 logger.warning("memory-buckets: prefetch hints failed", exc_info=True)
                 hints = []
-        if hints:
-            self._last_recall = len(hints)
-            lines = [f"- {path}: {desc}" if desc else f"- {path}" for path, desc, _ in hints]
+        lines = []
+        for path, desc, _ in hints:
+            if not desc:
+                lines.append(f"- {path}")
+                continue
+            # A hint description enters the model's context exactly like a listing
+            # line, so it gets the same screen. A blocked one is dropped rather
+            # than shown (the warning is logged in _screened): this whole block
+            # invites memory_read, and the model must not be nudged towards a
+            # file the scan rejected.
+            shown = snapshot._screened(path, desc)
+            if not shown.startswith("[BLOCKED:"):
+                lines.append(f"- {path}: {shown}")
+        if lines:
+            self._last_recall = len(lines)
             parts.append("Memory files that may be relevant to this message. Read them with memory_read if they could help "
                          "you answer:\n" + "\n".join(lines))
         if state.nudge_due and not scope.read_only:
@@ -301,6 +326,11 @@ class MemoryBucketsProvider(MemoryProvider):
     @_traced
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         if self.index is not None and self.index.embedder is not None:
+            with self._lock:
+                if self._shut:  # the index may already be closed
+                    return
+                self._prefetching += 1
+                self._prefetch_idle.clear()
             try:
                 self.index.reconcile()
                 if self._embed_running.acquire(blocking=False):
@@ -310,6 +340,11 @@ class MemoryBucketsProvider(MemoryProvider):
                         self._embed_running.release()
             except Exception:
                 logger.warning("memory-buckets: background embedding failed", exc_info=True)
+            finally:
+                with self._lock:
+                    self._prefetching -= 1
+                    if not self._prefetching:
+                        self._prefetch_idle.set()
 
     def recall_status(self) -> Optional[RecallStatus]:
         return RecallStatus("memory-buckets", self._last_recall) if self._last_recall else None
@@ -421,13 +456,35 @@ class MemoryBucketsProvider(MemoryProvider):
 
     @_traced
     def on_memory_write(self, action: str, target: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
-        """Mirror built-in memory writes into global/inbox.md while built-in memory is still on."""
+        """Mirror built-in memory writes into global/inbox.md while built-in memory is still on.
+        A matched or oversize entry is skipped with a warning and not mirrored."""
         if self.store is None:
             return
         entry = f"[{target} {action}] {content}".strip()
         previous = (metadata or {}).get("previous_content")
         if action in ("replace", "remove") and previous:
             entry += f" (was: {previous})"
+        window = _compat.scan_window_chars
+        patterns = _compat.scan_threats(entry)
+        if patterns or (window is not None and len(entry) > window):
+            # A matched or oversize built-in entry must not be copied into the store,
+            # not even as a placeholder: the inbox is a real file, and anything
+            # written to it must be text a later read can trust. For `add` the
+            # original stays in built-in memory for the user to review by hand; for
+            # `replace` and `remove` the previous content has already left it, and
+            # this warning is the only record.
+            logger.warning("memory-buckets: kept a built-in memory %s on %s out of the inbox "
+                           "(matched %s or over the threat-scan window)", action, target,
+                           ", ".join(patterns) or "an oversize entry")
+            return
+        families = credentials.scan(entry)
+        if families:
+            # The same rule as the write tools, on the one write path that skips them: a
+            # credential pasted into built-in memory must not be copied into the synced
+            # store, not even as a placeholder (the threat branch above says why).
+            logger.warning("memory-buckets: kept a built-in memory %s on %s out of the inbox "
+                           "(it looks like a credential: %s)", action, target, ", ".join(families))
+            return
         try:
             inbox.append(self.store, f"mirrored from built-in memory {date.today().isoformat()}", [entry],
                          source=f"builtin:{self._state().platform}")

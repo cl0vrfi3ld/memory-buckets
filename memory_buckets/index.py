@@ -180,9 +180,17 @@ def _embed_text(rel: str, ord_: int, heading: str, text: str, description: str, 
 
 
 def _active_tokens(query: str) -> List[str]:
-    """Query tokens worth matching on: stopwords dropped, bare single-digit
-    numbers dropped from anything multi-word, order-preserving dedupe."""
-    tokens = re.findall(r"\w+", query.lower())[:32]
+    """Query tokens worth matching on: head and tail sampling first, so a key
+    term at the end of a long paste survives, then stopwords dropped, bare
+    single-digit numbers dropped from anything multi-word, order-preserving
+    dedupe."""
+    all_tokens = re.findall(r"\w+", query.lower())
+    # Head/tail sampling mirrors the embedder's own query pre-truncation in
+    # static_model.py, so the FTS leg sees the same beginning and end of a
+    # long message the vector leg does. Order-preserving dedupe collapses the
+    # head/tail overlap; for short queries the sampled list is the whole
+    # query, so behaviour is unchanged.
+    tokens = list(dict.fromkeys(all_tokens[:32] + all_tokens[-32:]))
     if not tokens:
         return []
     content_tokens = [t for t in tokens if t not in _STOPWORDS]
