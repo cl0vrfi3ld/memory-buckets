@@ -368,7 +368,11 @@ def _format_doc(path: str, desc: str, aliases: List[str], body: str) -> str:
 
 def filler_corpus(count: int = FILLER_FILES) -> Dict[str, Tuple[str, List[str], str]]:
     """Deterministic distractor files: every subject crossed with every facet, so the same
-    store (and the same numbers) come out of every run. ``count`` is at most 400."""
+    store (and the same numbers) come out of every run. ``count`` above the subject times
+    facet grid size raises ``ValueError``: beyond it subjects wrap and paths collide."""
+    limit = len(FILLER_SUBJECTS) * len(FILLER_FACETS)
+    if count > limit:
+        raise ValueError(f"filler_corpus holds at most {limit} unique files, got {count}")
     out: Dict[str, Tuple[str, List[str], str]] = {}
     for i in range(count):
         subject = FILLER_SUBJECTS[i % len(FILLER_SUBJECTS)]

@@ -72,6 +72,11 @@ class CorpusTest(unittest.TestCase):
         self.assertFalse(set(first) & set(bench.full_corpus()))
         self.assertTrue(all(path.startswith("global/") for path in first))
 
+    def test_filler_rejects_more_than_the_subject_facet_grid(self):
+        # Past 400 subjects wrap and paths collide, so the dict would quietly shrink.
+        with self.assertRaises(ValueError):
+            bench.filler_corpus(bench.FILLER_FILES + 1)
+
 
 class LargeStoreTest(unittest.TestCase):
     def setUp(self):
