@@ -1,4 +1,5 @@
 import os
+import threading
 import unittest
 from unittest import mock
 
@@ -236,6 +237,47 @@ class SnapshotTest(StoreCase):
         self.assertIn("- Sam, they/them", snap.text)
         self.assertIn("memory_read when they are relevant: global/preferences.md", snap.text)
         self.assertNotIn("global/preferences.md", snap.paths)
+
+    def test_a_profile_that_cannot_fit_is_truncated(self):
+        # Issue 17: the 48 KiB write cap allows a 40 KB profile, and the block runs
+        # on every turn. An always-kept file keeps its head and ends with a line
+        # saying how much was cut; the project header stays whole.
+        body = "".join(f"- profile line {i}: a durable fact about Sam\n" for i in range(1000))
+        self.put("global/profile.md", doc("profile", "Who the user is", body))
+        self.index.reconcile()
+        snap = self.build(snapshot_max_chars=12000)
+        self.assertLessEqual(len(snap.text), 12000)
+        section = self.section(snap.text, "global/profile.md")
+        self.assertIn("- profile line 0:", section, "the head is kept")
+        self.assertNotIn("- profile line 999:", section, "the tail is not")
+        self.assertIn("characters are not shown", section)
+        self.assertIn("the rest of global/profile.md.", section)
+        self.assertIn("global/profile.md", snap.paths)
+        # The header is never cut, even in a project session with an oversized profile.
+        hermes = Project(bucket="proj-1", slug="proj-1", name="proj-1", folders=("/src/proj-1",))
+        text = self.build(project="proj-1", hermes=hermes, snapshot_max_chars=12000).text
+        self.assertIn("Folders: /src/proj-1", text)
+
+    def test_a_budget_smaller_than_the_cut_note_never_hangs(self):
+        # Issue 17 regression: with a budget that can't fit the cut note, the
+        # retry pass computed a negative keep and _cut_body never returned. The
+        # empty-head path must return the note instead. Each call runs behind a
+        # join timeout so a regression fails the test rather than hanging it.
+        body = "\n".join(f"line {i}" for i in range(1000))
+        for budget in list(range(0, 130)) + [500, 1000, 5000, 6001]:
+            with self.subTest(budget=budget):
+                result = {}
+                thread = threading.Thread(
+                    target=lambda: result.update(text=snapshot._cut_body(body, "global/profile.md", budget)),
+                    daemon=True,
+                )
+                thread.start()
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive(), f"_cut_body hung at budget {budget}")
+                self.assertIn("text", result, f"_cut_body returned nothing at budget {budget}")
+                self.assertTrue(result["text"])
+                self.assertIn("global/profile.md", result["text"])
+                self.assertIn("not shown", result["text"])
 
     def test_listing_fills_the_cap(self):
         # Regression: the trim assumed ~40 characters a line and cut the listing far below the cap.

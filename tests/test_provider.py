@@ -691,7 +691,9 @@ class ProviderTest(StoreCase):
 
     def test_nothing_to_set_up_and_uninitialised(self):
         p = prov.MemoryBucketsProvider()
-        self.assertEqual(p.get_config_schema(), [])
+        # The setup schema is static (it describes config.py, not the store), so an
+        # uninitialised provider reports it; the full shape is tests/test_setup.py's.
+        self.assertEqual(len(p.get_config_schema()), 12)
         self.assertEqual(p.system_prompt_block(), "")
         self.assertEqual(json.loads(p.handle_tool_call("memory_list", {}))["ok"], False)
 

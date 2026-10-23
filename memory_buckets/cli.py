@@ -59,7 +59,7 @@ def _open(args):
     home = _hermes_home()
     root = Path(cfg.store_path or home / "memory-buckets").expanduser()
     embedder = make_embedder(cfg, root)
-    store = Store(root)
+    store = Store(root, history_keep=cfg.history_keep, history_days=cfg.history_days)
     return cfg, home, store, Index(store, embedder)
 
 
@@ -99,6 +99,12 @@ def cmd_status(args) -> int:
             _out(f"embeddings  built-in {static_model.MODEL_NAME}: not ready ({err})")
     problems += _status_hermes(home)
     _status_projects(store)
+    loose = store.loose_modes()
+    if loose:
+        first, mode = loose[0]
+        _out(f"permissions {len(loose)} path(s) in the store can be read by group or other "
+             f"(first: {'the store root' if first == '.' else first}, mode {mode:04o}); "
+             "run `hermes memory-buckets migrate` to make them private")
     leftovers = migrate.leftover_indexes(store)
     if leftovers:
         _out(f"migration   index.md left over in: {', '.join(leftovers)}; run `hermes memory-buckets migrate`")
@@ -110,8 +116,53 @@ def cmd_status(args) -> int:
     waiting = _inbox_entries(store)
     if waiting:
         _out(f"inbox       {inbox.PATH}: {_entries(waiting)} waiting to be sorted")
+    _status_skipped(store)
     index.close()
     return 1 if problems else 0
+
+
+def _plural(n: int, singular: str, plural: str = "") -> str:
+    return f"{n} {singular if n == 1 else plural or singular + 's'}"
+
+
+def _status_skipped(store: Store) -> None:
+    """What the agent can't see or edit in the store. Obsidian lets you create files the
+    path rules reject, and they'd otherwise vanish without a word. Not a fault, so it
+    doesn't fail the command; ``lint`` has the per-file detail."""
+    # A leftover project index.md has its own `migration` line above.
+    leftovers = {f"{d}/index.md" for d in migrate.leftover_indexes(store)}
+    skipped = [(path, why) for path, why in store.iter_skipped() if path not in leftovers]
+    outside = sum(1 for _, why in skipped if why == "path")
+    links = len(skipped) - outside
+    if outside:
+        _out(f"ignored     {_plural(outside, 'file')} outside the path rules, so the agent can't see "
+             f"{'it' if outside == 1 else 'them'}; run `hermes memory-buckets lint`")
+    if links:
+        _out(f"ignored     {_plural(links, 'symlink')} (never followed); run `hermes memory-buckets lint`")
+    broken = 0
+    for path in store.iter_paths():
+        try:
+            text = (store.memories / path).read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            continue  # gone since the walk; lint reports real read errors
+        if _check_frontmatter(text, path)[1] is not None:
+            broken += 1
+    if broken:
+        _out(f"frontmatter {_plural(broken, 'file')} with invalid frontmatter, so tools won't edit "
+             f"{'it' if broken == 1 else 'them'} until it's fixed; run `hermes memory-buckets lint`")
+
+
+def _check_frontmatter(text: str, rel: str):
+    """``(body, error)``: ``error`` is the reason the file's frontmatter is unusable, else None.
+    The one test both ``lint`` and ``status`` apply."""
+    try:
+        fm, body = frontmatter.parse(text)
+        if not fm.entries:
+            raise frontmatter.FrontmatterError("no frontmatter")
+        frontmatter.validate(fm, stem(rel))
+    except frontmatter.FrontmatterError as err:
+        return text, err
+    return body, None
 
 
 def _status_hermes(home: Path) -> int:
@@ -335,14 +386,9 @@ def lint(store: Store) -> List[str]:
             if len(data) > MAX_FILE_BYTES:
                 problems.append(f"{rel}: {len(data)} bytes, over the {MAX_FILE_BYTES}-byte cap")
             text = data.decode("utf-8", errors="replace")
-            try:
-                fm, body = frontmatter.parse(text)
-                if not fm.entries:
-                    raise frontmatter.FrontmatterError("no frontmatter")
-                frontmatter.validate(fm, stem(rel))
-            except frontmatter.FrontmatterError as err:
+            body, err = _check_frontmatter(text, rel)
+            if err is not None:
                 problems.append(f"{rel}: bad frontmatter ({err}); tools won't edit it until it's fixed")
-                body = text
             scope = rel.split("/", 1)[0]
             names[(scope, stem(rel))].append(rel)
             stems[scope].add(stem(rel))
@@ -417,7 +463,7 @@ def cmd_migrate(args) -> int:
     for step in steps:
         _out(("would: " if args.dry_run else "") + step.describe())
     backup = store.root / migrate.BACKUP_DIR
-    if not args.dry_run and backup.exists() and any(s.action not in ("skip", "tidy", "remove") for s in steps):
+    if not args.dry_run and backup.exists() and any(s.action not in ("skip", "tidy", "remove", "tighten") for s in steps):
         _out(f"originals kept in {backup}")
     return 1 if any(s.action == "skip" for s in steps) else 0
 
@@ -492,6 +538,9 @@ def cmd_fetch_model(args) -> int:
     if found is not None and not args.force:
         _out(f"built-in model already available at {found}")
         return 0
+    # fetch mkdirs <root>/.models with parents, which would create the root itself at
+    # the umask's mode; every other creation path goes through the store's ensure_dir.
+    store.ensure_dir(store.root)
     try:
         dest = static_model.fetch(store.root, progress=lambda msg: _out(msg), timeout=120.0)
     except (OSError, static_model.ModelUnavailable) as err:
@@ -570,6 +619,40 @@ def cmd_import_prompt(args) -> int:
     return 0
 
 
+def cmd_history(args) -> int:
+    """Versions of one memory file recorded in .history/, newest first."""
+    _, _, store, _ = _open(args)
+    try:
+        entries = store.history(args.path)
+    except StoreError as err:
+        _out(f"error: {err.message}")
+        return 1
+    if not entries:
+        _out(f"no history for {args.path}")
+        return 1
+    for e in entries:
+        _out(f"{e['timestamp']}  {e['version']}  {e['bytes']} bytes")
+    _out("restore one with: hermes memory-buckets restore PATH [VERSION]")
+    return 0
+
+
+def cmd_restore(args) -> int:
+    _, _, store, _ = _open(args)
+    try:
+        got = store.restore(args.path, args.version)
+    except StoreError as err:
+        _out(f"error: {err.message}")
+        return 1
+    if got["unchanged"]:
+        _out(f"{args.path} already holds version {got['version']} (recorded {got['timestamp']})")
+    elif got["recreated"]:
+        _out(f"recreated {args.path} from recorded version {got['version']} (recorded {got['timestamp']})")
+    else:
+        _out(f"restored {args.path} to version {got['version']} (recorded {got['timestamp']}); "
+             "the content it replaced is itself recorded")
+    return 0
+
+
 # -- argparse ----------------------------------------------------------------------
 
 def _add_commands(parser: argparse.ArgumentParser) -> None:
@@ -608,12 +691,19 @@ def _add_commands(parser: argparse.ArgumentParser) -> None:
     p.set_defaults(bm_func=cmd_import)
     p = sub.add_parser("import-prompt", help="Print the prompt that asks the agent to sort the imported memory in global/inbox.md")
     p.set_defaults(bm_func=cmd_import_prompt)
+    p = sub.add_parser("history", help="List the recorded versions of one memory file (.history/)")
+    p.add_argument("path", help="Memory path, e.g. global/topics/nix.md")
+    p.set_defaults(bm_func=cmd_history)
+    p = sub.add_parser("restore", help="Write a recorded version of one memory file back (itself recorded)")
+    p.add_argument("path", help="Memory path, e.g. global/topics/nix.md")
+    p.add_argument("version", nargs="?", help="Version from `history`; default: the newest recorded version")
+    p.set_defaults(bm_func=cmd_restore)
 
 
 def _dispatch(args) -> int:
     func = getattr(args, "bm_func", None)
     if func is None:
-        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, import-prompt (--help for more)", file=sys.stderr)
+        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, import-prompt, history, restore (--help for more)", file=sys.stderr)
         return 2
     return func(args)
 

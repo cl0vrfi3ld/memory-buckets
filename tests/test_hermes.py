@@ -45,7 +45,7 @@ class HermesIntegrationTest(unittest.TestCase):
         return json.loads(lines[-1][len("PROBE-RESULT "):])
 
     def test_real_hermes_loads_the_plugin_directory(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             home = Path(tmp) / "hermes-home"
             (home / "plugins").mkdir(parents=True)
             shutil.copytree(PLUGIN_DIR, home / "plugins/memory-buckets", ignore=IGNORE)
@@ -57,7 +57,7 @@ class HermesIntegrationTest(unittest.TestCase):
 
     @unittest.skipUnless(CAN_PIP, "needs pip and hatchling (uv sync installs them)")
     def test_real_hermes_finds_the_pip_install_by_entry_point(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             src, site, home = Path(tmp) / "src", Path(tmp) / "site", Path(tmp) / "hermes-home"
             shutil.copytree(PLUGIN_DIR, src, ignore=IGNORE)  # pip builds in-tree; keep the repo clean
             home.mkdir()  # no plugins/ directory: only the entry point can find it
@@ -97,6 +97,14 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertEqual(out["diagnose_exit"], 0)
         self.assertFalse(out["pm_member"], "plugin.yaml needs python_runtime: external")
         self.assertEqual(out["slash"], [], "the plugin registers no slash commands")
+        self.assertEqual(out["schema_keys"], [
+            "readonly", "cron_writes", "nudge_interval", "snapshot_max_chars",
+            "prefetch_min_similarity", "prefetch_max_hints", "search_limit", "project_boost",
+            "store_path", "embeddings.backend", "embeddings.auto_download",
+            "embeddings.local_model_dir"])
+        self.assertTrue(out["save_config_kept"],
+                        "save_config wrote plugins.memory-buckets through Hermes's writer "
+                        "and left the unrelated keys alone")
         self.assertTrue(out["slash_skill"], "/sort-imports via skills.external_dirs")
         self.assertTrue(out["tidy_slash"], "/tidy-memory via skills.external_dirs")
         self.assertEqual(out["project_scope"]["project"], "proj-1")

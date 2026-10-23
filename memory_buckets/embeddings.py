@@ -106,7 +106,11 @@ class StaticEmbedder:
 def make_embedder(cfg, store_root: Path, *, spawn: Optional[Callable[..., threading.Thread]] = None):
     """The built-in model, or None when ``embeddings.backend`` is ``off``."""
     backend = (cfg.embeddings.backend or "local").strip().lower()
-    if backend == "off":
+    if backend == "off" or backend in ("0", "false", "no"):
+        # `hermes config set ... embeddings.backend off` writes a YAML boolean (Hermes coerces
+        # the word first, and a hand-edited unquoted `off` parses as one too), which config.py
+        # stringifies to "False". The user asked for keyword search, not a silent fallback to
+        # the built-in model, so every spelling of false means off.
         return None
     if backend not in ("local", "auto"):  # "auto" was the default while an HTTP backend existed
         logger.warning("memory-buckets: embeddings.backend %r isn't supported (local or off); using the built-in model",
