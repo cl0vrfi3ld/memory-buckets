@@ -7,10 +7,15 @@ Understood, per key:
 - ``key: [a, "b, c"]``: an inline list of scalars.
 - ``key:`` followed by indented ``- item`` lines: a block list.
 - ``key:`` alone: an empty string.
+- ``# comment``: a whole line starting with ``#`` in the first column. It isn't
+  a key, so it's invisible to ``get``, ``keys`` and ``pairs``, but it stays where
+  it was when the file is rendered again. (Obsidian users and hand editors write
+  these; rejecting the file left the tools unable to edit it.)
 
-Anything else under a key (nested maps, multi-line strings, comments) is kept as
-raw lines. Its value reads as ``None``, and it's re-emitted verbatim unless the
-key is set. Key order is always preserved. Line endings are normalised to LF.
+Anything else under a key (nested maps, multi-line strings, indented or trailing
+comments) is kept as raw lines. Its value reads as ``None``, and it's re-emitted
+verbatim unless the key is set. Key order is always preserved. Line endings are
+normalised to LF.
 """
 
 from __future__ import annotations
@@ -37,13 +42,18 @@ class Entry:
     value: Value
     raw: Optional[List[str]] = None  # original lines; None once the value is set
 
+    @property
+    def is_comment(self) -> bool:
+        """A whole-line ``#`` comment, stored with an empty key and its line in ``raw``."""
+        return not self.key
+
 
 @dataclass
 class Frontmatter:
     entries: List[Entry] = field(default_factory=list)
 
     def keys(self) -> List[str]:
-        return [e.key for e in self.entries]
+        return [e.key for e in self.entries if not e.is_comment]
 
     def get(self, key: str, default: Value = None) -> Value:
         for e in self.entries:
@@ -63,7 +73,7 @@ class Frontmatter:
         self.entries.append(Entry(key, value))
 
     def pairs(self) -> List[Tuple[str, Value]]:
-        return [(e.key, e.value) for e in self.entries]
+        return [(e.key, e.value) for e in self.entries if not e.is_comment]
 
 
 def _has_unescaped_quote(inner: str, quote: str) -> bool:
@@ -175,6 +185,9 @@ def parse(text: str) -> Tuple[Frontmatter, str]:
         if current is None:
             return
         key, rest, cont, raw = current
+        if not key:  # a comment: nothing to interpret
+            fm.entries.append(Entry("", None, raw))
+            return
         ok, value = _interpret(rest, cont)
         fm.entries.append(Entry(key, value if ok else None, raw))
 
@@ -185,7 +198,13 @@ def parse(text: str) -> Tuple[Frontmatter, str]:
             if m.group(1) in fm:
                 raise FrontmatterError(f"duplicate frontmatter key {m.group(1)!r}")
             current = (m.group(1), m.group(2), [], [line])
-        elif current is not None and (not line.strip() or line[0].isspace()):
+        elif line.startswith("#"):
+            flush()
+            current = ("", None, [], [line])
+        elif current is not None and (not line.strip() or (line[0].isspace() and current[0])):
+            # A comment takes trailing blank lines (so an untouched file renders
+            # byte for byte) but not indented ones. Those belong to the key above
+            # it; swallowing them here would hide a list item, so they stay an error.
             current[2].append(line)
             current[3].append(line)
         elif not line.strip():

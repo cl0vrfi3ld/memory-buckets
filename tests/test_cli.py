@@ -231,6 +231,11 @@ class CliTest(StoreCase):
         self.assertIn("global/index.md: not a memory path", out)
         self.assertNotIn("migrate", out)
 
+    def test_a_frontmatter_comment_is_not_a_problem(self):
+        self.put("global/topics/nix.md", doc("nix", "Nix", extra="# written in Obsidian\n"))
+        self.assertEqual(self.run_cli("lint")[1], "0 problem(s)\n")
+        self.assertNotIn("frontmatter ", self.run_cli("status")[1])
+
     def test_inbox_messages_count_entries(self):
         self.put("global/inbox.md", doc("inbox", inbox.DESCRIPTION, "## imported\n"))
         self.assertNotIn("inbox ", self.run_cli("status")[1])
