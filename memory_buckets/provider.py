@@ -149,7 +149,7 @@ class MemoryBucketsProvider(MemoryProvider):
             return
         try:
             for step in migrate.run(self.store):
-                level = logging.WARNING if step.action == "skip" else logging.INFO
+                level = logging.WARNING if step.action in ("skip", "tighten") else logging.INFO
                 logger.log(level, "memory-buckets: migration: %s", step.describe())
         except (StoreError, OSError) as err:  # never fail startup; the next session tries again
             logger.warning("memory-buckets: migration didn't run (%s); `hermes memory-buckets migrate` retries it",
