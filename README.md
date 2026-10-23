@@ -380,8 +380,10 @@ you add is outside the plugin: it uploads whatever you point it at, in plain Mar
 ### What is written to the logs
 
 Blocked-text errors and log lines name the file and the pattern IDs, and never repeat
-the text that was blocked. The exception is `MEMORY_BUCKETS_TRACE=1`, which logs the
-first 300 characters of the arguments of every Hermes hook. That includes your messages
+the text that was blocked. The exception is the `MEMORY_BUCKETS_TRACE` environment
+variable. Any non-empty value turns it on (`MEMORY_BUCKETS_TRACE=0` too; unset it to turn
+it off). It logs the first 300 characters of the arguments of every Hermes hook. That
+includes your messages
 and the body of memory writes, so leave it off outside debugging.
 
 ### Where files live
@@ -404,8 +406,9 @@ Memory is plain Markdown that gets synced and read back by the model, so the wri
 refuse to save a credential. `memory_write`, `memory_append` and `memory_str_replace`
 return `secret_detected` and tell the agent to note where the secret is kept instead.
 The check is a pattern list: AWS key IDs, `sk-` keys, GitHub, GitLab and Slack tokens,
-PEM private keys, and `password:` or `token=` style assignments whose value looks like a
-credential. It misses other formats, it refuses some harmless lines such as
+PEM private keys, and assignments such as `password:`, `passwd=`, `token=`, `secret:` or
+`api_key` (also `api-key`) whose value looks like a credential. It misses other formats,
+it refuses some harmless lines such as
 `token = lexer2` or `password: min-12chars`, and it does not look at files you write by
 hand. [SECURITY.md](SECURITY.md#what-each-check-does-and-does-not-do) has the detail.
 
@@ -418,11 +421,21 @@ path is loose.
 
 ### Deleting a memory
 
-`memory_delete` removes the file from `memories/` and from the search index. It does not
-remove the copy in `.history/`, and nothing does until that same path records another
-version. To erase a note, also delete its folder under `.history/` (for
-`global/topics/nix.md`, that is `.history/global/topics/nix.md/`). Backups and synced
-copies you made keep it until you delete them too.
+`memory_delete` removes the file from `memories/` and its rows from the search index.
+That does not wipe the text from disk: SQLite does not overwrite freed pages, so pieces
+of the note can stay inside `.index/memory.sqlite` (and its `-wal` file while a session
+has it open). The copy in `.history/` also stays, and nothing removes it until that same
+path records another version.
+
+To erase a note for good, end any running session, then:
+
+1. Delete its folder under `.history/` (for `global/topics/nix.md`, that is
+   `.history/global/topics/nix.md/`).
+2. Delete `.index/`. It is a cache and rebuilds on the next search or turn, so this costs
+   nothing but a rebuild.
+3. Delete the note's entry under `_backup/` if a migration kept an original.
+
+Backups and synced copies you made keep the note until you delete them too.
 
 ## Syncing and backups
 
@@ -474,6 +487,12 @@ This was checked against the source of hermes-agent at commit
   default store is inside it, so the zip holds the whole store directory: `memories/`,
   `.history/`, `.index/`, `_backup/` and `.models/`. The index and the model are caches,
   so the zip is larger than it needs to be.
+- **What is left out.** Hermes skips any file with a folder named `backups`,
+  `checkpoints`, `venv`, `.venv`, `site-packages`, `node_modules`, `.cache` or `.git`
+  (and a few more) anywhere in its path. A project bucket or a topic folder with one of
+  those names is missing from the zip. Hermes lists excluded directories at the end of
+  its output but does not say they hold notes. Rename the folder, or copy `memories/`
+  yourself.
 - **A store somewhere else.** With `store_path` set, the plugin tells Hermes about it
   (`backup_paths()`). Hermes stores it in the zip under `_external/` only if it is
   inside your home directory. A path outside your home directory is skipped, and Hermes
