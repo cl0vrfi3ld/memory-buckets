@@ -5,10 +5,12 @@ Every result carries ``ok``. Errors are ``{"ok": false, "error": {"code", "messa
 - ``conflict`` adds ``current: {path, version, content}`` so the agent can merge and retry;
 - ``out_of_scope`` adds ``allowed_prefixes``; the add-only refusal also adds ``add_only_buckets``;
 - ``threat_detected`` adds ``patterns``, the IDs of the Hermes threat patterns the
-  content matched.
+  content matched;
+- ``secret_detected`` adds ``patterns``, the credential families (``credentials.py``)
+  the content matched.
 
 The contract codes come from ``store.py``. The tool layer adds ``out_of_scope``,
-``read_only``, ``invalid_args`` and ``threat_detected``.
+``read_only``, ``invalid_args``, ``threat_detected`` and ``secret_detected``.
 
 Write rights: a session writes fully inside ``scope.write_prefixes``.
 Into another known bucket it may only append to existing files
@@ -23,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from . import _compat, frontmatter, inbox
+from . import _compat, credentials, frontmatter, inbox
 from .config import Config
 from .index import Index
 from .scopes import Scope
@@ -255,7 +257,7 @@ def _body_text(body: str) -> str:
 
 
 def _checked(path: str, content: str) -> bytes:
-    """``check_content`` plus the threat scan, on the whole rendered file: the memory
+    """``check_content`` plus the credential and threat scans, on the whole rendered file: the memory
     files inlined into the system prompt are the ones an injection wants to reach, and
     a session that has just read a hostile page can write to ``global/``. Scanning the
     result rather than the arguments covers all three edit tools, and the frontmatter
@@ -263,6 +265,20 @@ def _checked(path: str, content: str) -> bytes:
     match in place is refused too; ``memory_delete`` never scans, so a poisoned file
     can still be removed."""
     data = check_content(path, content)
+    # Credentials first: Hermes's own ``hardcoded_secret`` pattern also fires on a quoted
+    # value, and its message below talks about injection, which would tell the agent the
+    # wrong thing. Local and Hermes-free, so it runs wherever the plugin does.
+    families = credentials.scan(content)
+    if families:
+        # Names the families, never quotes the content, for the same reason as below.
+        raise StoreError(
+            "secret_detected",
+            f"{path} was not saved: it looks like it contains a credential ({', '.join(families)}). "
+            "Memory is plain Markdown that gets synced and offered back to the model, so it can't hold "
+            "credentials. Note where the user keeps it instead (for example 'GitHub token: in the "
+            "password manager'), then try again.",
+            patterns=families,
+        )
     patterns = _compat.scan_threats(content)
     if patterns:
         # Names the patterns, never quotes the content: the error goes back into the
@@ -282,7 +298,11 @@ def _mutate(ctx: Context, path: str, if_version: Optional[str],
             create: bool = False) -> Dict[str, Any]:
     validate_path(path)
     ctx.scope.check_write(path, append=append, create=create)
-    result = ctx.store.update(path, lambda current: _checked(path, edit(current)), if_version)
+    # An append never destroys content, so it isn't recorded in .history (an
+    # append's frontmatter rewrite still touches sources and edited_at, but the
+    # body only grows); overwrites and str_replace edits are.
+    result = ctx.store.update(path, lambda current: _checked(path, edit(current)), if_version,
+                              record_history=not append)
     if ctx.on_write:
         ctx.on_write(path)
     if ctx.scope.cross_project_write(path):

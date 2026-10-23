@@ -53,6 +53,7 @@ class HermesIntegrationTest(unittest.TestCase):
             self.check(out)
             self.assertTrue(out["skill_ok"], "skill_view('memory-buckets:sort-imports')")
             self.assertEqual(out["skill_name"], "memory-buckets:sort-imports")
+            self.assertTrue(out["tidy_ok"], "skill_view('memory-buckets:tidy-memory')")
 
     @unittest.skipUnless(CAN_PIP, "needs pip and hatchling (uv sync installs them)")
     def test_real_hermes_finds_the_pip_install_by_entry_point(self):
@@ -73,6 +74,7 @@ class HermesIntegrationTest(unittest.TestCase):
             # If this starts failing, Hermes fixed it: drop the fallback in __init__.py.
             self.assertFalse(out["skill_ok"])
             self.assertIsNone(out["skill_name"])
+            self.assertFalse(out["tidy_ok"], "same pruning applies to every bundled skill")
 
     def check(self, out):
         self.assertEqual([d[0] for d in out["discovered"]], ["memory-buckets"])
@@ -96,6 +98,7 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertFalse(out["pm_member"], "plugin.yaml needs python_runtime: external")
         self.assertEqual(out["slash"], [], "the plugin registers no slash commands")
         self.assertTrue(out["slash_skill"], "/sort-imports via skills.external_dirs")
+        self.assertTrue(out["tidy_slash"], "/tidy-memory via skills.external_dirs")
         self.assertEqual(out["project_scope"]["project"], "proj-1")
         self.assertEqual(out["project_scope"]["source"], "hermes-project")
         self.assertEqual(out["project_scope"]["writes"], ["proj-1/", "global/"])

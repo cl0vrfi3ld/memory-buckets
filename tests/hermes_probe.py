@@ -108,6 +108,10 @@ from agent.skill_commands import build_skill_invocation_message, scan_skill_comm
 
 out["slash_skill"] = ("/sort-imports" in scan_skill_commands()
                       and "global/inbox.md" in (build_skill_invocation_message("/sort-imports", "") or ""))
+viewed_tidy = json.loads(skill_view("memory-buckets:tidy-memory"))
+out["tidy_ok"] = bool(viewed_tidy.get("success")) and "You ask before you change anything" in json.dumps(viewed_tidy)
+out["tidy_slash"] = ("/tidy-memory" in scan_skill_commands()
+                     and "You ask before you change anything" in (build_skill_invocation_message("/tidy-memory", "") or ""))
 out["slash"] = sorted(n for n in ("memory-pending", "memory-apply", "memory-reject") if get_plugin_command_handler(n))
 
 # Scoping follows Hermes's own Projects: the project owning the session's cwd names the bucket.
