@@ -25,7 +25,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from . import frontmatter
 from .embeddings import EmbeddingError, StaticEmbedder, dot
-from .store import GLOBAL, Store, scope_of, stem, version
+from .store import GLOBAL, Store, create_private_file, scope_of, stem, version
 
 logger = logging.getLogger("memory_buckets")
 
@@ -223,7 +223,10 @@ class Index:
     def _conn(self) -> sqlite3.Connection:
         con = getattr(self._local, "con", None)
         if con is None:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.store.ensure_dir(self.path.parent)
+            # Pre-created so the database, and the -wal and -shm files SQLite makes from its
+            # mode, are private from the start. The index holds every memory's text.
+            create_private_file(self.path)
             con = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
             try:
                 con.execute("PRAGMA journal_mode=WAL")
