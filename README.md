@@ -245,7 +245,8 @@ patterns (`tools.threat_patterns`, `strict` scope). On a match:
   built-in memory write is never mirrored into `global/inbox.md`.
 
 Matching is heuristic, so harmless text can be blocked; the tests and the docstrings
-carry the detail.
+carry the detail. What the scan and the credential refusal miss is listed in
+[SECURITY.md](SECURITY.md#what-each-check-does-and-does-not-do).
 
 ### Embeddings
 
@@ -337,6 +338,189 @@ and Nix installs without `skills.external_dirs`, paste the prompt printed by
 `hermes memory-buckets import-prompt`. Avoid saving that prompt as a custom skill in
 `~/.hermes/skills/`, as a local copy will shadow updates to the bundled skill.
 
+## Privacy and data handling
+
+What the plugin trusts and what it checks is in [SECURITY.md](SECURITY.md). This section
+covers where your data goes and where it sits on disk.
+
+### Does anything leave my machine?
+
+Two things can leave your machine: one request the plugin makes, and the text Hermes
+sends to your model provider.
+
+1. **The embedding model download.** This is the only network code in the package. It
+   fetches two files, `model.safetensors` and `vocab.txt`, from `huggingface.co`
+   (`minishlab/potion-retrieval-32M`, pinned to one commit). It is a plain HTTPS `GET`
+   with none of your notes in it. Hugging Face can see your IP address and which files
+   you asked for.
+   - When: a plugin-directory install starts the download in the background the first
+     time it needs the model, or you run `hermes memory-buckets fetch-model`. Building
+     the pip package downloads it on the machine that builds it (unless
+     `MEMORY_BUCKETS_BUNDLE_MODEL=0`), and the Nix build downloads it in the build. Once
+     the model is on disk, nothing more is fetched.
+   - Checks: each file's sha256 is compared with the hash pinned in `static_model.py`
+     when it is downloaded, and a mismatch discards the file.
+     `hermes memory-buckets fetch-model --force` also re-checks files already on disk.
+     Loading the model does not re-check the hash, so a copy placed by hand, bundled into
+     the package or taken from `embeddings.local_model_dir` is used as it is.
+   - Turn it off with `embeddings.backend: off` (no model, no download; search is
+     keyword-only and prefetch hints are off) or with `embeddings.auto_download: false`
+     (no background download; get the model with `fetch-model`, a bundled install or
+     `embeddings.local_model_dir`).
+2. **What Hermes sends to your model provider.** The plugin gives Hermes text: the
+   prompt block, prefetch hints, and the results of the `memory_*` tools. Hermes sends
+   that to whichever model provider you have configured, as part of the conversation.
+   With a hosted model, the files the agent reads reach that provider. The plugin
+   cannot change this, and no setting hides one file from the agent. If a note must not
+   go to a hosted model, keep it out of the store or use a local model.
+
+There is no telemetry, and the plugin makes no other request. A sync tool or a backup
+you add is outside the plugin: it uploads whatever you point it at, in plain Markdown.
+
+### What is written to the logs
+
+Blocked-text errors and log lines name the file and the pattern IDs, and never repeat
+the text that was blocked. The exception is `MEMORY_BUCKETS_TRACE=1`, which logs the
+first 300 characters of the arguments of every Hermes hook. That includes your messages
+and the body of memory writes, so leave it off outside debugging.
+
+### Where files live
+
+The store is `$HERMES_HOME/memory-buckets/`, or `store_path` if you set one. Each Hermes
+profile has its own.
+
+| Path | Holds | Mode (Linux, macOS) |
+|---|---|---|
+| `memories/` | your notes | directories `0700`, files `0600` |
+| `.history/` | earlier versions of overwritten and deleted notes (see [below](#restoring-an-earlier-version)) | same |
+| `.index/` | the search cache, which holds chunks of your notes as text | same, including SQLite's journal files |
+| `_backup/<version>/` | originals kept before a store migration | same |
+| `.lock` | an empty lock file | `0600` |
+| `.models/` | the downloaded embedding model, which is public data | not tightened |
+
+### Credentials and permissions
+
+Memory is plain Markdown that gets synced and read back by the model, so the write tools
+refuse to save a credential. `memory_write`, `memory_append` and `memory_str_replace`
+return `secret_detected` and tell the agent to note where the secret is kept instead.
+The check is a pattern list: AWS key IDs, `sk-` keys, GitHub, GitLab and Slack tokens,
+PEM private keys, and `password:` or `token=` style assignments whose value looks like a
+credential. It misses other formats, it refuses some harmless lines such as
+`token = lexer2` or `password: min-12chars`, and it does not look at files you write by
+hand. [SECURITY.md](SECURITY.md#what-each-check-does-and-does-not-do) has the detail.
+
+The modes keep other accounts on the machine out. They are not encryption: root and any
+program running as you can still read the store. On Windows the plugin sets no modes and
+the store keeps the ACLs it inherits from your profile folder. If an older store, a
+restored backup or a sync leaves files looser, the next writable session tightens them,
+or run `hermes memory-buckets migrate`. `hermes memory-buckets status` warns when any
+path is loose.
+
+### Deleting a memory
+
+`memory_delete` removes the file from `memories/` and from the search index. It does not
+remove the copy in `.history/`, and nothing does until that same path records another
+version. To erase a note, also delete its folder under `.history/` (for
+`global/topics/nix.md`, that is `.history/global/topics/nix.md/`). Backups and synced
+copies you made keep it until you delete them too.
+
+## Syncing and backups
+
+### Syncing the store between machines
+
+Sync `memories/` and nothing else. If you use Obsidian, open `memories/` as the vault,
+not the store root.
+
+| Path | Sync it? | Why |
+|---|---|---|
+| `memories/` | yes | the notes |
+| `.index/` | no | a SQLite cache. Two machines writing the same database file conflict. It rebuilds itself, and deleting it loses nothing |
+| `.lock` | no | it only means something on the machine that holds it |
+| `.models/` | no | about 130 MB that each machine can download, or share through `embeddings.local_model_dir` |
+| `_backup/` | no | originals from this machine's migration |
+| `.history/` | not by default | earlier versions stay on the machine that made them. The plugin has not been tested with it synced |
+
+**Use one writer at a time.** Writes are serialised by a lock file, and a write that
+carries a version (a hash of the file's bytes, which `memory_write` always does) is
+checked against the file. Both only see the files on the machine doing the write. Two
+machines holding the same version can each save a change, and both saves succeed. When
+the sync tool then runs, one file replaces the other, or you get a conflict copy,
+depending on the tool. The plugin does not notice, and the edit that gets overwritten is
+not in any history, because a sync replaces the file behind the plugin's back.
+
+In practice:
+- Let the sync finish before you start a session on another machine, and end the first
+  session before the second begins.
+- A Hermes gateway on another machine is a writer too. So is a cron job when
+  `cron_writes: true`.
+- Conflict copies (`nix.sync-conflict-....md`, `nix (conflicted copy).md`) are not valid
+  memory paths. The plugin ignores them, and `hermes memory-buckets lint` lists them as
+  "not a memory path, ignored". Merge by hand, then delete the copy.
+- A file that arrives by sync gets no check when it lands. The injection scan covers it
+  when it would enter the prompt, and the credential check does not cover it at all
+  (see [SECURITY.md](SECURITY.md)).
+
+Edits made outside the plugin, including ones that arrive by sync, are indexed on the
+next search or turn (see [The store](#the-store)).
+
+### Backups with `hermes backup`
+
+This was checked against the source of hermes-agent at commit
+[`4a0eaf7`](https://github.com/NousResearch/hermes-agent/commit/4a0eaf7989b6804319ddb94fa5d96c5a716080a1)
+(`hermes_cli/backup.py`, 23 October 2026) by reading it, not by running a backup. Check
+`hermes backup --help` on your version.
+
+- **What goes in.** `hermes backup` zips the Hermes home directory file by file. The
+  default store is inside it, so the zip holds the whole store directory: `memories/`,
+  `.history/`, `.index/`, `_backup/` and `.models/`. The index and the model are caches,
+  so the zip is larger than it needs to be.
+- **A store somewhere else.** With `store_path` set, the plugin tells Hermes about it
+  (`backup_paths()`). Hermes stores it in the zip under `_external/` only if it is
+  inside your home directory. A path outside your home directory is skipped, and Hermes
+  prints a note saying so.
+- **The zip.** It is written to `~/hermes-backup-<date>-<time>.zip` unless you pass
+  `--output`. Nothing in `hermes_cli/backup.py` restricts its mode, so it gets your
+  umask's default, often readable by other local accounts. It holds your notes in plain
+  text. Run `chmod 600` on it and keep it somewhere you trust.
+- **`--quick` leaves the store out.** A quick snapshot covers a fixed list of Hermes state
+  files (config, `state.db`, `.env`, auth, cron and similar), and `memory-buckets/` is not
+  on it.
+- **Restoring.** `hermes import` gives the files it creates your umask's mode, so on a
+  fresh machine the plugin's `0600` and `0700` are lost. A file that already exists keeps
+  its mode. The next writable session tightens the store again.
+
+To back up only the notes, copy `memories/` (for example `cp -a`). The
+[import section](#importing-built-in-memory) shows the commands.
+
+### Restoring an earlier version
+
+Before the plugin overwrites, edits or deletes a note, it saves the old bytes under
+`.history/<path>/`, named by UTC time and version.
+
+```sh
+hermes memory-buckets history global/topics/nix.md              # list recorded versions, newest first
+hermes memory-buckets restore global/topics/nix.md              # put back the newest recorded version
+hermes memory-buckets restore global/topics/nix.md 3f2a9c1d4e5b  # put back one version from the list
+```
+
+- A restore goes through the same version check and lock as any write. If a session
+  changed the file at that moment, the restore is refused.
+- What the restore replaces is recorded too, so a restore can be undone. A deleted note
+  is recreated.
+- Appends and new files record nothing, since nothing is lost by adding.
+- The plugin keeps the newest 20 versions of each file (`history_keep`). When a file
+  records a new version it also drops entries older than 90 days (`history_days`).
+  Set `history_keep: 0` to turn history off and `history_days: 0` to keep entries
+  regardless of age. Both are settings under `plugins.memory-buckets` (see
+  [Configuration](#configuration)), and the environment variables are
+  `MEMORY_BUCKETS_HISTORY_KEEP` and `MEMORY_BUCKETS_HISTORY_DAYS`.
+- Recording is best effort. If it fails (a full disk, for instance) the write goes
+  ahead, with a warning in the log.
+- Edits made outside the plugin are not recorded, so the text before an editor or sync
+  overwrite cannot be restored. Back up the folder before large manual edits.
+- `restore` does not run the injection or credential scan, and history keeps whatever
+  the file held, including anything credential-like you wrote by hand.
+
 ## Reference
 
 ### Commands
@@ -370,7 +554,7 @@ All settings are optional and live under `plugins.memory-buckets` in `config.yam
 | `prefetch_max_hints` | `4` | maximum prefetch hints per turn |
 | `search_limit` | `8` | default `memory_search` result count |
 | `project_boost` | `1.3` | score multiplier for the session's own bucket in search and prefetch hints |
-| `store_path` | `$HERMES_HOME/memory-buckets` | store directory (custom paths outside `$HERMES_HOME` are also included in `hermes backup`) |
+| `store_path` | `$HERMES_HOME/memory-buckets` | store directory (a path outside your home directory is not included in `hermes backup`; see [Syncing and backups](#syncing-and-backups)) |
 | `embeddings.backend` | `local` | `local` (built-in model) or `off` (keyword search only) |
 | `embeddings.auto_download` | `true` | download the model in the background when not bundled |
 | `embeddings.local_model_dir` | | load the model from this directory instead |
@@ -437,6 +621,8 @@ See [CHANGELOG.md](CHANGELOG.md) for full release notes.
    `memory.user_profile_enabled: false`).
 
 ## Development
+
+The house rules and how to send a change are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Inside the Nix devshell (`direnv allow` or `nix develop`):
 - `sync` creates or updates `.venv` with `uv sync`;
