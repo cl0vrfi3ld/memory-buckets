@@ -142,6 +142,29 @@ class CreatedPrivateTest(PrivateCase):
         self.assertEqual(mode(self.root / store.MODELS_DIR), 0o755)
         self.assertEqual(self.store.loose_modes(), [])
 
+    def test_every_write_path_leaves_the_store_private(self):
+        # One run of every creation path, at the umask loose (0o022): a path that
+        # skips ensure_dir shows up as a loose mode instead of hiding behind the
+        # 0o700 assertions on the chosen paths above. history (from the overwrite,
+        # the delete and the restore), the recreated directory and the index all
+        # have to come out private.
+        version = self.store.write("global/profile.md", PROFILE, "new")["version"]
+        self.store.write("global/profile.md", PROFILE.replace("Sam", "Alex"), version)
+        nix = doc("nix", "Nix notes")
+        self.store.write("proj-1/topics/nix.md", nix, "new")
+        self.store.delete("proj-1/topics/nix.md", self.store.read("proj-1/topics/nix.md")["version"])
+        self.store.restore("proj-1/topics/nix.md")
+        self.assertTrue((self.root / store.HISTORY_DIR / "global").is_dir())
+        idx = index.Index(self.store)
+        self.addCleanup(idx.close)
+        idx.reconcile()
+        # Before migrate, so the assertion sees what the write paths made, not
+        # what tighten fixed: this is the one that catches a skipped ensure_dir.
+        self.assertEqual(self.store.loose_modes(), [])
+        migrate.run(self.store)
+        # And after: on a private store migrate has nothing to tighten.
+        self.assertEqual(self.store.loose_modes(), [])
+
     def test_a_path_that_is_a_file_still_raises(self):
         (self.base / "taken").write_text("x", encoding="utf-8")
         with self.assertRaises(FileExistsError):

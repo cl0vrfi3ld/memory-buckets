@@ -475,7 +475,7 @@ class Store:
             return
         try:
             target = self._history_dir(path)
-            target.mkdir(parents=True, exist_ok=True)
+            self.ensure_dir(target)
             now_stamp = datetime.now(timezone.utc).strftime(_TS_FORMAT)
             self._atomic_write(target / f"{now_stamp}-{version(data)}.md", data)
             self._prune(target)
