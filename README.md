@@ -104,7 +104,7 @@ in
     extraPythonPackages = [ memory-buckets ];
     settings = {
       memory.provider = "memory-buckets";
-      skills.external_dirs = [ "${memory-buckets}/${memory-buckets.skillsPath}" ];  # /sort-imports
+      skills.external_dirs = [ "${memory-buckets}/${memory-buckets.skillsPath}" ];  # /sort-imports, /tidy-memory
     };
   };
 }
@@ -127,6 +127,7 @@ $HERMES_HOME/memory-buckets/
     global/     profile.md preferences.md inbox.md  topics/ areas/ people/
     <project>/  profile.md preferences.md            topics/ areas/ people/
   _backup/<version>/               originals kept before a store migration
+  .history/<path>/                 previous versions of each file, kept before an overwrite or delete
   .index/memory.sqlite             search and vector cache (safe to delete)
   .models/                         downloaded embedding model, when not bundled
 ```
@@ -137,6 +138,15 @@ stem), a one-line `description` telling the agent when to read the file, and opt
 made through the plugin also record `sources` and a UTC `edited_at` timestamp; edits
 you make by hand in Obsidian or an editor are picked up automatically on the next
 search or turn.
+
+On POSIX the store is kept private to your user: new directories are created `0700`
+and new files `0600`, and the first writable session (or
+`hermes memory-buckets migrate`) removes group and world access from an existing
+store, skipping the downloaded models and reporting any path it cannot change.
+`status` prints a `permissions` line when anything under the store is readable by
+group or other. A store deliberately shared through `store_path` loses that access
+on the first writable session after upgrading; there is no opt-out. Nothing is
+done on Windows.
 
 ### Projects
 
@@ -216,7 +226,9 @@ The prompt block contains:
 If the prompt block would exceed `snapshot_max_chars`, it trims the file listing
 first, then drops `global/preferences.md`, `<project>/preferences.md`, and
 `<project>/profile.md` in that order. `global/profile.md` and the project header are
-always kept.
+always kept. An always-kept file that still cannot fit is cut to its head, ending
+with a line that says how many characters are not shown and points at `memory_read`
+for the rest.
 
 The agent gets seven tools: `memory_list`, `memory_read`, `memory_search`,
 `memory_write`, `memory_str_replace`, `memory_append`, and `memory_delete`. Every
@@ -243,6 +255,16 @@ patterns (`tools.threat_patterns`, `strict` scope). On a match:
   tell the user to fix or delete it]` stand-in; `memory_read` still returns the file.
 - **Hints.** A matching hint description is dropped with a warning, and a matching
   built-in memory write is never mirrored into `global/inbox.md`.
+
+Writes are also refused when the content itself looks like a credential: AWS key
+ids, `sk-` keys, GitHub, GitLab and Slack tokens, PEM private key blocks, and a
+`password`, `secret`, `token` or `api_key` value that looks like one. The error is
+`secret_detected`, it names the credential families in `patterns`, and the text is
+never quoted. A matching built-in memory write is logged and dropped rather than
+mirrored into `global/inbox.md`. Record where a credential lives (an environment
+variable, a path, a manager) rather than the credential itself: matching is
+deliberately heuristic, so a value that merely shares a password's shape can be
+refused.
 
 Matching is heuristic, so harmless text can be blocked; the tests and the docstrings
 carry the detail.
@@ -279,7 +301,9 @@ truncation.
 `memory_search` runs FTS5 BM25 (with section headings weighted 2x and stopwords
 filtered) alongside cosine similarity (with a `0.20` relevance floor), fuses file
 ranks with Reciprocal Rank Fusion, and scales scores by query-term coverage, best
-vector similarity, and `project_boost`.
+vector similarity, and `project_boost`. A long query is sampled from both ends for
+the keyword leg too (the first and last 32 tokens, mirroring the embedder's own
+window), so a key term at the end of a long paste still matches.
 
 Prefetch hints use vector similarity (boosted by `project_boost` for the session's
 own bucket) and also rescue any file whose exact stem or frontmatter alias appears in
@@ -320,8 +344,13 @@ Back up your store before sorting. `import` and `import-prompt` print the comman
 back it up and to review the result afterwards: `cp -a` and `diff -ru`, or on Windows
 the PowerShell `Copy-Item -Recurse` and `git diff --no-index`.
 
-For `/sort-imports` to register as a slash command, Hermes needs the plugin's `skills`
-directory in `skills.external_dirs`:
+`/tidy-memory` tidies the memory files themselves: duplicate facts, conflicts it asks
+you to settle, stale time words ("currently", "this year"), finished one-off tasks,
+files of 8000 bytes or more, and descriptions that don't say when to read the file. It
+proposes fixes as a numbered list and applies only what you approve.
+
+For `/sort-imports` and `/tidy-memory` to register as slash commands, Hermes needs the
+plugin's `skills` directory in `skills.external_dirs`:
 
 ```yaml
 skills:
@@ -344,7 +373,7 @@ and Nix installs without `skills.external_dirs`, paste the prompt printed by
 `hermes memory-buckets` is available whenever `memory.provider` is `memory-buckets`:
 
 ```
-status                                  store, index, embeddings, Hermes config, unlinked buckets
+status                                  store, index, embeddings, permissions, Hermes config, unlinked buckets
 diagnose [--platform P]                 check why an agent would or wouldn't see the memory tools
 lint                                    check paths, frontmatter, duplicate stems, and [[links]]
 migrate [--dry-run]                     migrate a store from an older version (also runs on startup)
@@ -354,11 +383,15 @@ hints QUERY [--limit N] [--threshold T] show raw prefetch similarities to tune p
 fetch-model [--force]                   download the built-in embedding model now
 import [--from HERMES_HOME] [--dry-run] append built-in MEMORY.md/USER.md entries to global/inbox.md
 import-prompt                           print the prompt for sorting global/inbox.md
+history PATH                            list a memory file's recorded versions (.history/), newest first
+restore PATH [VERSION]                  write a recorded version back (default: the newest)
 ```
 
 ### Configuration
 
-All settings are optional and live under `plugins.memory-buckets` in `config.yaml`:
+All settings are optional and live under `plugins.memory-buckets` in `config.yaml`
+(fill them in with `hermes memory setup`, which prompts for the plugin's non-secret
+settings and writes them through Hermes's own config writer):
 
 | Key | Default | Effect |
 |---|---|---|
@@ -374,11 +407,14 @@ All settings are optional and live under `plugins.memory-buckets` in `config.yam
 | `embeddings.backend` | `local` | `local` (built-in model) or `off` (keyword search only) |
 | `embeddings.auto_download` | `true` | download the model in the background when not bundled |
 | `embeddings.local_model_dir` | | load the model from this directory instead |
+| `history_keep` | `20` | recorded versions of each file kept in `.history/` (`0` turns history off) |
+| `history_days` | `90` | drop recorded versions older than this many days (`0` keeps them forever) |
 
 Environment variable overrides: `MEMORY_BUCKETS_STORE`,
-`MEMORY_BUCKETS_EMBEDDINGS_BACKEND`, `MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD`, and
-`MEMORY_BUCKETS_MODEL_DIR`. Setting `MEMORY_BUCKETS_TRACE=1` logs every provider hook
-call.
+`MEMORY_BUCKETS_EMBEDDINGS_BACKEND`, `MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD`,
+`MEMORY_BUCKETS_MODEL_DIR`, `MEMORY_BUCKETS_HISTORY_KEEP`, and
+`MEMORY_BUCKETS_HISTORY_DAYS`. Setting `MEMORY_BUCKETS_TRACE=1` logs every provider
+hook call.
 
 ## Troubleshooting
 

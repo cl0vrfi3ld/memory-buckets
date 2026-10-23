@@ -8,6 +8,14 @@ change the store's layout; the plugin migrates the store itself (see
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-23
+
+Safety and recoverability: threat and credential scanning on every write, recoverable
+file history with `history` and `restore`, a bundled `/tidy-memory` skill, the
+plugin's settings in the setup wizard, and the store kept private to the user. No
+store or index schema changes: `.history/` is created on demand, and the first
+writable session tightens permissions on an existing store.
+
 ### Added
 
 - **Drift detection for the Hermes internals the plugin depends on.** The Hermes
@@ -30,6 +38,42 @@ change the store's layout; the plugin migrates the store itself (see
   - Upgrading scans an existing store for the first time, so a file you never changed can
     newly match. One matching line removes the file from the prompt; nothing is deleted,
     and fixing the line puts it back.
+- **Credential refusal.** `memory_write`, `memory_append` and `memory_str_replace`
+  refuse content that looks like a credential: AWS key ids, `sk-` keys, GitHub,
+  GitLab and Slack tokens, PEM private key blocks, and a `password`, `secret`,
+  `token` or `api_key` value that looks like one. The error is `secret_detected`,
+  names the credential families in `patterns`, and never quotes the text. A
+  credential in a mirrored built-in write is logged and dropped, so nothing reaches
+  `global/inbox.md`. (#62)
+- **Recoverable history.** Before a memory file is overwritten or deleted, its previous
+  content is kept under `.history/<path>/<UTC timestamp>-<version>.md`. Retention
+  keeps the newest `history_keep` versions per file (default 20) and drops versions
+  older than `history_days` days (default 90), both under `plugins.memory-buckets`,
+  with `MEMORY_BUCKETS_HISTORY_KEEP` and `MEMORY_BUCKETS_HISTORY_DAYS` overrides.
+  `hermes memory-buckets history PATH` lists a file's recorded versions;
+  `hermes memory-buckets restore PATH [VERSION]` writes one back through the normal
+  compare-and-swap path, so a concurrent change is refused rather than clobbered,
+  and restoring after a delete recreates the file and says so. Appends and creations
+  record nothing. (#40)
+- **A bundled `/tidy-memory` skill.** It finds duplicate facts, conflicts, stale time
+  words, finished one-off tasks, oversized files (8000 bytes or more) and vague
+  descriptions, proposes fixes as a numbered list, and applies only what you
+  approve. (#48)
+- **The plugin's settings in `hermes memory setup`.** The twelve non-secret settings
+  surface in the wizard with their types and defaults, and answers are written
+  through Hermes's own config writer, so every unrelated key survives. (#41)
+- **Private store modes.** New stores are created private on POSIX: directories at
+  0700 and files at 0600, the search index with its journal files, the lock file and
+  migration backups included.
+  - `status` prints a `permissions` line when anything under the store is readable by
+    group or other, and still exits 0.
+  - `migrate`, which also runs at provider start, removes group and world access from
+    everything under the store: it only ever removes access, skips symlinks and the
+    downloaded models, and reports a path it cannot change while the rest are still
+    tightened. A store deliberately shared through `store_path` therefore loses that
+    access on the first writable session after upgrading; there is no opt-out switch.
+  - Off POSIX nothing is done, since Python 3.13 rewrites the ACL when a mode is
+    passed to mkdir. (#63)
 
 ### Fixed
 
@@ -39,6 +83,14 @@ change the store's layout; the plugin migrates the store itself (see
   `shutdown()` now waits for prefetches in flight, within the same 10 seconds it gives the
   embedding worker, and leaves the index open, with a warning, if one outlasts that. A
   `queue_prefetch` that starts after `shutdown()` does nothing.
+- **Keyword search keeps the end of a long query.** The FTS leg sampled only the first
+  32 tokens of a query, so a long message whose key terms sat at the end never
+  matched. It now samples head and tail (32 tokens each), mirroring what the vector
+  leg already did. Query-side only: nothing is re-indexed. (#43)
+- **An always-kept file honours `snapshot_max_chars`.** A `global/profile.md` bigger
+  than the cap went whole into the prompt block on every turn. It is now cut to fit,
+  ending with a line that says how much was cut and points at `memory_read` for the
+  rest. (#53)
 
 ## [0.4.0] - 2026-10-16
 
@@ -415,6 +467,7 @@ will do.
 
 Initial release.
 
+[0.5.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.4.0...v0.5.0
 [0.4.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.3.0...v0.4.0
 [0.3.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.2.1...v0.3.0
 [0.2.1]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.2.0...v0.2.1
