@@ -89,9 +89,11 @@ def cmd_status(args) -> int:
                      if (store.memories / p).stat().st_size > MAX_FILE_BYTES]
         if oversized:
             # A file over the write cap can only have come from a hand edit or a
-            # sync; no memory tool can rewrite it whole.
+            # sync; no memory tool can rewrite it whole. The agent reading this
+            # may not have write access to the store anyway, so it should alert
+            # the user and let them fix or split the file by hand.
             _out(f"oversized   {'; '.join(oversized)}: over the {MAX_FILE_BYTES}-byte write cap; "
-                 "the tools can't rewrite one, so fix or split it by hand")
+                 "the tools can't rewrite one, so tell the user: fix or split it by hand")
     if index.embedder is None:
         _out("embeddings  off (keyword search only)")
     else:
