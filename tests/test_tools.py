@@ -91,6 +91,23 @@ class ToolsTest(StoreCase):
         self.assertEqual(joined, whole)
         self.assertNotIn("\ufffd", joined)
 
+    def test_read_of_a_continuation_byte_file_pages_instead_of_raising(self):
+        # A hand-made file whose whole first window is UTF-8 continuation bytes
+        # (invalid UTF-8, so only a hand edit or sync can make one) must not
+        # walk the page boundary past the start of the file (it raised
+        # IndexError), and paging must still make progress.
+        path = self.store.memories / "global/topics/garbage.md"
+        path.write_bytes(b"\xa9" * 60_000)
+        first = self.call("memory_read", paths=["global/topics/garbage.md"])["files"][0]
+        self.assertTrue(first["truncated"])
+        self.assertEqual(first["total_bytes"], 60_000)
+        # Cut at the cap, not past the start of the file: the next page advances.
+        self.assertEqual(first["next_offset"], tools.MAX_FILE_BYTES)
+        second = self.call("memory_read", paths=["global/topics/garbage.md"],
+                           offset=first["next_offset"])["files"][0]
+        self.assertFalse(second.get("truncated"))
+        self.assertEqual(second["total_bytes"], 60_000)
+
     def test_bad_read_args(self):
         self.call("memory_read", paths=["global/topics/nix.md"])
         got = self.call("memory_read", paths=["global/topics/nix.md"], offset=-1)

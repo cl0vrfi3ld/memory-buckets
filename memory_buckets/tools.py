@@ -221,10 +221,18 @@ def _read(args, ctx: Context):
             continue
         window = data[offset:offset + MAX_FILE_BYTES]
         # Don't cut inside a UTF-8 sequence: back up to its start. The next page
-        # starts at the end of what was returned, so nothing is skipped.
+        # starts at the end of what was returned, so nothing is skipped. The
+        # clamp keeps a hand-made file whose whole window is continuation bytes
+        # from walking the boundary past the start of the file.
         end = offset + len(window)
-        while end < len(data) and (data[end] & 0xC0) == 0x80:
+        while end > offset and end < len(data) and (data[end] & 0xC0) == 0x80:
             end -= 1
+        if end == offset and offset < len(data):
+            # Degenerate: no character boundary anywhere in the window (only a
+            # hand edit or sync can make one). Cut at the cap instead of
+            # pinning the next offset in place; the next page starts
+            # mid-sequence and decodes with replacement characters.
+            end = offset + len(window)
         window = data[offset:end]
         entry = {"path": path, "version": version(data), "content": window.decode("utf-8", errors="replace")}
         if end < len(data):
