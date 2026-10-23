@@ -116,8 +116,53 @@ def cmd_status(args) -> int:
     waiting = _inbox_entries(store)
     if waiting:
         _out(f"inbox       {inbox.PATH}: {_entries(waiting)} waiting to be sorted")
+    _status_skipped(store)
     index.close()
     return 1 if problems else 0
+
+
+def _plural(n: int, singular: str, plural: str = "") -> str:
+    return f"{n} {singular if n == 1 else plural or singular + 's'}"
+
+
+def _status_skipped(store: Store) -> None:
+    """What the agent can't see or edit in the store. Obsidian lets you create files the
+    path rules reject, and they'd otherwise vanish without a word. Not a fault, so it
+    doesn't fail the command; ``lint`` has the per-file detail."""
+    # A leftover project index.md has its own `migration` line above.
+    leftovers = {f"{d}/index.md" for d in migrate.leftover_indexes(store)}
+    skipped = [(path, why) for path, why in store.iter_skipped() if path not in leftovers]
+    outside = sum(1 for _, why in skipped if why == "path")
+    links = len(skipped) - outside
+    if outside:
+        _out(f"ignored     {_plural(outside, 'file')} outside the path rules, so the agent can't see "
+             f"{'it' if outside == 1 else 'them'}; run `hermes memory-buckets lint`")
+    if links:
+        _out(f"ignored     {_plural(links, 'symlink')} (never followed); run `hermes memory-buckets lint`")
+    broken = 0
+    for path in store.iter_paths():
+        try:
+            text = (store.memories / path).read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            continue  # gone since the walk; lint reports real read errors
+        if _check_frontmatter(text, path)[1] is not None:
+            broken += 1
+    if broken:
+        _out(f"frontmatter {_plural(broken, 'file')} with invalid frontmatter, so tools won't edit "
+             f"{'it' if broken == 1 else 'them'} until it's fixed; run `hermes memory-buckets lint`")
+
+
+def _check_frontmatter(text: str, rel: str):
+    """``(body, error)``: ``error`` is the reason the file's frontmatter is unusable, else None.
+    The one test both ``lint`` and ``status`` apply."""
+    try:
+        fm, body = frontmatter.parse(text)
+        if not fm.entries:
+            raise frontmatter.FrontmatterError("no frontmatter")
+        frontmatter.validate(fm, stem(rel))
+    except frontmatter.FrontmatterError as err:
+        return text, err
+    return body, None
 
 
 def _status_hermes(home: Path) -> int:
@@ -341,14 +386,9 @@ def lint(store: Store) -> List[str]:
             if len(data) > MAX_FILE_BYTES:
                 problems.append(f"{rel}: {len(data)} bytes, over the {MAX_FILE_BYTES}-byte cap")
             text = data.decode("utf-8", errors="replace")
-            try:
-                fm, body = frontmatter.parse(text)
-                if not fm.entries:
-                    raise frontmatter.FrontmatterError("no frontmatter")
-                frontmatter.validate(fm, stem(rel))
-            except frontmatter.FrontmatterError as err:
+            body, err = _check_frontmatter(text, rel)
+            if err is not None:
                 problems.append(f"{rel}: bad frontmatter ({err}); tools won't edit it until it's fixed")
-                body = text
             scope = rel.split("/", 1)[0]
             names[(scope, stem(rel))].append(rel)
             stems[scope].add(stem(rel))

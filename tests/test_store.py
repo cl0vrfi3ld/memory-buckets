@@ -76,6 +76,40 @@ class StoreTest(StoreCase):
         self.put("global/random.txt", "x")
         self.assertEqual(list(self.store.iter_paths()), ["global/topics/nix.md"])
 
+    def test_iter_skipped_reports_what_iter_paths_passes_over(self):
+        # The four files from the issue, plus an attachment and a nested project path.
+        self.put("global/topics/nix.md", doc("nix", "Nix"))
+        self.put("global/topics/My Note.md", "x")
+        self.put("global/topics/nix/flakes.md", "x")
+        self.put("global/topics/ex_luna.md", "x")
+        self.put("global/notes.md", "x")
+        self.put("Proj/topics/y.md", "x")
+        self.put("proj-1/topics/diagram.png", "x")
+        # Hidden files and directories (Obsidian's config, our own temp files) aren't reported.
+        self.put(".obsidian/app.json", "{}")
+        self.put("global/topics/.nix.md.tmp.1.2", "x")
+        skipped = dict(self.store.iter_skipped())
+        self.assertEqual(sorted(skipped), ["Proj/topics/y.md", "global/notes.md", "global/topics/My Note.md",
+                                           "global/topics/ex_luna.md", "global/topics/nix/flakes.md",
+                                           "proj-1/topics/diagram.png"])
+        self.assertEqual(set(skipped.values()), {"path"})
+        # Nothing is both read and reported.
+        self.assertEqual(list(self.store.iter_paths()), ["global/topics/nix.md"])
+
+    def test_iter_skipped_reports_symlinks_without_following_them(self):
+        outside = self.home / "outside"
+        outside.mkdir()
+        (outside / "Loose.md").write_text("x", encoding="utf-8")
+        self.put("global/topics/real.md", doc("real", "Real"))
+        symlink_or_skip(self, self.store.memories / "global/topics/real.md", self.store.memories / "global/topics/sym.md")
+        symlink_or_skip(self, outside, self.store.memories / "global/linked")
+        self.assertEqual(list(self.store.iter_skipped()),
+                         [("global/linked", "symlink"), ("global/topics/sym.md", "symlink")])
+
+    def test_iter_skipped_with_no_store_yet(self):
+        self.store.memories.rmdir()
+        self.assertEqual(list(self.store.iter_skipped()), [])
+
     def test_projects_lists_buckets_on_disk(self):
         self.assertEqual(self.store.projects(), [])
         self.put("proj-2/topics/x.md", doc("x", "X"))

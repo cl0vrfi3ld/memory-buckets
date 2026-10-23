@@ -337,6 +337,39 @@ class Store:
                 found.append(rel)
         yield from sorted(found)
 
+    def iter_skipped(self) -> Iterator[Tuple[str, str]]:
+        """``(path, reason)`` for what ``iter_paths`` passes over, sorted: ``"path"``
+        for a file outside the path rules, ``"symlink"`` for a symlink (or junction)
+        to a file or directory. This is what ``status`` counts, so the agent not
+        seeing a file isn't silent. Dot files and directories (Obsidian's
+        ``.obsidian/``, our own ``.tmp`` files) aren't counted, as in ``lint``."""
+        if not self.memories.is_dir():
+            return
+        found = []
+        for dirpath, dirnames, filenames in os.walk(self.memories):
+            rel_dir = os.path.relpath(dirpath, self.memories).replace(os.sep, "/")  # memory paths always use '/'
+            walk = []
+            for d in dirnames:
+                if d.startswith("."):
+                    continue
+                if is_link(os.path.join(dirpath, d)):
+                    found.append((d if rel_dir == "." else f"{rel_dir}/{d}", "symlink"))  # not descended into
+                else:
+                    walk.append(d)
+            dirnames[:] = walk
+            for name in filenames:
+                if name.startswith("."):
+                    continue
+                rel = name if rel_dir == "." else f"{rel_dir}/{name}"
+                if is_link(os.path.join(dirpath, name)):
+                    found.append((rel, "symlink"))
+                    continue
+                try:
+                    validate_path(rel)
+                except StoreError:
+                    found.append((rel, "path"))
+        yield from sorted(found)
+
     def projects(self) -> List[str]:
         """The project buckets that exist on disk, sorted."""
         if not self.memories.is_dir():
