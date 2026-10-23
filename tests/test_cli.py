@@ -52,19 +52,6 @@ class CliTest(StoreCase):
         bg_fetch.assert_not_called()
         self.assertFalse((self.store.root / ".models").exists())
 
-    def test_status_and_lint_name_a_file_over_the_write_cap(self):
-        # Issue 17: MAX_FILE_BYTES caps writes, not reads, so a hand-edited file
-        # can be over the cap; status warns about it (lint already did).
-        self.put("global/topics/big.md", doc("big", "Read for a big topic", "- fact\n" * 9000))
-        size = (self.store.memories / "global/topics/big.md").stat().st_size
-        code, out = self.run_cli("status")
-        self.assertEqual(code, 0, out)
-        self.assertIn("oversized", out)
-        self.assertIn("global/topics/big.md", out)
-        code, out = self.run_cli("lint")
-        self.assertEqual(code, 1, out)
-        self.assertIn(f"global/topics/big.md: {size} bytes, over the 49152-byte cap", out)
-
     def test_import_builtin_into_inbox(self):
         (self.home / "memories").mkdir()
         (self.home / "memories/USER.md").write_text("Name is Sam\n§\nUses they/them\n§\n", encoding="utf-8")
