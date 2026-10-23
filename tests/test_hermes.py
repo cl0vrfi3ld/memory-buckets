@@ -45,7 +45,7 @@ class HermesIntegrationTest(unittest.TestCase):
         return json.loads(lines[-1][len("PROBE-RESULT "):])
 
     def test_real_hermes_loads_the_plugin_directory(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             home = Path(tmp) / "hermes-home"
             (home / "plugins").mkdir(parents=True)
             shutil.copytree(PLUGIN_DIR, home / "plugins/memory-buckets", ignore=IGNORE)
@@ -57,7 +57,7 @@ class HermesIntegrationTest(unittest.TestCase):
 
     @unittest.skipUnless(CAN_PIP, "needs pip and hatchling (uv sync installs them)")
     def test_real_hermes_finds_the_pip_install_by_entry_point(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             src, site, home = Path(tmp) / "src", Path(tmp) / "site", Path(tmp) / "hermes-home"
             shutil.copytree(PLUGIN_DIR, src, ignore=IGNORE)  # pip builds in-tree; keep the repo clean
             home.mkdir()  # no plugins/ directory: only the entry point can find it
