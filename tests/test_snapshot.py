@@ -1,12 +1,14 @@
 import os
+import re
 import threading
 import unittest
+from datetime import datetime, timezone
 from unittest import mock
 
 from .helpers import StoreCase, doc
 from memory_buckets import config, index, scopes, snapshot
 from memory_buckets.projects import Project
-from memory_buckets.store import StoreError
+from memory_buckets.store import Store, StoreError
 
 
 def header_of(text, bucket):
@@ -238,6 +240,156 @@ class SnapshotTest(StoreCase):
         self.assertIn("memory_read when they are relevant: global/preferences.md", snap.text)
         self.assertNotIn("global/preferences.md", snap.paths)
 
+    @staticmethod
+    def stamped(path, epoch, description="A rather long description of this particular file"):
+        """A memory file whose ``edited_at`` is ``epoch`` seconds after the Unix epoch."""
+        when = datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return doc(path.rsplit("/", 1)[-1][:-3], description, extra=f"edited_at: {when}\n")
+
+    def age(self, *paths):
+        """Make fixture files from ``setUp`` the oldest in the store, so they never win a recency test."""
+        for path in paths:
+            os.utime(self.store.memories / path, (0, 0))
+
+    def listed(self, text):
+        """The paths under ``### Other files``, in the order shown."""
+        lines = self.section(text, "Other files").split("\n\n", 1)[0].splitlines()
+        return [line[2:].split(":", 1)[0] for line in lines if line.startswith("- ") and "more files" not in line]
+
+    @staticmethod
+    def hidden(text):
+        """N from the "… and N more files" line, 0 when the listing was not cut."""
+        found = re.search(r"- … and (\d+) more files", text)
+        return int(found.group(1)) if found else 0
+
+    def test_issue_3_store_lists_the_newest_files_under_the_default_cap(self):
+        # The issue's store: a 1.2k profile, 0.6k of preferences, 200 topics, the default 12,000 cap.
+        # Topic i was edited i minutes after topic 0, so the newest sort last by name, which is
+        # what the old path-order cut hid first.
+        self.put("global/profile.md", doc("profile", "Who the user is", "".join(f"- fact {i:02} {'x' * 28}\n" for i in range(30))))
+        self.put("global/preferences.md", doc("preferences", "How to behave", "".join(f"- rule {i:02} {'y' * 28}\n" for i in range(15))))
+        for i in range(200):
+            path = f"global/topics/topic-{i:03}.md"
+            self.put(path, self.stamped(path, 1_700_000_000 + i * 60, f"Topic {i:03}"))
+        self.age("global/topics/nix.md")
+        self.index.reconcile()
+        text = self.build().text
+        listed, hidden = self.listed(text), self.hidden(text)
+        self.assertLessEqual(len(text), 12_000)
+        self.assertTrue(0 < hidden < 200, hidden)
+        self.assertEqual(len(listed) + hidden, 201)
+        self.assertEqual(listed, [f"global/topics/topic-{i:03}.md" for i in range(200 - len(listed), 200)])
+        self.assertIn("global/topics/topic-199.md", listed)
+        self.assertNotIn("global/topics/topic-000.md", listed)
+
+    def test_edited_at_beats_path_order_whatever_the_write_order(self):
+        # Mtimes rise with the name, so path order picks t-0 and mtime order picks t-2: only
+        # the edited_at stamps can pick t-1.
+        for i, epoch in enumerate((1_700_000_100, 1_700_000_900, 1_700_000_500)):
+            target = self.put(f"global/topics/t-{i}.md", self.stamped(f"global/topics/t-{i}.md", epoch))
+            os.utime(target, (1_800_000_000 + i, 1_800_000_000 + i))
+        self.age("global/topics/nix.md")
+        self.index.reconcile()
+        cap = len(self.build(snapshot_max_chars=100_000).text) - 1
+        while len(self.listed(self.build(snapshot_max_chars=cap).text)) > 1:
+            cap -= 1
+        self.assertEqual(self.listed(self.build(snapshot_max_chars=cap).text), ["global/topics/t-1.md"])
+
+    def test_a_stamp_outranks_mtime(self):
+        # A hand edit to a stamped file does not move it: the stamp wins, mtime is only the fallback.
+        for i in range(60):
+            self.put(f"global/topics/t-{i:03}.md", self.stamped(f"global/topics/t-{i:03}.md", 1_700_000_000 + i))
+        old = self.put("global/topics/zz-old-stamp.md", self.stamped("global/topics/zz-old-stamp.md", 1_600_000_000))
+        os.utime(old, (1_900_000_000, 1_900_000_000))  # touched last, but stamped long ago
+        self.age("global/topics/nix.md")
+        self.index.reconcile()
+        listed = self.listed(self.build(snapshot_max_chars=4600).text)
+        self.assertNotIn("global/topics/t-000.md", listed)  # the cap really did cut
+        self.assertNotIn("global/topics/zz-old-stamp.md", listed)
+
+    def test_files_without_a_stamp_fall_back_to_mtime(self):
+        # Hand-written files carry no edited_at. They rank by mtime against stamped files.
+        for i in range(60):
+            self.put(f"global/topics/t-{i:03}.md", self.stamped(f"global/topics/t-{i:03}.md", 1_700_000_000 + i))
+        fresh = self.put("global/topics/zz-hand-edited.md", doc("zz-hand-edited", "A rather long description of this file"))
+        stale = self.put("global/topics/zy-old-hand-edit.md", doc("zy-old-hand-edit", "A rather long description of this file"))
+        os.utime(fresh, (1_800_000_000, 1_800_000_000))
+        os.utime(stale, (1_600_000_000, 1_600_000_000))
+        self.age("global/topics/nix.md")
+        self.index.reconcile()
+        listed = self.listed(self.build(snapshot_max_chars=4600).text)
+        self.assertIn("global/topics/zz-hand-edited.md", listed)
+        self.assertNotIn("global/topics/zy-old-hand-edit.md", listed)
+        self.assertNotIn("global/topics/t-000.md", listed)
+        self.assertIn("global/topics/t-059.md", listed)
+
+    def test_an_unreadable_stamp_falls_back_to_mtime(self):
+        # A hand-written date is not a stamp, and neither is frontmatter that will not parse.
+        # Neither may break the snapshot, and both rank by mtime.
+        for i in range(60):
+            self.put(f"global/topics/t-{i:03}.md", self.stamped(f"global/topics/t-{i:03}.md", 1_700_000_000 + i))
+        dated = self.put("global/topics/zz-dated.md",
+                         doc("zz-dated", "A rather long description of this file", extra="edited_at: last Tuesday\n"))
+        broken = self.put("global/topics/zy-broken.md", "- no frontmatter at all\n")
+        for target in (dated, broken):
+            os.utime(target, (1_800_000_000, 1_800_000_000))
+        self.age("global/topics/nix.md")
+        self.index.reconcile()
+        listed = self.listed(self.build(snapshot_max_chars=4600).text)
+        self.assertIn("global/topics/zz-dated.md", listed)
+        self.assertIn("global/topics/zy-broken.md", listed)
+
+    def test_a_file_that_became_unreadable_still_lists_by_mtime(self):
+        # A listed file can turn unreadable after it was indexed (its permissions
+        # changed): reconcile has no reason to drop it, so its stamp is unreachable,
+        # not absent. Falling back to the mtime keeps the snapshot buildable; a raise
+        # here would cost the session its whole memory block, because the provider
+        # catches every exception. Mocked rather than chmod so it holds as root and
+        # on Windows.
+        for i in range(60):
+            path = f"global/topics/t-{i:03}.md"
+            self.put(path, self.stamped(path, 1_700_000_000 + i))
+        sealed = self.put("global/topics/zz-sealed.md",
+                          self.stamped("global/topics/zz-sealed.md", 1_600_000_000))
+        os.utime(sealed, (1_800_000_000, 1_800_000_000))  # fresh mtime the store can no longer read past
+        self.age("global/topics/nix.md")
+        self.index.reconcile()
+        original_read_bytes = Store.read_bytes
+
+        def read_bytes(store, path):
+            if path == "global/topics/zz-sealed.md":
+                raise PermissionError(13, "Permission denied", path)
+            return original_read_bytes(store, path)
+
+        with mock.patch.object(Store, "read_bytes", read_bytes):
+            listed = self.listed(self.build(snapshot_max_chars=4600).text)
+        self.assertIn("global/topics/zz-sealed.md", listed)
+        self.assertIn("global/topics/t-059.md", listed)
+        self.assertNotIn("global/topics/t-000.md", listed)
+
+    def test_project_files_outrank_newer_global_files_in_the_cut(self):
+        for i in range(15):
+            self.put(f"proj-1/topics/p-{i:03}.md", self.stamped(f"proj-1/topics/p-{i:03}.md", 1_700_000_000 + i))
+        for i in range(60):
+            self.put(f"global/topics/g-{i:03}.md", self.stamped(f"global/topics/g-{i:03}.md", 1_800_000_000 + i))
+        self.age("proj-1/topics/deploy.md", "global/topics/nix.md")
+        self.index.reconcile()
+        listed = self.listed(self.build(project="proj-1", snapshot_max_chars=5500).text)
+        project = [p for p in listed if p.startswith("proj-1/")]
+        other = listed[len(project):]
+        # Every project file is older than every global file and still survives, shown first.
+        self.assertEqual(project, ["proj-1/topics/deploy.md", *(f"proj-1/topics/p-{i:03}.md" for i in range(15))])
+        self.assertTrue(0 < len(other) < 60, len(other))
+        # The room left over goes to the newest global files, in path order.
+        self.assertEqual(other, [f"global/topics/g-{i:03}.md" for i in range(60 - len(other), 60)])
+
+    def test_a_listing_that_fits_stays_in_path_order(self):
+        # Nothing is cut, so recency changes nothing: plain path order, newest or not.
+        self.put("global/topics/a.md", self.stamped("global/topics/a.md", 1_700_000_000))
+        self.put("global/topics/b.md", self.stamped("global/topics/b.md", 1_800_000_000))
+        self.index.reconcile()
+        self.assertEqual(self.listed(self.build().text),
+                         ["global/topics/a.md", "global/topics/b.md", "global/topics/nix.md"])
     def test_a_profile_that_cannot_fit_is_truncated(self):
         # Issue 17: the 48 KiB write cap allows a 40 KB profile, and the block runs
         # on every turn. An always-kept file keeps its head and ends with a line

@@ -676,6 +676,10 @@ class Index:
         """(path, version, description, size) for every indexed file, sorted."""
         return self._conn().execute("SELECT path, version, description, size FROM files ORDER BY path").fetchall()
 
+    def mtimes(self) -> Dict[str, float]:
+        """Path -> mtime in seconds for every indexed file. Already in the index, so no ``stat``."""
+        return {path: ns / 1e9 for path, ns in self._conn().execute("SELECT path, mtime_ns FROM files")}
+
     def stats(self) -> Dict[str, object]:
         con = self._conn()
         files = con.execute("SELECT count(*) FROM files").fetchone()[0]
