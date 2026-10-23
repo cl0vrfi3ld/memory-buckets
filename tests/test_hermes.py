@@ -97,6 +97,14 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertEqual(out["diagnose_exit"], 0)
         self.assertFalse(out["pm_member"], "plugin.yaml needs python_runtime: external")
         self.assertEqual(out["slash"], [], "the plugin registers no slash commands")
+        self.assertEqual(out["schema_keys"], [
+            "readonly", "cron_writes", "nudge_interval", "snapshot_max_chars",
+            "prefetch_min_similarity", "prefetch_max_hints", "search_limit", "project_boost",
+            "store_path", "embeddings.backend", "embeddings.auto_download",
+            "embeddings.local_model_dir"])
+        self.assertTrue(out["save_config_kept"],
+                        "save_config wrote plugins.memory-buckets through Hermes's writer "
+                        "and left the unrelated keys alone")
         self.assertTrue(out["slash_skill"], "/sort-imports via skills.external_dirs")
         self.assertTrue(out["tidy_slash"], "/tidy-memory via skills.external_dirs")
         self.assertEqual(out["project_scope"]["project"], "proj-1")
