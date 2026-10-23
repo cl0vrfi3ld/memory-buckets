@@ -231,7 +231,7 @@ class MemoryBucketsProvider(MemoryProvider):
         # Create the store up front (not just on first write), so it exists as soon as the
         # provider is active and the log says where it went (profiles move HERMES_HOME).
         try:
-            (self.store.memories / GLOBAL).mkdir(parents=True, exist_ok=True)
+            self.store.ensure_dir(self.store.memories / GLOBAL)
             logger.info("memory-buckets: active, store at %s (platform=%s, context=%s)", root,
                         kwargs.get("platform") or "cli", kwargs.get("agent_context") or "primary")
         except OSError as err:
@@ -253,7 +253,7 @@ class MemoryBucketsProvider(MemoryProvider):
             return
         try:
             for step in migrate.run(self.store):
-                level = logging.WARNING if step.action == "skip" else logging.INFO
+                level = logging.WARNING if step.action in ("skip", "tighten") else logging.INFO
                 logger.log(level, "memory-buckets: migration: %s", step.describe())
         except (StoreError, OSError) as err:  # never fail startup; the next session tries again
             logger.warning("memory-buckets: migration didn't run (%s); `hermes memory-buckets migrate` retries it",

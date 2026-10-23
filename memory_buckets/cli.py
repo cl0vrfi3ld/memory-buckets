@@ -99,6 +99,12 @@ def cmd_status(args) -> int:
             _out(f"embeddings  built-in {static_model.MODEL_NAME}: not ready ({err})")
     problems += _status_hermes(home)
     _status_projects(store)
+    loose = store.loose_modes()
+    if loose:
+        first, mode = loose[0]
+        _out(f"permissions {len(loose)} path(s) in the store can be read by group or other "
+             f"(first: {'the store root' if first == '.' else first}, mode {mode:04o}); "
+             "run `hermes memory-buckets migrate` to make them private")
     leftovers = migrate.leftover_indexes(store)
     if leftovers:
         _out(f"migration   index.md left over in: {', '.join(leftovers)}; run `hermes memory-buckets migrate`")
@@ -417,7 +423,7 @@ def cmd_migrate(args) -> int:
     for step in steps:
         _out(("would: " if args.dry_run else "") + step.describe())
     backup = store.root / migrate.BACKUP_DIR
-    if not args.dry_run and backup.exists() and any(s.action not in ("skip", "tidy", "remove") for s in steps):
+    if not args.dry_run and backup.exists() and any(s.action not in ("skip", "tidy", "remove", "tighten") for s in steps):
         _out(f"originals kept in {backup}")
     return 1 if any(s.action == "skip" for s in steps) else 0
 
@@ -492,6 +498,9 @@ def cmd_fetch_model(args) -> int:
     if found is not None and not args.force:
         _out(f"built-in model already available at {found}")
         return 0
+    # fetch mkdirs <root>/.models with parents, which would create the root itself at
+    # the umask's mode; every other creation path goes through the store's ensure_dir.
+    store.ensure_dir(store.root)
     try:
         dest = static_model.fetch(store.root, progress=lambda msg: _out(msg), timeout=120.0)
     except (OSError, static_model.ModelUnavailable) as err:
