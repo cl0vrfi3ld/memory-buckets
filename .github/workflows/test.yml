@@ -33,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        # Hermes needs 3.11 to 3.14; the 3.10 floor in pyproject.toml is exercised
+        # Hermes needs 3.11 to 3.14; the 3.11 floor in pyproject.toml is exercised
         # by the Windows job, so this stays inside Hermes's range.
         python: ["3.11", "3.14"]
     steps:
