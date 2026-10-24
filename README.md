@@ -37,7 +37,7 @@ and Nix installs bundle the model at build time; see [Install](#install).
 Whichever install method you use, enable the provider by setting
 `memory.provider: memory-buckets` in `config.yaml`.
 
-Requirements are Linux, macOS or Windows, Python 3.10+, and a `sqlite3` module compiled
+Requirements are Linux, macOS or Windows, Python 3.11+, and a `sqlite3` module compiled
 with FTS5 (`hermes memory-buckets diagnose` checks this). On Windows the plugin runs on
 Hermes's native install, where `$HERMES_HOME` is `%LOCALAPPDATA%\hermes` and
 `config.yaml` lives there too.
@@ -478,7 +478,7 @@ chat test against a throwaway profile (never `~/.hermes`); it's a bash script, s
 runs on Linux and macOS only.
 
 Windows runs in CI: `.github/workflows/windows.yml` on the GitHub mirror runs the test
-suite on Windows x64 (Python 3.10 and 3.14) and arm64 (3.14) with the real model, and
+suite on Windows x64 (Python 3.11 and 3.14) and arm64 (3.14) with the real model, and
 the Hermes integration tests against the Hermes release pinned in `HERMES_REF`. Bump
 that pin when Hermes releases. Hermes refuses to build as a wheel, so the job installs
 an editable checkout.
