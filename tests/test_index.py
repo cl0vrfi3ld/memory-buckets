@@ -1,4 +1,6 @@
+import json
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -94,6 +96,41 @@ class IndexTest(StoreCase):
         hits = index.search("bouldering", ALL)["results"]
         self.assertEqual([h["path"] for h in hits], ["global/people/sam.md"])
         self.assertEqual(index.search("flakes", ALL)["results"], [])
+
+    def test_an_alias_with_a_comma_is_stored_whole_and_an_old_cache_rebuilds(self):
+        # Issue 17: the files table stored ", " joined aliases, which split
+        # "Smith, John" in two; it now stores a JSON array, and the schema bump
+        # drops an older cache and rebuilds it.
+        self.put("global/people/john-smith.md", doc("john-smith", "A colleague of Sam",
+                 "- John Smith is a colleague of Sam\n", extra='aliases: ["Smith, John"]\n'))
+        index = self.make()
+        index.reconcile()
+
+        def stored():
+            con = sqlite3.connect(index.path)
+            try:
+                return con.execute(
+                    "SELECT aliases FROM files WHERE path = 'global/people/john-smith.md'").fetchone()[0]
+            finally:
+                con.close()
+
+        index.reconcile()
+        self.assertEqual(json.loads(stored()), ["Smith, John"])
+        con = sqlite3.connect(index.path)
+        try:
+            chunk0 = con.execute(
+                "SELECT text FROM chunks WHERE path = 'global/people/john-smith.md' AND ord = 0").fetchone()[0]
+            self.assertIn("aliases: Smith, John", chunk0)
+            # Pretend the cache is at the previous schema and in the old format.
+            con.execute("UPDATE meta SET value = '4' WHERE key = 'schema_version'")
+            con.execute("UPDATE files SET aliases = 'Smith, John'")
+            con.commit()
+        finally:
+            con.close()
+        index.close()
+        rebuilt = self.make()
+        rebuilt.reconcile()
+        self.assertEqual(json.loads(stored()), ["Smith, John"], "the rebuild is in the new format")
 
     def test_fts_only_without_embeddings(self):
         found = self.make().search("colmena deploys", ALL)
@@ -453,6 +490,17 @@ class HintsProjectAndRescueTest(StoreCase):
         self.put("global/topics/hetzner-box.md", doc("hetzner-box", "Storage server", "- restic runs nightly\n"))
         hints = self.make().hints("please look at the hetzner box setup", ALL, min_similarity=0.45)
         self.assertEqual(hints[0][0], "global/topics/hetzner-box.md")
+
+    def test_an_alias_with_a_comma_is_one_alias_not_two(self):
+        # Issue 17: "Smith, John" used to be read back as two aliases, so the word
+        # "John" alone rescued the file in prefetch.
+        self.put("global/people/john-smith.md", doc("john-smith", "A colleague of Sam",
+                 "- John Smith is a colleague of Sam\n", extra='aliases: ["Smith, John"]\n'))
+        index = self.make()
+        self.assertNotIn("global/people/john-smith.md",
+                         [h[0] for h in index.hints("John", ALL, min_similarity=0.9)])
+        self.assertIn("global/people/john-smith.md",
+                      [h[0] for h in index.hints("Smith, John", ALL, min_similarity=0.9)])
 
     def test_project_boost_ranks_the_project_file_over_an_equal_similarity_global(self):
         body = "- identical duplicated line entry\n"
