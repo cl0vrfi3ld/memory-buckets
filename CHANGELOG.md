@@ -10,13 +10,6 @@ change the store's layout; the plugin migrates the store itself (see
 
 ### Added
 
-- **Drift detection for the Hermes internals the plugin depends on.** The Hermes
-  integration probe now imports and calls the private code behind the desktop workspace
-  override, the gateway per-turn cwd, the TUI status line and project lookup, and fails
-  naming whichever moved. Before, those paths fell back silently (an ignored workspace,
-  no status line, an unscoped session) and a Hermes refactor looked like behaviour drift.
-  A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
-  from the job pinned to a Hermes release.
 - **Threat scanning for memory.** Writes and prompt-bound text now go through the same
   prompt-injection scan Hermes's built-in memory uses.
   - `memory_write`, `memory_append` and `memory_str_replace` refuse content that matches,
