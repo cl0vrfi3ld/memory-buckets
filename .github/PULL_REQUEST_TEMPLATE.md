@@ -1,15 +1,13 @@
-Fixes #
-
-<!-- Use "Fixes #N" when this PR completes the issue, or "Part of #N (1/M). Refs #N." when split across multiple PRs so the parent issue stays open until every part lands. -->
+<!-- If this PR addresses an issue, add "Fixes #N" at the top (or "Part of #N (1/M). Refs #N." when split across multiple PRs so the parent issue stays open until every part lands). Omit if there is no linked issue. -->
 <!-- Keep one concern per PR. Do not modify README.md or CHANGELOG.md unless asked by the maintainer on the thread. -->
 
 ## What changed
 
 -
 
-## Done when
+## Issue criteria
 
-<!-- Map each "Done when" item from the issue to the test or check that verifies it. -->
+<!-- Required only when this PR lines up with an existing issue: map each "Done when" item from the issue to the test or check that verifies it. Remove this section if there is no linked issue. -->
 
 -
 

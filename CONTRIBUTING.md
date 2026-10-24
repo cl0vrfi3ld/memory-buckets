@@ -26,7 +26,7 @@ Inside the Nix devshell (`direnv allow` or `nix develop`):
 - `lint` runs `ruff check .`.
 - `run` executes a command inside the project venv (`uv run`).
 
-Without Nix, use Python 3.10 or newer (with `sqlite3` compiled with FTS5) and `uv`:
+Without Nix, use Python 3.11 or newer (with `sqlite3` compiled with FTS5) and `uv`:
 
 ```sh
 uv sync
@@ -46,12 +46,15 @@ the CI layout are covered under [Development](README.md#development) in the READ
 
 ## House rules
 
-- **Standard library only.** `pyproject.toml` sets `dependencies = []` on purpose. Test
-  and build tools belong in `[dependency-groups].dev` only. A runtime dependency needs a
-  strong reason and a maintainer's approval before you write it.
-- **Python 3.10 is the floor.** `requires-python = ">=3.10"` and Ruff's
-  `target-version = "py310"` enforce this, and the Windows CI job exercises Python 3.10.
-  Do not use newer syntax or standard library additions without a 3.10 fallback.
+- **Minimal runtime dependencies.** `pyproject.toml` currently sets `dependencies = []`,
+  with `onnxruntime` planned for EmbeddingGemma 2 (#61); everything else in runtime code
+  uses the Python standard library. Test and build tools belong in
+  `[dependency-groups].dev` only. Any other runtime dependency needs a strong reason and
+  a maintainer's approval before you write it.
+- **Python 3.11 is the floor.** `requires-python = ">=3.11"` and Ruff's
+  `target-version = "py311"` enforce this, and the Linux, macOS, and Windows CI jobs
+  exercise Python 3.11. Do not use newer syntax or standard library additions without a
+  3.11 fallback.
 - **Tests come with the change.** Every bug fix includes a test that fails on `main`
   without the fix. Every new behaviour includes a test that pins it. Wire hand
   reproductions and new tests with the fixtures in `tests/helpers.py` (`StoreCase`,
@@ -64,10 +67,8 @@ the CI layout are covered under [Development](README.md#development) in the READ
 - **Comments say why.** The code shows what it does. Write a comment when the reason is
   not obvious: a Windows file-locking or ACL quirk, a case that bit someone, or a limit
   that looks arbitrary.
-- **British spelling and ASCII only.** Use British spelling (`normalise`, `behaviour`,
-  `recognised`, `colour`) in code, comments, documentation, commit messages, and pull
-  requests. Keep added lines ASCII only: no em dashes, en dashes, smart quotes, or
-  emoji.
+- **ASCII only.** Keep added lines in code, comments, documentation, commit messages, and
+  pull requests ASCII only: no em dashes, en dashes, smart quotes, or emoji.
 - **Lint is `ruff check .`, nothing more.** The rules (`E4`, `E7`, `E9`, `F`,
   `line-length = 140`) are pinned in `pyproject.toml` so every Ruff version checks the
   same thing. The codebase is not auto-formatted; do not run `ruff format` or reformat
@@ -90,8 +91,8 @@ from `.github/ISSUE_TEMPLATE/`:
   checked, give a minimal reproduction (commands, inputs, expected versus actual
   behaviour), outline a proposed fix if known, and list checkable "Done when" criteria.
 - **Feature request** (`.github/ISSUE_TEMPLATE/feature-request.md`): state the problem
-  or gap on `main`, describe the proposed behaviour and what is out of scope, list any
-  prerequisite issues under "Depends on", and give checkable "Done when" criteria.
+  or gap on `main`, describe the proposed behaviour and what is out of scope, and list
+  any prerequisite issues under "Depends on".
 
 ## Commits and pull requests
 
@@ -100,8 +101,9 @@ from `.github/ISSUE_TEMPLATE/`:
 - **One concern per pull request.** Keep each pull request focused on a single issue, or
   one self-contained part of a multi-part issue. If an issue covers two independent
   changes, split them into separate branches and pull requests.
-- **Branch naming.** Branch from `main` as `<user>/issue-<N>-<short-slug>` (or
-  `fix/<short-slug>`, `feat/<short-slug>`).
+- **Branch naming.** Branch from `main` as `<type>/<short-slug>`, where `<type>` is one
+  of `feat`, `fix`, `refactor`, `test`, `docs`, or `ci` (for example,
+  `fix/frontmatter-comments` or `docs/contributing-guidelines`).
 - **Clean commit history.** Fold review or lint fixups into the relevant commit before
   opening the pull request rather than leaving "fix lint" or "drop README edits" commits
   at the tip. Do not force-push a branch that is already under review without maintainer
@@ -122,20 +124,19 @@ Commit messages and pull request titles follow
 |---|---|
 | `feat` | New user-facing or plugin capability |
 | `fix` | Bug fix |
+| `refactor` | Code restructuring with no behaviour change |
 | `test` | Adding or updating tests or benchmarks only |
 | `docs` | Documentation or templates only |
-| `refactor` | Code restructuring with no behaviour change |
-| `perf` | Performance or memory improvement |
 | `ci` | CI workflow changes |
-| `build` | Build system, packaging (`pyproject.toml`, `hatch_build.py`, `flake.nix`, `nix/`) |
-| `chore` | Maintenance and housekeeping |
 
 **Scopes:**
 
-Use the module or subsystem touched: `store`, `index`, `snapshot`, `tools`, `provider`,
-`config`, `cli`, `frontmatter`, `embeddings`, `static_model`, `scopes`, `credentials`,
-`migrate`, `inbox`, `projects`, `skills`, `hermes`, `security`, or `nix`. Omit `(scope)`
-only when a change spans the whole repository.
+Use the subsystem touched rather than individual filenames: `store` (files, frontmatter,
+history, migrations), `index` (SQLite FTS5, chunking, embeddings), `snapshot` (system
+prompt and prefetch hints), `tools` (the `memory_*` tools), `provider` (Hermes lifecycle,
+inbox, projects), `cli`, `config`, or `security` (threat scanning, credentials,
+permissions). Omit `(scope)` when a change spans multiple subsystems or only touches
+docs, tests, packaging, or CI.
 
 **Summary and body rules:**
 
@@ -151,13 +152,15 @@ only when a change spans the whole repository.
 
 Follow `.github/PULL_REQUEST_TEMPLATE.md` when opening a pull request against `main`:
 
-1. **Issue reference:** Put `Fixes #N` (or `Closes #N`) at the top when merging the pull
-   request completes the issue. When an issue is split across several pull requests, use
-   `Part of #N (1/M). Refs #N.` instead so merging one part does not close the parent
-   issue before the rest land.
+1. **Issue reference (when applicable):** When the pull request addresses an issue, put
+   `Fixes #N` (or `Closes #N`) at the top if merging completes the issue. When an issue
+   is split across several pull requests, use `Part of #N (1/M). Refs #N.` instead so
+   merging one part does not close the parent issue before the rest land. Omit this line
+   when the pull request does not correspond to an existing issue.
 2. **What changed:** Bullet the files and symbols touched and the reason for each change.
-3. **Done when:** Map each acceptance criterion from the issue to the test or check that
-   verifies it.
+3. **Issue criteria (when applicable):** Required only when the pull request lines up
+   with an existing issue. Map each "Done when" criterion from the issue to the test or
+   check that verifies it, or remove this section when there is no linked issue.
 4. **Verification:** Record the commands you ran (`uv run pytest tests/`,
    `uvx ruff check .`), the pass and skip counts on `main` versus your branch,
    confirmation that new tests fail on bare `main` before the change, and anything you

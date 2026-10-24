@@ -18,9 +18,3 @@ ref: 'main'
 <!-- Optional: list prerequisite issues or pull requests, or remove this section. -->
 
 - None.
-
-## Done when
-
-<!-- Checkable criteria a pull request and its tests must satisfy. -->
-
--
