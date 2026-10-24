@@ -174,7 +174,6 @@ def _check_frontmatter(text: str, rel: str):
 
 
 INLINE_TAILS = ("profile.md", "preferences.md")  # snapshot.build inlines these whole
-INBOX = f"{GLOBAL}/inbox.md"  # its body is quoted verbatim in the inbox note
 
 
 def _blocked_reason(text: str) -> Optional[str]:
@@ -196,12 +195,13 @@ def _scanner_blocking(store: Store) -> List[Tuple[str, str]]:
 
     ``snapshot._screened`` silently blocks two kinds of text: the file-listing
     descriptions (which also feed the prefetch hints), and the whole bodies of the
-    files it inlines, */profile.md and */preferences.md, plus ``inbox.md`` whose body
-    the inbox note quotes. Hand edits and synced files never pass the write-time scan
-    in ``tools``, so a store can lose a file from every prompt after an upgrade with
-    only Hermes's log as signal; issue #49 asks lint and status to name them.
-    Other files' bodies do not enter the prompt (memory_read returns them raw on
-    request, a deliberate choice), so their body matches are not reported here."""
+    files it inlines, */profile.md and */preferences.md. Hand edits and synced files never
+    pass the write-time scan in ``tools``, so a store can lose a file from every prompt
+    after an upgrade with only Hermes's log as signal; issue #49 asks lint and status to
+    name them. Other files' bodies do not enter the prompt (memory_read returns them raw
+    on request, a deliberate choice), so their body matches are not reported here;
+    ``inbox.md`` is one of them, its note being fixed text, so only its description
+    is checked."""
     findings: List[Tuple[str, str]] = []
     for rel in sorted(store.iter_paths()):
         try:
@@ -218,14 +218,13 @@ def _scanner_blocking(store: Store) -> List[Tuple[str, str]]:
                 if reason:
                     findings.append((rel, f"description {reason}; "
                                           "kept out of every prompt listing and prefetch hint; fix or delete it"))
-        if rel == INBOX or rel.rsplit("/", 1)[-1] in INLINE_TAILS:
+        if rel.rsplit("/", 1)[-1] in INLINE_TAILS:
             screened = text if err is not None else body.strip()
             if screened:
                 reason = _blocked_reason(screened)
                 if reason:
-                    how = ("the inbox note quotes its body" if rel == INBOX
-                           else "the snapshot inlines the whole file")
-                    findings.append((rel, f"body {reason}; {how}; fix or delete it by hand"))
+                    findings.append((rel, f"body {reason}; the snapshot inlines the "
+                                          "whole file; fix or delete it by hand"))
     return findings
 
 

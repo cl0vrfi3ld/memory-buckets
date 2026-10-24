@@ -396,6 +396,16 @@ class LintStatusTest(ThreatCase):
         self.assertEqual(code, 0, out)
         self.assertNotIn("hobby.md", out)
 
+    def test_lint_does_not_report_a_blocked_body_of_the_inbox(self):
+        # The inbox is a listed file: snapshot.build adds only its listing line and
+        # fixed INBOX_NOTE text, never its body, so a hand-poisoned inbox body is
+        # not a scanner block; its description (the listing line) still is.
+        self.put("global/inbox.md", doc("inbox", "Imported memory waiting to be sorted", f"- We {INJECTION}\n"))
+        code, out = self.run_cli("lint")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("global/inbox.md: body matched threat pattern(s)", out)
+        self.assertNotIn("the inbox note quotes its body", out)
+
     def test_status_counts_blocked_files_and_lint_has_the_detail(self):
         self.put("global/people/sam.md", doc("sam", f"Who Sam is. {INJECTION}", "- Sam likes climbing"))
         self.put("global/preferences.md", doc("preferences", "How to work", f"- We {INJECTION}\n"))
