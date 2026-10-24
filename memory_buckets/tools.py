@@ -202,7 +202,7 @@ def _list(args, ctx: Context):
 def _read(args, ctx: Context):
     paths = _str_list(args, "paths")
     if not paths or len(paths) > MAX_READ_PATHS:
-        raise ArgError(f"'paths' needs 1–{MAX_READ_PATHS} paths")
+        raise ArgError(f"'paths' needs 1-{MAX_READ_PATHS} paths")
     offset = args.get("offset")
     if offset is None:
         offset = 0
