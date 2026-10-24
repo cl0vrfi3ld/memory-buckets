@@ -135,7 +135,11 @@ class CreatedPrivateTest(PrivateCase):
             dest.mkdir(parents=True, exist_ok=True)
             raise OSError("no network")
 
-        with mock.patch.object(static_model, "fetch", offline):
+        # Point BUNDLED_DIR at a path that cannot exist: the Nix build ships a
+        # complete model in memory_buckets/model/, and cmd_fetch_model short-circuits
+        # to "already available" before the mocked fetch runs when locate() finds one.
+        with mock.patch.object(static_model, "fetch", offline), \
+                mock.patch.object(static_model, "BUNDLED_DIR", self.base / "none"):
             code, out = self.run_cli("fetch-model")
         self.assertEqual(code, 1, out)
         self.assertEqual(mode(self.root), 0o700)
