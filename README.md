@@ -243,6 +243,11 @@ patterns (`tools.threat_patterns`, `strict` scope). On a match:
   tell the user to fix or delete it]` stand-in; `memory_read` still returns the file.
 - **Hints.** A matching hint description is dropped with a warning, and a matching
   built-in memory write is never mirrored into `global/inbox.md`.
+- **Tool results.** `memory_list` and `memory_search` also screen the frontmatter
+  description they return: a matching one comes back as the same `[BLOCKED: ...]`
+  stand-in with a warning logged. What stays raw is what the model asked for:
+  `memory_read` bodies, and search snippets from files that have bodies; a file
+  with no body chunks returns an empty snippet, never its identity text.
 
 Matching is heuristic, so harmless text can be blocked; the tests and the docstrings
 carry the detail.
