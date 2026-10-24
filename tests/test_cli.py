@@ -31,7 +31,7 @@ class CliTest(StoreCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith("MEMORY_BUCKETS_")}
         env.update(MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD="0", MEMORY_BUCKETS_MODEL_DIR=str(self.home / "nowhere"),
                    HERMES_HOME=str(self.home))
-        with mock.patch.dict(os.environ, env, clear=True), mock.patch("memory_buckets.static_model.BUNDLED_DIR", self.home / "none"), \
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch("memory_buckets.embeddings.BUNDLED_DIR", self.home / "none"), \
                 contextlib.redirect_stdout(out):
             code = run_hermes_cli("status")
         self.assertEqual(code, 0, out.getvalue())
@@ -43,8 +43,8 @@ class CliTest(StoreCase):
         env = {k: v for k, v in os.environ.items() if not k.startswith("MEMORY_BUCKETS_")}
         env.update(MEMORY_BUCKETS_MODEL_DIR=str(self.home / "nowhere"), HERMES_HOME=str(self.home))
         with mock.patch.dict(os.environ, env, clear=True), \
-                mock.patch("memory_buckets.static_model.BUNDLED_DIR", self.home / "none"), \
-                mock.patch("memory_buckets.static_model.fetch_in_background") as bg_fetch, \
+                mock.patch("memory_buckets.embeddings.BUNDLED_DIR", self.home / "none"), \
+                mock.patch("memory_buckets.embeddings.fetch_in_background") as bg_fetch, \
                 contextlib.redirect_stdout(out):
             code = run_hermes_cli("status")
         self.assertEqual(code, 0, out.getvalue())

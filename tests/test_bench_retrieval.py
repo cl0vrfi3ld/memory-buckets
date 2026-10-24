@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import bench_retrieval as bench
 from .helpers import FakeEmbedder
-from memory_buckets import index, static_model
+from memory_buckets import embeddings, index
 
 REAL = os.environ.get("MEMORY_BUCKETS_MODEL_DIR")
 
@@ -153,17 +153,17 @@ class RunTest(unittest.TestCase):
             self.assertIn(needle, text)
 
 
-@unittest.skipUnless(REAL and static_model.is_complete(Path(REAL or "/")), "set MEMORY_BUCKETS_MODEL_DIR to the real model")
+@unittest.skipUnless(REAL and embeddings.is_complete(Path(REAL or "/")), "set MEMORY_BUCKETS_MODEL_DIR to the real model")
 class RealModelBenchTest(unittest.TestCase):
-    """Floors from the first run on potion-retrieval-32M, with slack. They catch a retrieval
+    """Floors from EmbeddingGemma 2 (q4, 256d), with slack. They catch a retrieval
     regression; the last test catches the benchmark going soft."""
 
     @classmethod
     def setUpClass(cls):
-        cls.results = bench.run_benchmark(REAL)
+        cls.results = bench.run_benchmark(REAL, filler=120)
 
     def test_exact_set_holds(self):
-        # Measured 0.9231 search top-1 (one sourdough-for-allergy miss), 1.0 top-3 and hint recall.
+        # Measured 1.0 search top-1, top-3 and hint recall across both stores.
         for label, report in self.results.items():
             row = report["splits"]["exact"]
             with self.subTest(store=label):
@@ -172,13 +172,14 @@ class RealModelBenchTest(unittest.TestCase):
                 self.assertGreaterEqual(row["hint_recall"], 0.8)
 
     def test_paraphrase_floor(self):
-        # Measured small store: search top-3 0.5, hint recall 0.1875.
+        # Measured small store: search top-3 0.75, hint recall 0.4375.
         row = self.results["small"]["splits"]["paraphrase"]
-        self.assertGreaterEqual(row["search_top3"], 0.35)
-        self.assertGreaterEqual(row["hint_recall"], 0.1)
+        self.assertGreaterEqual(row["search_top3"], 0.6)
+        self.assertGreaterEqual(row["hint_recall"], 0.3)
 
     def test_negatives_stay_quiet(self):
-        # Measured 1 of 15 turns hinted at the 0.27 default.
+        # Measured 0 of 15 turns hinted on the small store (max_sim 0.675), 3 of 15 on the
+        # filler store at the 0.68 default.
         for label, report in self.results.items():
             with self.subTest(store=label):
                 self.assertLessEqual(report["splits"]["negative"]["hint_fp_rate"], 0.2)

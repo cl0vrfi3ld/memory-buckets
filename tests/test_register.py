@@ -159,7 +159,7 @@ class RegisterTest(unittest.TestCase):
         self.assertRegex(manifest, r"(?m)^manifest_version: 2$")
         self.assertRegex(manifest, r"(?m)^api_version: 1$")
         self.assertNotRegex(manifest, r"(?m)^kind:")
-        self.assertRegex(manifest, r"(?m)^python_runtime: external$")
+        self.assertNotRegex(manifest, r"(?m)^python_runtime:")
 
     @unittest.skipUnless((PLUGIN_DIR / "pyproject.toml").exists(), "installed package: no pyproject.toml")
     def test_pip_and_plugin_metadata_agree(self):
@@ -169,7 +169,7 @@ class RegisterTest(unittest.TestCase):
         version = lambda text: re.search(r'(?m)^version\s*[:=]\s*"?([^"\s]+)', text).group(1)  # noqa: E731
         self.assertEqual(version(pyproject), version(manifest))
         self.assertIn('memory-buckets = "memory_buckets"', pyproject, "entry point name must be the provider name")
-        self.assertIn("dependencies = []", pyproject, "stdlib only")
+        self.assertIn('dependencies = ["onnxruntime>=1.20,<2", "tokenizers>=0.23,<0.24"]', pyproject)
         self.assertIn('license = "MIT"', pyproject)
         self.assertTrue((PLUGIN_DIR / "LICENSE").is_file(), "the plugin dir ships its own LICENSE")
 

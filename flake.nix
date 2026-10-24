@@ -44,11 +44,6 @@
           checks = {
             # Builds the wheel and runs the test suite.
             package = self'.packages.memory-buckets;
-            # Token-for-token parity with Hugging Face's tokenizers, which the package's
-            # own build doesn't pull in.
-            tokenizer = self'.packages.memory-buckets.overridePythonAttrs (old: {
-              nativeCheckInputs = old.nativeCheckInputs ++ [ python.pkgs.tokenizers ];
-            });
           };
 
           devshells.default = {

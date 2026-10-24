@@ -50,7 +50,7 @@ class EmbeddingsConfig:
 class Config:
     embeddings: EmbeddingsConfig = field(default_factory=EmbeddingsConfig)
     store_path: str = ""  # default: $HERMES_HOME/memory-buckets
-    prefetch_min_similarity: float = -1.0  # < 0: the built-in model's measured default, 0.27
+    prefetch_min_similarity: float = -1.0  # < 0: the built-in model's measured default, 0.68
     prefetch_max_hints: int = 4
     snapshot_max_chars: int = 12000  # the rules alone are ~3k; the rest is profile, preferences and the file list
     nudge_interval: int = 10  # user turns between filing reminders; 0 = off

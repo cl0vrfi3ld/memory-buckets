@@ -9,8 +9,6 @@ import pytest
 # by having it set.
 OPT_IN = frozenset({
     "MEMORY_BUCKETS_MODEL_DIR",
-    "MEMORY_BUCKETS_MODEL_F32",
-    "MEMORY_BUCKETS_REFERENCE_TOKENIZER",
 })
 
 

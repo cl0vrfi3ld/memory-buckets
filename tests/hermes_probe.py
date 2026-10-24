@@ -35,11 +35,12 @@ p1, p2 = load_memory_provider("memory-buckets"), load_memory_provider("memory-bu
 out["is_provider"] = isinstance(p1, MemoryProvider)
 out["provider_file"] = sys.modules[type(p1).__module__].__file__
 
-# Hermes's package manager must not treat the plugin as a dependency-managed
-# workspace member (enabling one runs `uv lock` against Hermes's uv.lock).
+# Hermes's package manager admits the plugin directory's runtime dependencies.
 from pm.plugin_declarations import read_python_declaration  # noqa: E402
 plugin_root = next(d for d in Path(out["provider_file"]).parents if (d / "plugin.yaml").exists())
-out["pm_member"] = read_python_declaration(plugin_root).is_member
+decl = read_python_declaration(plugin_root)
+out["pm_member"] = getattr(decl, "is_member", getattr(decl, "installs_packages", False))
+out["pm_requirements"] = list(decl.install_requirements)
 out["distinct_instances"] = p1 is not p2
 
 # Our overrides must accept everything the base signature can pass.

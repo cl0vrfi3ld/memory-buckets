@@ -1,6 +1,6 @@
-# The built-in embedding model: minishlab/potion-retrieval-32M at the
-# revision static_model.py pins, converted to float16 by the plugin's own stdlib
-# converter. That halves it to ~65 MB with cosine differences around 2e-5. Wheels
+# The built-in embedding model: onnx-community/embeddinggemma-2-ONNX (q4) at the
+# revision embeddings.py pins. Only the text backbone and tokeniser are fetched;
+# vision and audio encoders live in separate .onnx files and are not used. Wheels
 # built outside Nix get the same files from hatch_build.py.
 {
   lib,
@@ -10,41 +10,40 @@
 }:
 
 let
-  revision = "6fc8051fab2a1e0ee76689cf08c853792ac285e7";
+  revision = "daa72c51243991dfcaf9f9137d2c573d8f7790c0";
   fetch =
     name: sha256:
     fetchurl {
-      url = "https://huggingface.co/minishlab/potion-retrieval-32M/resolve/${revision}/${name}";
+      url = "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX/resolve/${revision}/${name}";
       inherit sha256;
     };
   upstream = {
-    # Also pinned in static_model.py (MODEL_FILES) for runtime downloads.
-    model = fetch "model.safetensors" "07609e5bd33aad37900b3fd62f4ec96f6daec88ca4d46b9d8b928bfababf6ea0";
-    vocab = fetch "vocab.txt" "4b3452e69455f96c6cfc1cdb212d3b7b1a3e9d2505ab6f61a50022f61467a6a3";
-    # Only for the tokenizer parity test; the plugin never reads it.
-    tokenizer = fetch "tokenizer.json" "7d75cbc54318138807c401b0f0c9721117c628b39de8e8e0edb6cb17e0ee7d18";
+    # Also pinned in embeddings.py (MODEL_FILES) for runtime downloads.
+    model = fetch "onnx/model_q4.onnx" "f9eeba97acddf139b8ee2ddf04bc30dceafa88de93fadf74d7644e0d61a477a9";
+    model_data = fetch "onnx/model_q4.onnx_data" "c3975f2d1ab7a1878ae31a7d7a9b7804a827aff3800b60dfceafce21cac3df49";
+    tokenizer = fetch "tokenizer.json" "4d777ef5bdc1aa36227abdfb77c3e49e7b9c892d16e1b6bda41c393504828be4";
   };
 in
-runCommand "potion-retrieval-32M-f16"
+runCommand "embeddinggemma-2-ONNX-q4"
   {
     nativeBuildInputs = [ python ];
     passthru = { inherit upstream revision; };
     meta = {
-      description = "potion-retrieval-32M static embedding model (MinishLab), float16";
-      homepage = "https://huggingface.co/minishlab/potion-retrieval-32M";
-      license = lib.licenses.mit;
+      description = "EmbeddingGemma 2 ONNX (q4) text embedding model";
+      homepage = "https://huggingface.co/onnx-community/embeddinggemma-2-ONNX";
+      license = lib.licenses.asl20;
     };
   }
   ''
     mkdir -p $out
-    cp ${upstream.vocab} $out/vocab.txt
-    python3 - ${../memory_buckets/static_model.py} ${upstream.model} $out <<'PY'
+    cp ${upstream.model} $out/model_q4.onnx
+    cp ${upstream.model_data} $out/model_q4.onnx_data
+    cp ${upstream.tokenizer} $out/tokenizer.json
+    python3 - ${../memory_buckets/embeddings.py} $out <<'PY'
     import importlib.util, pathlib, sys
-    spec = importlib.util.spec_from_file_location("static_model", sys.argv[1])
-    sm = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(sm)
-    out = pathlib.Path(sys.argv[3])
-    sm.convert_to_f16(sys.argv[2], out / "model.safetensors")
-    (out / "NOTICE").write_text(sm.notice())
+    spec = importlib.util.spec_from_file_location("embeddings", sys.argv[1])
+    emb = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(emb)
+    (pathlib.Path(sys.argv[2]) / "NOTICE").write_text(emb.notice(), encoding="utf-8")
     PY
   ''

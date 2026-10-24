@@ -51,6 +51,8 @@ class HermesIntegrationTest(unittest.TestCase):
             shutil.copytree(PLUGIN_DIR, home / "plugins/memory-buckets", ignore=IGNORE)
             out = self.probe(tmp, home)
             self.check(out)
+            self.assertTrue(out["pm_member"], "plugin directory admits dependencies through PM")
+            self.assertEqual(out["pm_requirements"], ["onnxruntime>=1.20,<2", "tokenizers>=0.23,<0.24"])
             self.assertTrue(out["skill_ok"], "skill_view('memory-buckets:sort-imports')")
             self.assertEqual(out["skill_name"], "memory-buckets:sort-imports")
             self.assertTrue(out["tidy_ok"], "skill_view('memory-buckets:tidy-memory')")
@@ -70,6 +72,7 @@ class HermesIntegrationTest(unittest.TestCase):
             self.assertTrue(Path(out["provider_file"]).resolve().is_relative_to((site / "memory_buckets").resolve()),
                             out["provider_file"])
             self.check(out)
+            self.assertFalse(out["pm_member"])
             # Hermes namespaces a pip install's skills "memory_buckets:" and prunes them (README).
             # If this starts failing, Hermes fixed it: drop the fallback in __init__.py.
             self.assertFalse(out["skill_ok"])
@@ -95,7 +98,6 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertEqual(out["cli_names"], ["memory-buckets"])
         self.assertEqual(out["cli_exit"], 0)
         self.assertEqual(out["diagnose_exit"], 0)
-        self.assertFalse(out["pm_member"], "plugin.yaml needs python_runtime: external")
         self.assertEqual(out["slash"], [], "the plugin registers no slash commands")
         self.assertEqual(out["schema_keys"], [
             "readonly", "cron_writes", "nudge_interval", "snapshot_max_chars",

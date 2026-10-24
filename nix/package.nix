@@ -48,21 +48,23 @@ buildPythonPackage {
   '';
 
   build-system = [ hatchling ];
-  dependencies = [ ]; # stdlib only
+  dependencies = [
+    python.pkgs.onnxruntime
+    python.pkgs.tokenizers
+  ];
 
   postInstall = ''
-    test -f $out/${python.sitePackages}/memory_buckets/model/model.safetensors
+    test -f $out/${python.sitePackages}/memory_buckets/model/model_q4.onnx
+    test -f $out/${python.sitePackages}/memory_buckets/model/model_q4.onnx_data
+    test -f $out/${python.sitePackages}/memory_buckets/model/tokenizer.json
   '';
 
   nativeCheckInputs = [ pytestCheckHook ];
-  # The real-model tests run against the bundled model and its float32 original. The
-  # tokenizer parity test also needs HF tokenizers (the flake's `tokenizer` check adds
-  # it). The Hermes integration tests need Hermes's interpreter and skip themselves.
+  # The real-model tests run against the bundled model. The Hermes integration
+  # tests need Hermes's interpreter and skip themselves.
   preCheck = ''
     export HOME=$TMPDIR MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD=0
     export MEMORY_BUCKETS_MODEL_DIR=${model}
-    export MEMORY_BUCKETS_MODEL_F32=${model.upstream.model}
-    export MEMORY_BUCKETS_REFERENCE_TOKENIZER=${model.upstream.tokenizer}
   '';
   pythonImportsCheck = [ "memory_buckets" ];
 

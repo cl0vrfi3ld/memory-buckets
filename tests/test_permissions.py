@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from .helpers import doc, run_hermes_cli, symlink_or_skip
-from memory_buckets import index, migrate, provider, static_model, store
+from memory_buckets import embeddings, index, migrate, provider, store
 
 POSIX = sys.platform != "win32"
 PROFILE = doc("profile", "Who the user is", "- Sam\n")
@@ -127,15 +127,15 @@ class CreatedPrivateTest(PrivateCase):
         self.assertEqual(mode(self.root / "memories" / "global"), 0o700)
 
     def test_fetch_model_creates_the_store_root_private(self):
-        # static_model.fetch mkdirs <root>/.models with parents, and nothing else in
+        # embeddings.fetch mkdirs <root>/.models with parents, and nothing else in
         # that path goes through ensure_dir: on a fresh machine the root would take
         # the umask's mode. The model itself stays public, shielded by the root.
         def offline(store_root, **_):
-            dest = static_model.download_dir(store_root)  # what the real fetch mkdirs first
+            dest = embeddings.download_dir(store_root)  # what the real fetch mkdirs first
             dest.mkdir(parents=True, exist_ok=True)
             raise OSError("no network")
 
-        with mock.patch.object(static_model, "fetch", offline):
+        with mock.patch.object(embeddings, "fetch", offline):
             code, out = self.run_cli("fetch-model")
         self.assertEqual(code, 1, out)
         self.assertEqual(mode(self.root), 0o700)
@@ -202,8 +202,8 @@ class LooseStoreTest(PrivateCase):
         self.assertIn("0640", out)
 
     def test_the_downloaded_model_is_not_a_secret_and_is_not_flagged(self):
-        # store.MODELS_DIR repeats the literal static_model uses; this keeps the two together.
-        self.assertEqual(static_model.download_dir(self.root).parent.name, store.MODELS_DIR)
+        # store.MODELS_DIR repeats the literal embeddings uses; this keeps the two together.
+        self.assertEqual(embeddings.download_dir(self.root).parent.name, store.MODELS_DIR)
         models = self.root / store.MODELS_DIR
         models.mkdir()
         (models / "model.safetensors").write_bytes(b"weights")

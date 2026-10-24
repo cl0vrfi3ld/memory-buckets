@@ -22,7 +22,7 @@ from typing import List
 
 from . import frontmatter, inbox, migrate, projects
 from . import config as config_mod
-from . import static_model
+from . import embeddings
 from ._paths import SKILLS_DIR
 from .embeddings import EmbeddingError, make_embedder, min_similarity
 from .index import Index, IndexInUse
@@ -103,7 +103,7 @@ def cmd_status(args) -> int:
                  f"{min_similarity(cfg, index.embedder):g}")
         except EmbeddingError as err:
             # Not a fault: search is keyword-only until the model is here.
-            _out(f"embeddings  built-in {static_model.MODEL_NAME}: not ready ({err})")
+            _out(f"embeddings  built-in {embeddings.MODEL_NAME}: not ready ({err})")
     problems += _status_hermes(home)
     _status_projects(store)
     loose = store.loose_modes()
@@ -541,7 +541,7 @@ def cmd_hints(args) -> int:
 def cmd_fetch_model(args) -> int:
     """Download the built-in embedding model now (normally automatic, in the background)."""
     cfg, _, store, _ = _open(args)
-    found = static_model.locate(store.root, cfg.embeddings.local_model_dir)
+    found = embeddings.locate(store.root, cfg.embeddings.local_model_dir)
     if found is not None and not args.force:
         _out(f"built-in model already available at {found}")
         return 0
@@ -549,8 +549,8 @@ def cmd_fetch_model(args) -> int:
     # the umask's mode; every other creation path goes through the store's ensure_dir.
     store.ensure_dir(store.root)
     try:
-        dest = static_model.fetch(store.root, progress=lambda msg: _out(msg), timeout=120.0)
-    except (OSError, static_model.ModelUnavailable) as err:
+        dest = embeddings.fetch(store.root, progress=lambda msg: _out(msg), timeout=120.0)
+    except (OSError, embeddings.ModelUnavailable) as err:
         _out(f"error: {err}")
         return 1
     _out(f"built-in model ready at {dest}")

@@ -343,7 +343,7 @@ class EmbeddingIndexTest(IndexTest):
         embedder.calls.clear()
         index.embed_backlog(max_batches=None)
         embedded_texts = [text for batch in embedder.calls for text in batch]
-        self.assertIn("Infrastructure > Hetzner Storage Box\n- mounted at /mnt/box", embedded_texts)
+        self.assertIn("title: Infrastructure > Hetzner Storage Box | text: - mounted at /mnt/box", embedded_texts)
         hints = index.hints("Infrastructure", ALL, min_similarity=0.2)
         self.assertEqual(hints[0][0], "global/topics/infra.md")
 
@@ -382,21 +382,24 @@ class CleanEmbeddingTest(StoreCase):
 
     def test_chunk_zero_embeds_the_clean_identity_not_the_raw_path(self):
         texts = self.embedded()
-        self.assertIn("nix\nNix and NixOS", texts)
+        self.assertIn("title: nix | text: nix\nNix and NixOS", texts)
         self.assertTrue(all("global/topics/" not in t for t in texts))
         self.assertTrue(all(".md" not in t for t in texts))
         self.assertTrue(all("Read when working on" not in t for t in texts))
 
     def test_headingless_body_chunks_carry_the_stem_but_generic_stems_do_not(self):
+        self.put("global/topics/kelp-sonar.md", doc("kelp-sonar", "Hydrophone tool", "- swept-sine chirps\n"))
         texts = self.embedded()
-        self.assertIn("tailscale\n- tailnet lock is on", texts)
-        self.assertIn("- Sam", texts)
-        self.assertNotIn("profile\n- Sam", texts)
+        self.assertIn("title: tailscale | text: - tailnet lock is on", texts)
+        self.assertIn("title: kelp-sonar | text: kelp-sonar\nHydrophone tool", texts)
+        self.assertIn("title: kelp sonar | text: - swept-sine chirps", texts)
+        self.assertIn("title: none | text: - Sam", texts)
+        self.assertNotIn("title: profile | text: - Sam", texts)
 
     def test_headed_body_chunk_keeps_its_heading_and_the_identity_stays_clean(self):
         texts = self.embedded()
-        self.assertIn("Infrastructure\n- mounted at /mnt/box", texts)
-        self.assertIn("infra\nServer notes", texts)
+        self.assertIn("title: Infrastructure | text: - mounted at /mnt/box", texts)
+        self.assertIn("title: infra | text: infra\nServer notes", texts)
 
 
 class FileRankAndCoverageTest(StoreCase):

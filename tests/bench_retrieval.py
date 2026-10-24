@@ -1,7 +1,7 @@
 """Synthetic retrieval and prefetch hint benchmark for memory-buckets.
 
 Run with:
-    MEMORY_BUCKETS_MODEL_DIR=<path-to-potion-retrieval-32M> uv run python -m tests.bench_retrieval
+    MEMORY_BUCKETS_MODEL_DIR=<path-to-embeddinggemma-2-ONNX> uv run python -m tests.bench_retrieval
 
 Three splits, reported separately, over two stores:
 
@@ -29,7 +29,7 @@ from typing import Dict, List, Optional, Tuple
 
 from memory_buckets import scopes, snapshot
 from memory_buckets.config import Config
-from memory_buckets.embeddings import StaticEmbedder
+from memory_buckets.embeddings import OnnxEmbedder
 from memory_buckets.index import _STOPWORDS, Index
 from memory_buckets.store import Store
 
@@ -357,7 +357,7 @@ FILLER_FILES = 400
 INLINED = {"global/profile.md", "global/preferences.md", "atlas-db/profile.md"}
 
 # Thresholds for the prefetch_min_similarity sweep; the model's own default is added to the list.
-SWEEP_THRESHOLDS = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45]
+SWEEP_THRESHOLDS = [0.55, 0.60, 0.64, 0.66, 0.68, 0.70, 0.72, 0.75]
 
 
 def _format_doc(path: str, desc: str, aliases: List[str], body: str) -> str:
@@ -548,7 +548,7 @@ def run_benchmark(
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "store"
             store = _write_store(root, corpus)
-            emb = embedder or StaticEmbedder(root, model_dir=model_dir, auto_download=False)
+            emb = embedder or OnnxEmbedder(root, model_dir=model_dir, auto_download=False)
             index = Index(store, emb)  # type: ignore[arg-type]
             try:
                 t0 = time.perf_counter()

@@ -7,4 +7,3 @@ author: cl0vrfi3ld
 homepage: https://git.cl0vr.co/cl0vr/memory-buckets
 description: "Markdown-based memory provider with hybrid search (FTS keyword + static embeddings), inspired by Claude memory."
 tags: [memory, markdown, embeddings, fts5]
-python_runtime: external

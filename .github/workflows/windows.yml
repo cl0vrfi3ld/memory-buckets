@@ -51,23 +51,22 @@ jobs:
 
       - run: uv sync --locked
 
-      # The real model enables the real-model tests (mmap of the weights, encode).
-      # static_model.py pins the revision and hashes, so it keys the cache.
+      # The real model enables the real-model tests (ONNX session, encode).
+      # embeddings.py pins the revision and hashes, so it keys the cache.
       - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/mb-model
-          key: model-${{ hashFiles('memory_buckets/static_model.py') }}
+          key: model-${{ hashFiles('memory_buckets/embeddings.py') }}
 
       - name: Fetch the embedding model
         run: |
           uv run python -c "
           import os
           from pathlib import Path
-          from memory_buckets import static_model as sm
-          d = sm.fetch(Path(os.environ['RUNNER_TEMP']) / 'mb-model')
+          from memory_buckets import embeddings
+          d = embeddings.fetch(Path(os.environ['RUNNER_TEMP']) / 'mb-model')
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
               env.write(f'MEMORY_BUCKETS_MODEL_DIR={d}\n')
-              env.write(f'MEMORY_BUCKETS_MODEL_F32={d / \"model.safetensors\"}\n')
           "
 
       - run: uv run pytest -rs

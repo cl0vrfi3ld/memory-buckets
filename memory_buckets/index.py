@@ -25,7 +25,7 @@ from collections import defaultdict
 from typing import Callable, Dict, List, Optional, Tuple
 
 from . import frontmatter
-from .embeddings import EmbeddingError, StaticEmbedder, dot
+from .embeddings import EmbeddingError, OnnxEmbedder, dot
 from .store import GLOBAL, Store, create_private_file, scope_of, stem, version
 
 logger = logging.getLogger("memory_buckets")
@@ -36,7 +36,7 @@ SCHEMA_VERSION = "5"
 CHUNK_CHARS = 300
 RRF_K = 60
 CANDIDATES = 200
-SEARCH_MIN_SIMILARITY = 0.20
+SEARCH_MIN_SIMILARITY = 0.65
 
 _GENERIC_STEMS = frozenset({"profile", "preferences", "inbox"})
 
@@ -174,12 +174,14 @@ def _fts_identity(rel: str, description: str, aliases: List[str]) -> str:
 
 def _embed_text(rel: str, ord_: int, heading: str, text: str, description: str, aliases: List[str]) -> str:
     if ord_ == 0:
-        return _fts_identity(rel, description, aliases)
+        return f"title: {stem(rel)} | text: {_fts_identity(rel, description, aliases)}"
     if heading:
-        return f"{heading}\n{text}"
-    if stem(rel) not in _GENERIC_STEMS:
-        return f"{stem(rel).replace('-', ' ')}\n{text}"
-    return text
+        title = heading
+    elif stem(rel) not in _GENERIC_STEMS:
+        title = stem(rel).replace("-", " ")
+    else:
+        title = "none"
+    return f"title: {title} | text: {text}"
 
 
 def _aliases_stored(value: Optional[str]) -> List[str]:
@@ -199,8 +201,8 @@ def _active_tokens(query: str) -> List[str]:
     single-digit numbers dropped from anything multi-word, order-preserving
     dedupe."""
     all_tokens = re.findall(r"\w+", query.lower())
-    # Head/tail sampling mirrors the embedder's own query pre-truncation in
-    # static_model.py, so the FTS leg sees the same beginning and end of a
+    # Head/tail sampling mirrors the embedder's own query windowing in
+    # embeddings.py, so the FTS leg sees the same beginning and end of a
     # long message the vector leg does. Order-preserving dedupe collapses the
     # head/tail overlap; for short queries the sampled list is the whole
     # query, so behaviour is unchanged.
@@ -221,7 +223,7 @@ class IndexInUse(sqlite3.OperationalError):
 
 
 class Index:
-    def __init__(self, store: Store, embedder: Optional[StaticEmbedder] = None) -> None:
+    def __init__(self, store: Store, embedder: Optional[OnnxEmbedder] = None) -> None:
         self.store = store
         self.embedder = embedder
         self.path = store.root / ".index" / "memory.sqlite"
