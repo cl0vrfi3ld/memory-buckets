@@ -617,6 +617,13 @@ class Index:
                                       "ORDER BY ord LIMIT 1", (path,)).fetchone()
                     if row is not None:
                         heading, text = row
+                    else:
+                        # No body chunk at all. The identity text would repeat the
+                        # metadata the result already carries (path, description,
+                        # aliases), and a hand-edited or synced-in description or
+                        # alias would ride into the model unscreened, since tools
+                        # screens only the description field. Return no snippet.
+                        heading, text = "", ""
             snippet = " ".join(text.split())
             results.append({
                 "path": path,

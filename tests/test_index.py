@@ -245,6 +245,18 @@ class IndexTest(StoreCase):
         self.assertEqual(hits[0]["heading"], "Steeping")
         self.assertEqual(hits[0]["snippet"], "- steep for three minutes")
 
+    def test_bodyless_file_returns_no_snippet(self):
+        # A file with no body chunks has only its identity chunk, whose text is
+        # the metadata the result already carries (path, description, aliases);
+        # the snippet comes back empty instead of repeating it, which also keeps
+        # a hand-edited description or alias out of the model's context.
+        self.put("global/topics/web.md", doc("web", "Web clip notes", ""))
+        hits = list(self.make().search("web clip", ALL)["results"])  # type: ignore[arg-type]
+        self.assertEqual(hits[0]["path"], "global/topics/web.md")
+        self.assertEqual(hits[0]["description"], "Web clip notes")
+        self.assertEqual(hits[0]["heading"], "")
+        self.assertEqual(hits[0]["snippet"], "")
+
     def test_fts_ignores_chunk_zero_path_and_description_boilerplate(self):
         self.put("global/topics/nix.md", doc("nix", "Read when working on Nix and NixOS", "- flakes pin inputs\n"))
         self.put("global/topics/tea.md", doc("tea", "Read when helping Sam with oolong", "- steep leaves\n"))

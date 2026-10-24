@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from . import _compat, credentials, frontmatter, inbox
+from . import _compat, credentials, frontmatter, inbox, snapshot
 from .config import Config
 from .index import Index
 from .scopes import Scope
@@ -189,6 +189,15 @@ def handle(name: str, args: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
 
 # -- reads -----------------------------------------------------------------------
 
+def _screened_description(path: str, description: str) -> str:
+    """The description as it may go back to the model: unchanged, or a ``[BLOCKED:
+    ...]`` line (see ``snapshot``). A tool result lands in the conversation like a
+    prompt block does, and the model never asked to read the description, so a
+    poisoned one is screened exactly like a listing line. The snippet in a search
+    result and every ``memory_read`` body stay raw, like the read path always was."""
+    return snapshot._screened(path, description) if description else ""
+
+
 def _list(args, ctx: Context):
     prefix = _str(args, "prefix", required=False, allow_empty=True) or ""
     include_projects = args.get("include_projects") is True
@@ -199,7 +208,8 @@ def _list(args, ctx: Context):
             continue
         if not (prefix or include_projects or ctx.scope.reads_by_default(path)):
             continue
-        files.append({"path": path, "description": description, "version": ver, "bytes": size})
+        files.append({"path": path, "description": _screened_description(path, description),
+                      "version": ver, "bytes": size})
     return {"ok": True, "scope": ctx.scope.describe(), "files": files}
 
 
@@ -262,6 +272,8 @@ def _search(args, ctx: Context):
         raise ArgError(f"'limit' must be an integer 1–{MAX_SEARCH_LIMIT}")
     read_ok = (lambda p: p.startswith(prefix)) if prefix else ctx.scope.reads_by_default
     found = ctx.index.search(query, read_ok, project=ctx.scope.project, limit=limit, boost=ctx.config.project_boost)
+    for result in found["results"]:
+        result["description"] = _screened_description(result["path"], result.get("description") or "")
     out: Dict[str, Any] = {"ok": True, "mode": found["mode"], "results": found["results"]}
     if found.get("note"):
         out["note"] = found["note"]

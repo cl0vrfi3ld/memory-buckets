@@ -199,13 +199,13 @@ def _screened(path: str, text: str) -> str:
         # any cut. The tools cap writes at store.MAX_FILE_BYTES, well under the
         # window, so a longer file was hand-edited or synced in, never written by
         # them. Refuse it whole rather than inline what was never fully checked.
-        logger.warning("memory-buckets: %s is over the %s-character threat-scan window; keeping it out of the system prompt",
+        logger.warning("memory-buckets: %s is over the %s-character threat-scan window; keeping it out of the model's context",
                        path, window)
         return blocked_too_large(path, window)
     patterns = _compat.scan_threats(text)
     if not patterns:
         return text
-    logger.warning("memory-buckets: %s matched threat pattern(s) %s; keeping it out of the system prompt",
+    logger.warning("memory-buckets: %s matched threat pattern(s) %s; keeping it out of the model's context",
                    path, ", ".join(patterns))
     return blocked(path, patterns)
 
