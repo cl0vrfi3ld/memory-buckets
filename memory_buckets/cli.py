@@ -18,9 +18,9 @@ import time
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
-from . import frontmatter, inbox, migrate, projects
+from . import _compat, frontmatter, inbox, migrate, projects
 from . import config as config_mod
 from . import static_model
 from ._paths import SKILLS_DIR
@@ -124,6 +124,7 @@ def cmd_status(args) -> int:
     if waiting:
         _out(f"inbox       {inbox.PATH}: {_entries(waiting)} waiting to be sorted")
     _status_skipped(store)
+    _status_blocked(store)
     index.close()
     return 1 if problems else 0
 
@@ -170,6 +171,72 @@ def _check_frontmatter(text: str, rel: str):
     except frontmatter.FrontmatterError as err:
         return text, err
     return body, None
+
+
+INLINE_TAILS = ("profile.md", "preferences.md")  # snapshot.build inlines these whole
+INBOX = f"{GLOBAL}/inbox.md"  # its body is quoted verbatim in the inbox note
+
+
+def _blocked_reason(text: str) -> Optional[str]:
+    """Why Hermes's threat scanner keeps ``text`` out of the prompt, None when it passes.
+    The two rejections of ``snapshot._screened``, as one question lint and status can ask
+    without the warning that belongs to prompt time. Outside Hermes there is no scanner
+    (scan_threats returns [] and scan_window_chars is None), so nothing is reported off."""
+    window = _compat.scan_window_chars
+    if window is not None and len(text) > window:
+        return f"over the {window}-character threat-scan window"
+    patterns = _compat.scan_threats(text)
+    if patterns:
+        return f"matched threat pattern(s) {', '.join(patterns)}"
+    return None
+
+
+def _scanner_blocking(store: Store) -> List[Tuple[str, str]]:
+    """``(path, reason)`` for what Hermes's threat scanner keeps out of the prompt.
+
+    ``snapshot._screened`` silently blocks two kinds of text: the file-listing
+    descriptions (which also feed the prefetch hints), and the whole bodies of the
+    files it inlines, */profile.md and */preferences.md, plus ``inbox.md`` whose body
+    the inbox note quotes. Hand edits and synced files never pass the write-time scan
+    in ``tools``, so a store can lose a file from every prompt after an upgrade with
+    only Hermes's log as signal; issue #49 asks lint and status to name them.
+    Other files' bodies do not enter the prompt (memory_read returns them raw on
+    request, a deliberate choice), so their body matches are not reported here."""
+    findings: List[Tuple[str, str]] = []
+    for rel in sorted(store.iter_paths()):
+        try:
+            text = (store.memories / rel).read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            continue  # gone since the walk; lint's own read reports real errors
+        body, err = _check_frontmatter(text, rel)
+        if err is None:
+            fm, _ = frontmatter.parse(text)
+            desc = fm.get("description")
+            desc = desc if isinstance(desc, str) else ""
+            if desc:
+                reason = _blocked_reason(desc)
+                if reason:
+                    findings.append((rel, f"description {reason}; "
+                                          "kept out of every prompt listing and prefetch hint; fix or delete it"))
+        if rel == INBOX or rel.rsplit("/", 1)[-1] in INLINE_TAILS:
+            screened = text if err is not None else body.strip()
+            if screened:
+                reason = _blocked_reason(screened)
+                if reason:
+                    how = ("the inbox note quotes its body" if rel == INBOX
+                           else "the snapshot inlines the whole file")
+                    findings.append((rel, f"body {reason}; {how}; fix or delete it by hand"))
+    return findings
+
+
+def _status_blocked(store: Store) -> None:
+    """What the scanner keeps out of the agent's prompt. Not a fault, so it doesn't
+    fail the command; ``lint`` has the per-file detail."""
+    blocked = _scanner_blocking(store)
+    files = {rel for rel, _ in blocked}
+    if files:
+        _out(f"blocked     {_plural(len(files), 'file')} whose text Hermes's threat scanner "
+             f"rejects, so it stays out of the prompt; run `hermes memory-buckets lint` for details")
 
 
 def _status_hermes(home: Path) -> int:
@@ -414,6 +481,8 @@ def lint(store: Store) -> List[str]:
                     ok = target in stems[scope] or target in stems[GLOBAL]
                 if not ok:
                     problems.append(f"{rel}: broken link [[{target}]]")
+    for rel, reason in _scanner_blocking(store):
+        problems.append(f"{rel}: {reason}")
     return problems
 
 
