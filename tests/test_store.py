@@ -4,6 +4,7 @@ import sys
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from .helpers import StoreCase, doc, symlink_or_skip
@@ -60,6 +61,16 @@ class StoreTest(StoreCase):
         self.assertIsNone(self.store.read_bytes("global/topics/nix.md"))
 
     def test_lock_times_out_while_another_process_holds_it(self):
+        # multiprocessing spawn re-imports this module in the child under the name
+        # pytest gave it (<checkout>.tests.test_store). With --import-mode=importlib
+        # the checkout directory is on sys.path but its parent is not, so the child
+        # cannot import the top-level package: Nix builds the checkout as
+        # /build/source and the unpickle fails there every time. The child inherits
+        # sys.path, so put the checkout's parent on it before spawning.
+        parent = str(Path(__file__).resolve().parents[2])
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
+            self.addCleanup(sys.path.remove, parent)
         ctx = multiprocessing.get_context("spawn")  # Windows has no fork
         ready, release = ctx.Event(), ctx.Event()
         proc = ctx.Process(target=_hold_lock, args=(self.store.root, ready, release))
