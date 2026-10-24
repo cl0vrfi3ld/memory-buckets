@@ -88,10 +88,10 @@ def _coerce(value: Any, type_name: str) -> Any:
             lowered = value.strip().lower()
             # The wizard prompts booleans as free text, so the short spellings must count
             # both ways (a `y` is yes, not silently false); anything else stays as typed
-            # rather than quietly becoming false.
-            if lowered in ("1", "true", "yes", "on", "y", "t"):
+            # rather than quietly becoming false. config._assign accepts the same table.
+            if lowered in config_mod.BOOL_TRUE_SPELLINGS:
                 return True
-            if lowered in ("0", "false", "no", "off", "n", "f"):
+            if lowered in config_mod.BOOL_FALSE_SPELLINGS:
                 return False
             return value
         if type_name in ("integer", "number") and isinstance(value, str):
