@@ -283,6 +283,66 @@ class ProviderTest(StoreCase):
         p.on_turn_start(1, "x")
         self.assertEqual(p.prefetch("x", session_id="s1"), "")
 
+    def test_pre_compress_queues_the_nudge(self):
+        # "Done when" for the issue: a call to on_pre_compress makes the NEXT prefetch carry the
+        # reminder, even though the interval has not come round.
+        p = self.make()
+        p.config.nudge_interval = 10
+        p.on_turn_start(1, "hello")
+        self.assertEqual(p.prefetch("hello", session_id="s1"), "", "interval not reached yet")
+        # Hermes fences on_pre_compress's return into the summary prompt as data, not
+        # instructions, so the hook returns nothing and the queued NUDGE does the work.
+        self.assertEqual(p.on_pre_compress([{"role": "user", "content": "I switched to Neovim"}]), "")
+        self.assertIn(prov.NUDGE, p.prefetch("what's new", session_id="s1"))
+        self.assertNotIn(prov.NUDGE, p.prefetch("and now", session_id="s1"), "one reminder per compression")
+
+    def test_pre_compress_nudge_survives_compression_rotating_the_session_id(self):
+        # Hermes says compression may reassign the session id; the queued reminder has to ride over.
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s2", parent_session_id="s1", reset=False, reason="compression")
+        self.assertIn(prov.NUDGE, p.prefetch("hello", session_id="s2"))
+
+    def test_pre_compress_nudge_survives_in_place_compression(self):
+        # Compression keeping the id truncates the transcript: the flag lives on the same state.
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s1", parent_session_id="s1", reset=False, reason="compression")
+        self.assertIn(prov.NUDGE, p.prefetch("hello", session_id="s1"))
+
+    def test_a_reset_drops_a_pending_pre_compress_nudge(self):
+        # A genuinely new conversation starts clean: /new must not inherit a queued reminder.
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s2", parent_session_id="s1", reset=True)
+        self.assertEqual(p.prefetch("hello", session_id="s2"), "")
+
+    def test_a_reset_on_a_retained_id_drops_a_pending_pre_compress_nudge(self):
+        # Same, but compression kept the session id: the reset guard lives in the in-place
+        # branch of on_session_switch, not only in the rotation path.
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s1", parent_session_id="s1", reset=True)
+        self.assertEqual(p.prefetch("hello", session_id="s1"), "")
+
+    def test_read_only_session_gets_no_pre_compress_nudge(self):
+        # The other "Done when" half: read-only sessions see nothing from the hook.
+        p = self.make(agent_context="cron")
+        self.assertEqual(p.on_pre_compress([]), "")
+        self.assertEqual(p.prefetch("x", session_id="s1"), "")
+        self.assertFalse(p._state("s1").nudge_due)
+
+    def test_pre_compress_off_when_reminders_are_off(self):
+        # nudge_interval 0 already disables the reminder; pre-compression opts out with it.
+        p = self.make()
+        p.config.nudge_interval = 0
+        self.assertEqual(p.on_pre_compress([]), "")
+        self.assertEqual(p.prefetch("x", session_id="s1"), "")
+
+    def test_pre_compress_before_initialize_returns_empty(self):
+        # An uninitialized provider (loaded but never started) must answer, not crash.
+        self.assertEqual(prov.MemoryBucketsProvider().on_pre_compress([]), "")
+
     def test_prefetch_is_empty_without_embeddings(self):
         p = self.make()
         with self.assertNoLogs("memory_buckets", "WARNING"):

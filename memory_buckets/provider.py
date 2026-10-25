@@ -331,12 +331,18 @@ class MemoryBucketsProvider(MemoryProvider):
             state.snapshot = None
             state.hint_seen.clear()
             state.prefetch_turns = 0
+            if reset:
+                # A reset on a retained id is still a new conversation: start clean.
+                state.nudge_due = False
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
+        # A pending filing reminder rides over too: Hermes may rotate the id when it compresses,
+        # and on_pre_compress has just set the flag on the OLD id, which the next turn would
+        # otherwise lose. A reset is a genuinely new conversation, so it starts clean.
         self._remember(new_session_id, SessionState(
             platform=previous.platform, agent_context=previous.agent_context, cwd=previous.cwd,
-            status=previous.status,
+            status=previous.status, nudge_due=previous.nudge_due and not reset,
         ))
         self._current = new_session_id
 
@@ -364,6 +370,24 @@ class MemoryBucketsProvider(MemoryProvider):
         state.turns += 1
         if interval > 0 and state.turns % interval == 0:
             state.nudge_due = True
+
+    @_traced
+    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+        """Hermes is about to compress the transcript: facts mentioned since the last save and
+        never filed would die with it. Make the turn after compression carry the NUDGE (even
+        mid-interval) and return "". A note does not work here: Hermes serialises this slot with
+        json.dumps inside a fenced "memory provider context" block the summary prompt declares
+        as source material, not instructions (agent/context_compressor.py, _memory_provider_section),
+        so an imperative sentence is ignored. The queued NUDGE is what closes the gap.
+        ``messages`` is not read and there is no model call here: filing stays the agent's job,
+        this only closes the gap. Sessions that turned reminders off (interval 0) or cannot
+        write (read-only) opt out here too, as they do for the interval nudge."""
+        if self.store is None or self.config is None or self.config.nudge_interval <= 0:
+            return ""
+        if self._read_scope().read_only:
+            return ""
+        self._state().nudge_due = True
+        return ""
 
     @_traced
     def prefetch(self, query: str, *, session_id: str = "") -> str:
