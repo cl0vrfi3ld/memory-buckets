@@ -41,12 +41,6 @@ HINT_COOLDOWN_TURNS = 5
 NUDGE = ("Memory check: has this conversation produced new durable facts about the user or their work? If yes, "
          "save them now with the memory tools, following your memory instructions. If no, do nothing. Do not "
          "mention this check to the user.")
-# Fed to Hermes's compression summary prompt (on_pre_compress's return contract, checked against
-# agent/memory_provider.py on current Hermes main): the summary keeps facts that were never filed,
-# so the agent still has them when the queued NUDGE fires after compression.
-PRE_COMPRESS_NOTE = ("Keep any durable facts about the user or their projects from this conversation that have not "
-                     "yet been saved to memory, so they can still be saved after compression.")
-
 
 def _sqlite_has_fts5() -> bool:
     try:
@@ -219,6 +213,9 @@ class MemoryBucketsProvider(MemoryProvider):
             state.snapshot = None
             state.hint_seen.clear()
             state.prefetch_turns = 0
+            if reset:
+                # A reset on a retained id is still a new conversation: start clean.
+                state.nudge_due = False
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
@@ -260,7 +257,10 @@ class MemoryBucketsProvider(MemoryProvider):
     def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
         """Hermes is about to compress the transcript: facts mentioned since the last save and
         never filed would die with it. Make the turn after compression carry the NUDGE (even
-        mid-interval) and hand the summary prompt a line asking it to keep the unsaved ones.
+        mid-interval) and return "". A note does not work here: Hermes serialises this slot with
+        json.dumps inside a fenced "memory provider context" block the summary prompt declares
+        as source material, not instructions (agent/context_compressor.py, _memory_provider_section),
+        so an imperative sentence is ignored. The queued NUDGE is what closes the gap.
         ``messages`` is not read and there is no model call here: filing stays the agent's job,
         this only closes the gap. Sessions that turned reminders off (interval 0) or cannot
         write (read-only) opt out here too, as they do for the interval nudge."""
@@ -269,7 +269,7 @@ class MemoryBucketsProvider(MemoryProvider):
         if self._read_scope().read_only:
             return ""
         self._state().nudge_due = True
-        return PRE_COMPRESS_NOTE
+        return ""
 
     @_traced
     def prefetch(self, query: str, *, session_id: str = "") -> str:

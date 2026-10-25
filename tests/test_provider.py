@@ -282,16 +282,16 @@ class ProviderTest(StoreCase):
         p.on_turn_start(1, "x")
         self.assertEqual(p.prefetch("x", session_id="s1"), "")
 
-    def test_pre_compress_returns_the_note_and_queues_the_nudge(self):
+    def test_pre_compress_queues_the_nudge(self):
         # "Done when" for the issue: a call to on_pre_compress makes the NEXT prefetch carry the
         # reminder, even though the interval has not come round.
         p = self.make()
         p.config.nudge_interval = 10
         p.on_turn_start(1, "hello")
         self.assertEqual(p.prefetch("hello", session_id="s1"), "", "interval not reached yet")
-        note = p.on_pre_compress([{"role": "user", "content": "I switched to Neovim"}])
-        self.assertEqual(note, prov.PRE_COMPRESS_NOTE)
-        self.assertIn("not yet been saved", note, "the note must mention unsaved facts")
+        # Hermes fences on_pre_compress's return into the summary prompt as data, not
+        # instructions, so the hook returns nothing and the queued NUDGE does the work.
+        self.assertEqual(p.on_pre_compress([{"role": "user", "content": "I switched to Neovim"}]), "")
         self.assertIn(prov.NUDGE, p.prefetch("what's new", session_id="s1"))
         self.assertNotIn(prov.NUDGE, p.prefetch("and now", session_id="s1"), "one reminder per compression")
 
@@ -315,6 +315,14 @@ class ProviderTest(StoreCase):
         p.on_pre_compress([])
         p.on_session_switch("s2", parent_session_id="s1", reset=True)
         self.assertEqual(p.prefetch("hello", session_id="s2"), "")
+
+    def test_a_reset_on_a_retained_id_drops_a_pending_pre_compress_nudge(self):
+        # Same, but compression kept the session id: the reset guard lives in the in-place
+        # branch of on_session_switch, not only in the rotation path.
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s1", parent_session_id="s1", reset=True)
+        self.assertEqual(p.prefetch("hello", session_id="s1"), "")
 
     def test_read_only_session_gets_neither_the_note_nor_the_nudge(self):
         # The other "Done when" half: read-only sessions see nothing from the hook.
