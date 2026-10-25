@@ -42,6 +42,7 @@ NUDGE = ("Memory check: has this conversation produced new durable facts about t
          "save them now with the memory tools, following your memory instructions. If no, do nothing. Do not "
          "mention this check to the user.")
 
+
 def _sqlite_has_fts5() -> bool:
     try:
         con = sqlite3.connect(":memory:")

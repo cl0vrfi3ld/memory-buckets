@@ -324,7 +324,7 @@ class ProviderTest(StoreCase):
         p.on_session_switch("s1", parent_session_id="s1", reset=True)
         self.assertEqual(p.prefetch("hello", session_id="s1"), "")
 
-    def test_read_only_session_gets_neither_the_note_nor_the_nudge(self):
+    def test_read_only_session_gets_no_pre_compress_nudge(self):
         # The other "Done when" half: read-only sessions see nothing from the hook.
         p = self.make(agent_context="cron")
         self.assertEqual(p.on_pre_compress([]), "")
