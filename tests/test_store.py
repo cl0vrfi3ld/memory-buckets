@@ -69,7 +69,7 @@ class StoreTest(StoreCase):
         # sys.path, so put the checkout's parent on it before spawning.
         parent = str(Path(__file__).resolve().parents[2])
         if parent not in sys.path:
-            sys.path.insert(0, parent)
+            sys.path.append(parent)
             self.addCleanup(sys.path.remove, parent)
         ctx = multiprocessing.get_context("spawn")  # Windows has no fork
         ready, release = ctx.Event(), ctx.Event()
