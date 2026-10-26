@@ -39,7 +39,8 @@ out["provider_file"] = sys.modules[type(p1).__module__].__file__
 # workspace member (enabling one runs `uv lock` against Hermes's uv.lock).
 from pm.plugin_declarations import read_python_declaration  # noqa: E402
 plugin_root = next(d for d in Path(out["provider_file"]).parents if (d / "plugin.yaml").exists())
-out["pm_member"] = read_python_declaration(plugin_root).is_member
+decl = read_python_declaration(plugin_root)
+out["pm_member"] = getattr(decl, "installs_packages", getattr(decl, "is_member", False))
 out["distinct_instances"] = p1 is not p2
 
 # Our overrides must accept everything the base signature can pass.

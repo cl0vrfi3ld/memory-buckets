@@ -238,6 +238,105 @@ def _status_blocked(store: Store) -> None:
              f"rejects, so it stays out of the prompt; run `hermes memory-buckets lint` for details")
 
 
+def _builtin_memory_flags(cfg: dict, cfg_get) -> Tuple[bool, bool]:
+    """(memory_enabled, user_profile_enabled) from config.yaml's memory section (default True)."""
+    def flag(key: str) -> bool:
+        val = cfg_get(cfg, "memory", key)
+        if val is None and isinstance(cfg, dict) and isinstance(cfg.get("memory"), dict):
+            val = cfg["memory"].get(key)
+        if val is None:
+            return True
+        if isinstance(val, str):
+            return val.strip().lower() in ("1", "true", "yes", "on")
+        return bool(val)
+    return flag("memory_enabled"), flag("user_profile_enabled")
+
+
+def _core_tool_clashes() -> Optional[List[str]]:
+    """Tool names in TOOL_NAMES that clash with Hermes's built-in tool registry, or None outside Hermes."""
+    try:
+        from tools.registry import discover_builtin_tools, registry
+        discover_builtin_tools()
+        return sorted(set(TOOL_NAMES) & set(registry.get_all_tool_names()))
+    except ImportError:
+        return None
+
+
+def _parse_toolset_list(raw) -> Optional[List[str]]:
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    if isinstance(raw, str) and raw.strip().startswith("["):
+        import ast
+        try:
+            parsed = ast.literal_eval(raw.strip())
+        except (ValueError, SyntaxError):
+            return None
+        if isinstance(parsed, list):
+            return [str(x).strip() for x in parsed if str(x).strip()]
+    return None
+
+
+def _platform_toolsets(cfg: dict, platform: str) -> List[str]:
+    pt = cfg.get("platform_toolsets") if isinstance(cfg, dict) else None
+    raw = pt.get(platform) if isinstance(pt, dict) else None
+    configured = _parse_toolset_list(raw)
+    if configured is None:
+        return [f"hermes-{platform.replace('_', '-')}"]
+    return [x for item in configured for x in (("hermes-cli", "hermes-api-server") if item == "hermes" else (item,))]
+
+
+def _find_plugin_dir() -> Optional[Path]:
+    """User or project plugin directory for memory-buckets, if installed as a directory plugin."""
+    candidates = [_hermes_home() / "plugins" / "memory-buckets"]
+    if os.environ.get("HERMES_ENABLE_PROJECT_PLUGINS", "").strip().lower() in ("1", "true", "yes", "on"):
+        candidates.append(Path.cwd() / ".hermes" / "plugins" / "memory-buckets")
+    for candidate in candidates:
+        if candidate.is_dir() and (candidate / "__init__.py").is_file():
+            return candidate
+    return None
+
+
+def _find_entry_point():
+    """The hermes_agent.memory_providers entry point for memory-buckets, if installed as a package."""
+    try:
+        import importlib.metadata
+        eps = importlib.metadata.entry_points()
+        group = (eps.select(group="hermes_agent.memory_providers")
+                 if hasattr(eps, "select") else eps.get("hermes_agent.memory_providers", ()))
+        return next((ep for ep in group if getattr(ep, "name", None) == "memory-buckets"), None)
+    except Exception:
+        return None
+
+
+def _probe_provider(where: Optional[Path], ep, *, is_disabled: bool):
+    """Instantiate the provider through register(ctx) without side effects."""
+    if is_disabled and where is not None:
+        return None
+    provider = None
+
+    class _Collector:
+        name = "memory-buckets"
+
+        def register_memory_provider(self, p):
+            nonlocal provider
+            provider = p
+
+        def register_skill(self, *args, **kwargs):
+            pass
+
+    try:
+        if where is None and ep is not None:
+            loaded = ep.load()
+            target = getattr(loaded, "register", loaded)
+            target(_Collector())
+        else:
+            from . import register
+            register(_Collector())
+    except Exception:
+        return None
+    return provider
+
+
 def _status_hermes(home: Path) -> int:
     """Hermes-side checks, only possible when running inside Hermes's Python."""
     try:
@@ -252,22 +351,15 @@ def _status_hermes(home: Path) -> int:
         problems += 1
     _out(f"hermes      home {home}; memory.provider = {provider or '(unset)'}"
          f"{'' if provider == 'memory-buckets' else '  <- set it to memory-buckets'}")
-    try:
-        from tools.memory_tool import get_builtin_memory_store_flags
-        mem, user = get_builtin_memory_store_flags(cfg)
-        state = "off" if not (mem or user) else f"ON (memory_enabled={mem}, user_profile_enabled={user})"
-        _out(f"built-in    memory {state}")
-    except ImportError:
-        pass
-    try:
-        from toolsets import _HERMES_CORE_TOOLS
-        clashes = sorted(set(TOOL_NAMES) & set(_HERMES_CORE_TOOLS))
+    mem, user = _builtin_memory_flags(cfg, cfg_get)
+    state = "off" if not (mem or user) else f"ON (memory_enabled={mem}, user_profile_enabled={user})"
+    _out(f"built-in    memory {state}")
+    clashes = _core_tool_clashes()
+    if clashes is not None:
         if clashes:
             problems += 1
         _out(f"tools       {len(TOOL_NAMES)} memory tools; "
              + (f"CLASH with Hermes core tools (ours are ignored): {', '.join(clashes)}" if clashes else "no clashes with core tools"))
-    except ImportError:
-        pass
     return problems
 
 
@@ -291,7 +383,6 @@ def cmd_diagnose(args) -> int:
     try:
         from hermes_cli.config import cfg_get, load_config_readonly
         from agent.memory_manager import memory_provider_tools_enabled
-        from plugins.memory import find_provider_dir, find_provider_entry_point, load_memory_provider
     except ImportError:
         _out("diagnose needs Hermes's Python: run `hermes memory-buckets diagnose`")
         return 2
@@ -306,46 +397,38 @@ def cmd_diagnose(args) -> int:
     provider = cfg_get(cfg, "memory", "provider")
     say(provider == "memory-buckets", f"memory.provider = {provider or '(unset)'}")
     disabled = cfg_get(cfg, "plugins", "disabled") or []
-    say("memory-buckets" not in (disabled if isinstance(disabled, list) else []),
-        "not in plugins.disabled" if "memory-buckets" not in (disabled or []) else "memory-buckets is in plugins.disabled")
+    is_disabled = "memory-buckets" in (disabled if isinstance(disabled, list) else [])
+    say(not is_disabled,
+        "not in plugins.disabled" if not is_disabled else "memory-buckets is in plugins.disabled")
 
-    where = find_provider_dir("memory-buckets")
-    ep = None if (where is not None and where.name == "memory-buckets") else find_provider_entry_point("memory-buckets")
+    where = _find_plugin_dir()
+    ep = None if where is not None else _find_entry_point()
     say(bool(where or ep), f"found by entry point {ep.value}" if ep else (f"found at {where}" if where else "not found in any plugin dir or entry point"))
-    instance = load_memory_provider("memory-buckets", register_skills=False) if (where or ep) else None
+    instance = _probe_provider(where, ep, is_disabled=is_disabled) if (where or ep) else None
     say(instance is not None, "loads and registers" if instance is not None else "failed to load (see Hermes's log for the traceback)")
     if instance is not None:
         say(instance.is_available(), "is_available()" if instance.is_available() else f"unavailable: {instance.unavailable_reason()}")
         loaded_from = sys.modules[type(instance).__module__].__file__
         _out(f"      running code from {Path(loaded_from).parent}")
-        try:
-            from toolsets import _HERMES_CORE_TOOLS
-            clashes = sorted(set(TOOL_NAMES) & set(_HERMES_CORE_TOOLS))
+        clashes = _core_tool_clashes()
+        if clashes is not None:
             say(not clashes, "no tool-name clashes with Hermes core" if not clashes else f"core tools shadow ours: {clashes}")
-        except ImportError:
-            pass
         _diagnose_skill(SKILLS_DIR, say)
 
-    try:
-        from tools.memory_tool import get_builtin_memory_store_flags
-        builtin_on = any(get_builtin_memory_store_flags(cfg))
-    except ImportError:
-        builtin_on = False
-    try:
-        from hermes_cli.tools_config import _get_platform_tools
-    except ImportError:
-        _out("      (this Hermes has no hermes_cli.tools_config._get_platform_tools: can't check per-platform toolsets)")
-        return 1 if problems else 0
-    agent_disabled = cfg_get(cfg, "agent", "disabled_toolsets") or None
+    builtin_on = any(_builtin_memory_flags(cfg, cfg_get))
+    raw_disabled = cfg_get(cfg, "agent", "disabled_toolsets")
+    agent_disabled = _parse_toolset_list(raw_disabled)
+    if agent_disabled is None and isinstance(raw_disabled, str) and raw_disabled.strip():
+        agent_disabled = [raw_disabled.strip()]
     platforms = args.platform or sorted({"cli", "api_server", *((cfg.get("platform_toolsets") or {}).keys())})
     for platform in platforms:
         try:
-            enabled = sorted(_get_platform_tools(cfg, platform))
+            enabled = _platform_toolsets(cfg, platform)
+            memory_tool = builtin_on and memory_provider_tools_enabled(enabled, agent_disabled)
+            exposed = memory_provider_tools_enabled(enabled, agent_disabled, memory_tool_present=memory_tool)
         except Exception as err:  # noqa: BLE001 - diagnostic: report, don't crash
             say(False, f"{platform}: couldn't resolve its toolsets ({type(err).__name__}: {err})")
             continue
-        memory_tool = builtin_on and memory_provider_tools_enabled(enabled, agent_disabled)
-        exposed = memory_provider_tools_enabled(enabled, agent_disabled, memory_tool_present=memory_tool)
         say(exposed, f"{platform}: memory tools and prompt block "
             + ("exposed" if exposed else "WITHHELD, because the `memory` toolset isn't enabled for this platform "
                "(platform_toolsets / agent.disabled_toolsets)"))
@@ -357,21 +440,41 @@ def cmd_diagnose(args) -> int:
 
 
 def _is_plugin_dir_install() -> bool:
+    return _find_plugin_dir() is not None
+
+
+def _local_skills_dir() -> Path:
     try:
-        from plugins.memory import find_provider_dir
-        d = find_provider_dir("memory-buckets")
-        return d is not None and d.name == "memory-buckets"
+        from hermes_constants import get_skills_dir
+        return Path(get_skills_dir())
     except ImportError:
-        return (_hermes_home() / "plugins" / "memory-buckets").is_dir()
+        return _hermes_home() / "skills"
+
+
+def _external_skills_dirs() -> List[Path]:
+    try:
+        from hermes_cli.config import cfg_get, load_config_readonly
+        raw = cfg_get(load_config_readonly(), "skills", "external_dirs")
+    except ImportError:
+        return []
+    entries = [raw] if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
+    home = _hermes_home()
+    local = _local_skills_dir().resolve()
+    out: List[Path] = []
+    for entry in entries:
+        s = str(entry).strip() if entry is not None else ""
+        if not s:
+            continue
+        p = Path(os.path.expanduser(os.path.expandvars(s)))
+        resolved = (p if p.is_absolute() else home / p).resolve()
+        if resolved != local and resolved not in out and resolved.is_dir():
+            out.append(resolved)
+    return out
 
 
 def _has_external_skill(skills_dir: Path = SKILLS_DIR) -> bool:
-    try:
-        from agent.skill_utils import get_external_skills_dirs
-        target = skills_dir.resolve()
-        return any(d.resolve() == target for d in get_external_skills_dirs())
-    except ImportError:
-        return False
+    target = skills_dir.resolve()
+    return any(d.resolve() == target for d in _external_skills_dirs())
 
 
 def _diagnose_skill(skills_dir: Path, say) -> None:
@@ -382,13 +485,12 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
     if not skill_md.is_file():
         return
     try:
-        from agent.skill_commands import scan_skill_commands
-        from agent.skill_utils import get_external_skills_dirs, get_skills_dir
+        from tools.skills_tool import find_all_skills, locate_skill, skill_search_dirs
     except ImportError:
-        _out("      (this Hermes has no agent.skill_commands: can't check /sort-imports)")
+        _out("      (this Hermes has no tools.skills_tool: can't check /sort-imports)")
         return
     skills_dir = skills_dir.resolve()
-    external = [d.resolve() for d in get_external_skills_dirs()]
+    external = [d.resolve() for d in _external_skills_dirs()]
     if skills_dir in external:
         _out(f"ok    skills.external_dirs includes {skills_dir}")
     elif _is_plugin_dir_install():
@@ -399,7 +501,11 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
         _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
         _out("      To sort imported memory, paste the prompt from `hermes memory-buckets import-prompt`, or add to config.yaml:")
         _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
-    entry = scan_skill_commands().get("/sort-imports")
+    roots, _ = skill_search_dirs()
+    loadable = {s.get("name") for s in find_all_skills() if isinstance(s, dict)}
+    _err, _sdir, found_md = (locate_skill("sort-imports", None, roots)
+                             if "sort-imports" in loadable else (None, None, None))
+    entry = {"skill_md_path": str(found_md)} if found_md is not None else None
     if entry is None:
         if skills_dir in external:
             say(False, "/sort-imports isn't registered, although the directory is configured (see Hermes's log)")
@@ -409,7 +515,7 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
             else f"/sort-imports is claimed by another skill: {entry['skill_md_path']}")
         _out("      A running chat or gateway keeps its old skill list: run /reload-skills, or restart the gateway.")
     # Copies of an older sort prompt saved as local skills shadow the real one.
-    local = get_skills_dir()
+    local = _local_skills_dir()
     stale = []
     if local.is_dir():
         for md in local.rglob("SKILL.md"):
