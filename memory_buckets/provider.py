@@ -45,11 +45,15 @@ NUDGE = ("Memory check: has this conversation produced new durable facts about t
          "mention this check to the user.")
 
 # Setup fields for `hermes memory setup` (agent/memory_provider.py get_config_schema):
-# the twelve non-secret settings from config.py, in the README table's order. Defaults and
+# the fourteen non-secret settings from config.py, in the README table's order for the
+# twelve it lists, then history_keep and history_days (config.py's last two fields; the
+# README table belongs to the maintainer). Defaults and
 # types come from the Config dataclasses. The minimums advise the wizard rather than bind
 # the code: snapshot.py floors snapshot_max_chars at 1000 and tools.py rejects search_limit
 # < 1, but index.hints merely slices [:prefetch_max_hints], and nudge_interval 0 is off
-# because the check skips anything below 1. No secret field: every value belongs in
+# because the check skips anything below 1; history_keep 0 turns history off and
+# history_days 0 keeps versions forever, while config.py falls back to the defaults on
+# negative values. No secret field: every value belongs in
 # config.yaml, never .env.
 CONFIG_SCHEMA = [
     {"key": "readonly", "description": "Make every session read-only (true or false)", "type": "boolean", "default": False},
@@ -75,6 +79,10 @@ CONFIG_SCHEMA = [
      "type": "boolean", "default": True},
     {"key": "embeddings.local_model_dir", "description": "Load the model from this directory instead",
      "type": "text", "default": ""},
+    {"key": "history_keep", "description": "Newest versions of each file kept in .history/ (0 turns history off)",
+     "type": "integer", "default": config_mod.HISTORY_KEEP_DEFAULT, "minimum": 0},
+    {"key": "history_days", "description": "Recorded versions older than this many days are dropped (0 keeps them forever)",
+     "type": "integer", "default": config_mod.HISTORY_DAYS_DEFAULT, "minimum": 0},
 ]
 
 

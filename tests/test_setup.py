@@ -26,6 +26,7 @@ EXPECTED_KEYS = [
     "readonly", "cron_writes", "nudge_interval", "snapshot_max_chars",
     "prefetch_min_similarity", "prefetch_max_hints", "search_limit", "project_boost",
     "store_path", "embeddings.backend", "embeddings.auto_download", "embeddings.local_model_dir",
+    "history_keep", "history_days",
 ]
 
 
@@ -85,6 +86,9 @@ class SetupSchemaTest(unittest.TestCase):
 
     def test_defaults_and_types_match_config_py(self):
         fields = _config_fields()
+        # Exact key-set equality: a future Config field omitted from CONFIG_SCHEMA
+        # must fail here, not silently vanish from the wizard (issue #87).
+        self.assertEqual({f["key"] for f in CONFIG_SCHEMA}, set(fields))
         for field in CONFIG_SCHEMA:
             self.assertIn(field["key"], fields, field["key"])
             self.assertEqual(field["type"], _type_name(fields[field["key"]]), field["key"])
@@ -102,6 +106,10 @@ class SetupSchemaTest(unittest.TestCase):
         self.assertEqual(defaults["embeddings.backend"], "local")
         self.assertEqual(defaults["embeddings.auto_download"], True)
         self.assertEqual(defaults["embeddings.local_model_dir"], "")
+        self.assertEqual(defaults["history_keep"], 20)
+        self.assertEqual(defaults["history_keep"], config_mod.HISTORY_KEEP_DEFAULT)
+        self.assertEqual(defaults["history_days"], 90)
+        self.assertEqual(defaults["history_days"], config_mod.HISTORY_DAYS_DEFAULT)
 
     def test_minimums_advisory_or_enforced(self):
         # Advisory wizard hints, not all enforced downstream: snapshot.py floors
@@ -112,6 +120,8 @@ class SetupSchemaTest(unittest.TestCase):
         self.assertEqual(minimums["snapshot_max_chars"], 1000)  # snapshot.py floors the cap
         self.assertEqual(minimums["prefetch_max_hints"], 1)  # advisory: nothing clamps it
         self.assertEqual(minimums["search_limit"], 1)  # tools.py requires limit >= 1
+        self.assertEqual(minimums["history_keep"], 0)  # 0 turns history off
+        self.assertEqual(minimums["history_days"], 0)  # 0 keeps versions forever
         for key in ("readonly", "cron_writes", "prefetch_min_similarity", "project_boost",
                     "store_path", "embeddings.backend", "embeddings.auto_download",
                     "embeddings.local_model_dir"):
@@ -183,6 +193,7 @@ class SaveConfigTest(FakeHermesCase):
         p = self.provider()
         values = {"embeddings.backend": "off", "readonly": "true", "cron_writes": "no",
                   "snapshot_max_chars": "8000", "project_boost": "1.5",
+                  "history_keep": "10", "history_days": "30",
                   "nudge_interval": "banana"}  # won't coerce: kept as-is, config.py ignores it
         with self.patch_hermes():
             p.save_config(values, str(self.home))
@@ -192,6 +203,8 @@ class SaveConfigTest(FakeHermesCase):
         self.assertIs(block["cron_writes"], False)
         self.assertEqual(block["snapshot_max_chars"], 8000)
         self.assertEqual(block["project_boost"], 1.5)
+        self.assertEqual(block["history_keep"], 10)
+        self.assertEqual(block["history_days"], 30)
         self.assertEqual(block["nudge_interval"], "banana")
 
     def test_wizard_boolean_spellings_and_junk_kept_as_typed(self):
