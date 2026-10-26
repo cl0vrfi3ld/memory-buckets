@@ -464,6 +464,28 @@ class LintStatusTest(ThreatCase):
         self.assertIn("global/profile.md: body matched threat pattern(s) prompt_injection", out)
         self.assertIn("the snapshot inlines the whole file", out)
 
+    def test_lint_names_a_blocked_description_even_when_frontmatter_fails_validate(self):
+        # Issue #88: Index._index_file and snapshot._body work from frontmatter.parse
+        # alone, so a file whose frontmatter parses but fails validate() still has its
+        # description listed and screened; lint must report it, not stay silent.
+        self.put("global/topics/web.md", f"---\nname: wrong\ndescription: {INJECTION}\n---\n- clean body\n")
+        code, out = self.run_cli("lint")
+        self.assertEqual(code, 1, out)
+        self.assertIn("global/topics/web.md: description matched threat pattern(s) prompt_injection", out)
+        self.assertIn("kept out of every prompt listing and prefetch hint", out)
+
+    def test_lint_does_not_report_an_inlined_frontmatter_comment_as_a_blocked_body(self):
+        # Issue #88, other side: snapshot._body strips the parsed frontmatter before
+        # screening, so an inlined file whose frontmatter comment matches a pattern but
+        # whose body is clean is inlined cleanly and must not be reported as blocked,
+        # even when validate() fails on the same file.
+        self.put("global/profile.md",
+                 f"---\n# {INJECTION}\nname: wrong\ndescription: Who the user is\n---\n- clean profile body\n")
+        code, out = self.run_cli("lint")
+        self.assertEqual(code, 1, out)  # the bad frontmatter itself is a real finding
+        self.assertIn("bad frontmatter", out)
+        self.assertNotIn("global/profile.md: body matched threat pattern(s)", out)
+
     def test_lint_does_not_report_a_blocked_body_of_a_listed_file(self):
         # Only descriptions enter the prompt for files the snapshot lists rather than
         # inlines; their bodies stay out of prompts by design (memory_read is raw),

@@ -208,18 +208,23 @@ def _scanner_blocking(store: Store) -> List[Tuple[str, str]]:
             text = (store.memories / rel).read_bytes().decode("utf-8", errors="replace")
         except OSError:
             continue  # gone since the walk; lint's own read reports real errors
-        body, err = _check_frontmatter(text, rel)
-        if err is None:
-            fm, _ = frontmatter.parse(text)
-            desc = fm.get("description")
-            desc = desc if isinstance(desc, str) else ""
-            if desc:
-                reason = _blocked_reason(desc)
-                if reason:
-                    findings.append((rel, f"description {reason}; "
-                                          "kept out of every prompt listing and prefetch hint; fix or delete it"))
+        # What the index and the snapshot see, not what the tools may edit: both work
+        # from frontmatter.parse alone (issue #88), so a file whose frontmatter parses
+        # but fails validate() still has its description listed and screened, and an
+        # inlined file is screened as body.strip() either way.
+        try:
+            fm, body = frontmatter.parse(text)
+        except frontmatter.FrontmatterError:
+            fm, body = frontmatter.Frontmatter(), text  # as snapshot._body and Index._index_file
+        desc = fm.get("description")
+        desc = desc if isinstance(desc, str) else ""
+        if desc:
+            reason = _blocked_reason(desc)
+            if reason:
+                findings.append((rel, f"description {reason}; "
+                                      "kept out of every prompt listing and prefetch hint; fix or delete it"))
         if rel.rsplit("/", 1)[-1] in INLINE_TAILS:
-            screened = text if err is not None else body.strip()
+            screened = body.strip()
             if screened:
                 reason = _blocked_reason(screened)
                 if reason:
