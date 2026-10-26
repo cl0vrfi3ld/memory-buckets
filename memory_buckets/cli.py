@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import _compat, frontmatter, inbox, migrate, projects
+from . import _compat, credentials, frontmatter, inbox, migrate, projects
 from . import config as config_mod
 from . import static_model
 from ._paths import SKILLS_DIR
@@ -635,6 +635,25 @@ def _builtin_entries(memories_dir: Path) -> List[tuple]:
     return out
 
 
+def _screened_reason(entry: str) -> Optional[str]:
+    """Why ``entry`` must not be copied into the inbox: a reason string naming the
+    pattern/family IDs, or None when it is safe. The same checks the provider's
+    ``on_memory_write`` bridge applies: the inbox is a real file, and an entry that
+    ``tools._checked`` would refuse on a later edit would block every ``memory_str_replace``
+    that tries to remove another bullet from it, so the sort-imports skill stalls.
+    The entry text itself is never echoed, as in the write tools' errors."""
+    window = _compat.scan_window_chars
+    patterns = _compat.scan_threats(entry)
+    if patterns:
+        return f"matched threat pattern(s) {', '.join(patterns)}"
+    if window is not None and len(entry) > window:
+        return f"over the {window}-character threat-scan window"
+    families = credentials.scan(entry)
+    if families:
+        return f"looks like a credential: {', '.join(families)}"
+    return None
+
+
 def cmd_import(args) -> int:
     _, home, store, _ = _open(args)
     source_home = Path(args.from_home).expanduser() if args.from_home else home
@@ -644,13 +663,22 @@ def cmd_import(args) -> int:
         return 1
     today = date.today().isoformat()
     for name, path, entries in found:
+        kept = []
+        for entry in entries:
+            reason = _screened_reason(entry)
+            if reason:
+                _out(f"skipped {path}: {reason}; entry left in {path} for manual review")
+            else:
+                kept.append(entry)
+        if not kept:
+            continue
         if args.dry_run:
-            _out(f"would import {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} from {path}")
+            _out(f"would import {len(kept)} entr{'y' if len(kept) == 1 else 'ies'} from {path}")
             continue
         heading = f"imported {name} from {source_home} ({today})"
-        inbox.append(store, heading, entries, source="cli:import")
-        _out(f"imported {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} from {path} into {inbox.PATH}")
-    if not args.dry_run:
+        inbox.append(store, heading, kept, source="cli:import")
+        _out(f"imported {len(kept)} entr{'y' if len(kept) == 1 else 'ies'} from {path} into {inbox.PATH}")
+    if not args.dry_run and _inbox_entries(store):
         _print_import_prompt(store)
     return 0
 
