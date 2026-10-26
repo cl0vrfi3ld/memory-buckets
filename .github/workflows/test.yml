@@ -5,9 +5,8 @@ name: test
 # git.cl0vr.co has Actions enabled but no runner; branches pushed there are mirrored
 # here, so every push and pull request branch still gets its checks.
 #
-# Lint is deliberately absent: the [tool.ruff] configuration from issue #8 is not on
-# main yet, so there is nothing for ruff to enforce. Add `ruff check` here once it
-# lands.
+# Lint runs as its own job below: pyproject.toml pins the [tool.ruff.lint] rules,
+# so every push and pull request is gated on `ruff check .`.
 
 on:
   push:
@@ -26,6 +25,18 @@ defaults:
     shell: bash
 
 jobs:
+  lint:
+    name: ruff check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0; setup-uv publishes no floating major tag
+
+      # uvx fetches ruff on demand; it is not a project dependency. The rules
+      # checked are the pinned [tool.ruff.lint] selection in pyproject.toml.
+      - run: uvx ruff check .
+
   test:
     name: pytest (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
