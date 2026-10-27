@@ -503,7 +503,6 @@ class CliTest(StoreCase):
             self.assertEqual(cli._external_skills_dirs(), [rel_dir.resolve()])
 
     def test_status_and_diagnose_use_public_hermes_surfaces(self):
-        import importlib.metadata
         import sys
         import tempfile
         import types
@@ -599,23 +598,6 @@ class CliTest(StoreCase):
                 self.assertEqual(code, 1, parked_out)
                 self.assertIn("FAIL  not loaded: parked in plugins.disabled", parked_out)
                 self.assertTrue(any("parked in plugins.disabled" in m for m in parked_logs.output), parked_logs.output)
-
-                (plugin_dir / "__init__.py").unlink()
-                plugin_dir.rmdir()
-                cfg["plugins"] = {"isolation": "host"}
-                fake_ep = types.SimpleNamespace(
-                    name="memory-buckets",
-                    value="memory_buckets:register",
-                    load=lambda: (_ for _ in ()).throw(AssertionError("ep.load() must not run in host isolation")),
-                )
-                with mock.patch.object(importlib.metadata, "entry_points",
-                                       return_value=types.SimpleNamespace(select=lambda **_k: [fake_ep])), \
-                        self.assertLogs("memory_buckets", "WARNING") as host_logs:
-                    code, host_out = self.run_cli("diagnose", "--platform", "cli")
-                self.assertEqual(code, 1, host_out)
-                self.assertIn("FAIL  not loaded: pip-installed provider requires plugins.isolation: in_process (currently 'host')",
-                              host_out)
-                self.assertTrue(any("plugins.isolation is 'host'" in m for m in host_logs.output), host_logs.output)
 
                 registered_tools.append("memory_read")
                 code, clash_status = self.run_cli("status")

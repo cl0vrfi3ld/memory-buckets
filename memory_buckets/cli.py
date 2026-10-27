@@ -316,16 +316,10 @@ def _find_entry_point():
         return None
 
 
-def _probe_provider(where: Optional[Path], ep, *, is_disabled: bool, isolation: object = None):
+def _probe_provider(where: Optional[Path], ep, *, is_disabled: bool):
     """Instantiate the provider through register(ctx) without side effects."""
     if is_disabled and where is not None:
         logger.warning("memory-buckets: not loaded: parked in plugins.disabled")
-        return None
-    if (where is None and ep is not None
-            and str(isolation or "").strip().lower().replace("-", "_") == "host"
-            and os.environ.get("HERMES_PLUGIN_HOST_PROCESS") != "1"):
-        logger.warning("memory-buckets: pip-installed memory provider 'memory-buckets' runs only in-process, "
-                       "and plugins.isolation is 'host'")
         return None
     provider = None
 
@@ -420,16 +414,11 @@ def cmd_diagnose(args) -> int:
     where = _find_plugin_dir()
     ep = None if where is not None else _find_entry_point()
     say(bool(where or ep), f"found by entry point {ep.value}" if ep else (f"found at {where}" if where else "not found in any plugin dir or entry point"))
-    isolation = str(cfg_get(cfg, "plugins", "isolation") or "").strip().lower().replace("-", "_")
-    host_refused = (where is None and ep is not None and isolation == "host"
-                    and os.environ.get("HERMES_PLUGIN_HOST_PROCESS") != "1")
-    instance = _probe_provider(where, ep, is_disabled=is_disabled, isolation=isolation) if (where or ep) else None
+    instance = _probe_provider(where, ep, is_disabled=is_disabled) if (where or ep) else None
     if instance is not None:
         load_msg = "loads and registers"
     elif is_disabled and where is not None:
         load_msg = "not loaded: parked in plugins.disabled"
-    elif host_refused:
-        load_msg = "not loaded: pip-installed provider requires plugins.isolation: in_process (currently 'host')"
     else:
         load_msg = "failed to load (see Hermes's log for the traceback)"
     say(instance is not None, load_msg)
