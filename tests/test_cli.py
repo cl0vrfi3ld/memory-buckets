@@ -137,21 +137,24 @@ class CliTest(StoreCase):
         for gone in ("propos", "/memory-apply", "/memory-pending", "/memory-reject", "sort-inbox"):
             self.assertNotIn(gone, text)
 
-    def test_diagnose_checks_sort_imports(self):
+    def test_diagnose_checks_both_skills(self):
         import tempfile
         from pathlib import Path
         lines = []
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as out:
             cli._diagnose_skill(Path(tmp), lambda ok, msg: lines.append((ok, msg)))
-            self.assertEqual(len(lines), 1)
-            self.assertFalse(lines[0][0])
+            self.assertEqual(len(lines), 2)
+            self.assertEqual([ok for ok, _ in lines], [False, False])
             self.assertIn(f"no sort-imports/SKILL.md in {tmp}", lines[0][1])
-            (Path(tmp) / "sort-imports").mkdir()
-            (Path(tmp) / "sort-imports/SKILL.md").write_text("---\nname: sort-imports\n---\nx\n", encoding="utf-8")
+            self.assertIn(f"no tidy-memory/SKILL.md in {tmp}", lines[1][1])
+            for name in cli.BUNDLED_SKILLS:
+                (Path(tmp) / name).mkdir()
+                (Path(tmp) / name / "SKILL.md").write_text(f"---\nname: {name}\n---\nx\n", encoding="utf-8")
             lines.clear()
             cli._diagnose_skill(Path(tmp), lambda ok, msg: lines.append((ok, msg)))
-            self.assertEqual(lines, [(True, f"skill file {Path(tmp) / 'sort-imports/SKILL.md'}")])
-        self.assertIn("/sort-imports", out.getvalue(), "outside Hermes it says what it can't check")
+            self.assertEqual(lines, [(True, f"skill file {Path(tmp) / name / 'SKILL.md'}") for name in cli.BUNDLED_SKILLS])
+        for command in ("/sort-imports", "/tidy-memory"):
+            self.assertIn(command, out.getvalue(), "outside Hermes it says what it can't check")
 
     def test_the_skill_keeps_sentences_short(self):
         # House style for model-facing text: sentences of 15 words or fewer.
@@ -400,6 +403,8 @@ class CliTest(StoreCase):
             skills_dir = Path(tmp) / "skills"
             (skills_dir / "sort-imports").mkdir(parents=True)
             (skills_dir / "sort-imports/SKILL.md").write_text("---\nname: sort-imports\n---\n# Sort\n", encoding="utf-8")
+            (skills_dir / "tidy-memory").mkdir(parents=True)
+            (skills_dir / "tidy-memory/SKILL.md").write_text("---\nname: tidy-memory\n---\n# Tidy\n", encoding="utf-8")
 
             sc_mod = types.SimpleNamespace(scan_skill_commands=lambda: {})
             su_mod = types.SimpleNamespace(
@@ -455,6 +460,17 @@ class CliTest(StoreCase):
 
                 pm_mod.find_provider_dir = lambda _name: Path(tmp) / "site-packages" / "memory_buckets"
                 su_mod.get_external_skills_dirs = lambda: [skills_dir]
+                sc_mod.scan_skill_commands = lambda: {
+                    "/sort-imports": {"skill_md_path": str(skills_dir / "sort-imports/SKILL.md")},
+                    "/tidy-memory": {"skill_md_path": str(skills_dir / "tidy-memory/SKILL.md")},
+                }
+                say_lines = []
+                diag_out = io.StringIO()
+                with contextlib.redirect_stdout(diag_out):
+                    cli._diagnose_skill(skills_dir, lambda ok, msg: say_lines.append((ok, msg)))
+                self.assertIn((True, "/sort-imports -> this plugin's skill"), say_lines)
+                self.assertIn((True, "/tidy-memory -> this plugin's skill"), say_lines)
+                self.assertIn("A running chat or gateway keeps its old skill list", diag_out.getvalue())
                 _, prompt_out = self.run_cli("import-prompt")
                 self.assertIn("(it uses memory-buckets's sort-imports skill)", prompt_out)
 

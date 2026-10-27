@@ -32,6 +32,8 @@ from .tools import TOOL_NAMES
 ENTRY_DELIMITER = "\n§\n"  # Hermes tools/memory_tool_store.py
 
 SKILL_FILE = SKILLS_DIR / "sort-imports" / "SKILL.md"
+# Skills shipped under SKILLS_DIR; _register_extras registers every one of them.
+BUNDLED_SKILLS = ("sort-imports", "tidy-memory")
 
 
 def import_prompt() -> str:
@@ -375,41 +377,51 @@ def _has_external_skill(skills_dir: Path = SKILLS_DIR) -> bool:
 
 
 def _diagnose_skill(skills_dir: Path, say) -> None:
-    """The sort-imports skill and its /sort-imports command (README: Importing built-in memory)."""
-    skill_md = skills_dir / "sort-imports" / "SKILL.md"
-    say(skill_md.is_file(), f"skill file {skill_md}" if skill_md.is_file()
-        else f"no sort-imports/SKILL.md in {skills_dir}: this copy of the plugin is out of date")
-    if not skill_md.is_file():
+    """The bundled skills and their slash commands (README: Importing built-in memory)."""
+    skill_files = {}
+    for name in BUNDLED_SKILLS:
+        path = skills_dir / name / "SKILL.md"
+        skill_files[name] = path
+        say(path.is_file(), f"skill file {path}" if path.is_file()
+            else f"no {name}/SKILL.md in {skills_dir}: this copy of the plugin is out of date")
+    if not all(path.is_file() for path in skill_files.values()):
         return
     try:
         from agent.skill_commands import scan_skill_commands
         from agent.skill_utils import get_external_skills_dirs, get_skills_dir
     except ImportError:
-        _out("      (this Hermes has no agent.skill_commands: can't check /sort-imports)")
+        _out("      (this Hermes has no agent.skill_commands: can't check /sort-imports or /tidy-memory)")
         return
     skills_dir = skills_dir.resolve()
     external = [d.resolve() for d in get_external_skills_dirs()]
     if skills_dir in external:
         _out(f"ok    skills.external_dirs includes {skills_dir}")
     elif _is_plugin_dir_install():
-        _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
-        _out("      Asking the agent to sort your imported memory still works. To get /sort-imports, add to config.yaml:")
+        _out("note  /sort-imports and /tidy-memory are off: skills.external_dirs doesn't include this plugin's skills.")
+        _out("      Asking the agent to sort your imported memory still works. To get the slash commands, add to config.yaml:")
         _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
     else:
-        _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
+        _out("note  /sort-imports and /tidy-memory are off: skills.external_dirs doesn't include this plugin's skills.")
         _out("      To sort imported memory, paste the prompt from `hermes memory-buckets import-prompt`, or add to config.yaml:")
         _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
-    entry = scan_skill_commands().get("/sort-imports")
-    if entry is None:
-        if skills_dir in external:
-            say(False, "/sort-imports isn't registered, although the directory is configured (see Hermes's log)")
-    else:
-        ours = Path(entry["skill_md_path"]).resolve() == skill_md.resolve()
-        say(ours, "/sort-imports -> this plugin's skill" if ours
-            else f"/sort-imports is claimed by another skill: {entry['skill_md_path']}")
+    commands = scan_skill_commands()
+    registered = False
+    for name, skill_md in skill_files.items():
+        command = "/" + name
+        entry = commands.get(command)
+        if entry is None:
+            if skills_dir in external:
+                say(False, f"{command} isn't registered, although the directory is configured (see Hermes's log)")
+        else:
+            ours = Path(entry["skill_md_path"]).resolve() == skill_md.resolve()
+            say(ours, f"{command} -> this plugin's skill" if ours
+                else f"{command} is claimed by another skill: {entry['skill_md_path']}")
+            registered = True
+    if registered:
         _out("      A running chat or gateway keeps its old skill list: run /reload-skills, or restart the gateway.")
     # Copies of an older sort prompt saved as local skills shadow the real one.
     local = get_skills_dir()
+    ours = skill_files["sort-imports"].resolve()
     stale = []
     if local.is_dir():
         for md in local.rglob("SKILL.md"):
@@ -417,7 +429,7 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
                 text = md.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            if "global/inbox.md" in text and md.resolve() != skill_md.resolve():
+            if "global/inbox.md" in text and md.resolve() != ours:
                 stale.append(md)
     for md in stale:
         say(False, f"local skill {md} is a copy of a sort prompt; it goes stale, so delete it")
