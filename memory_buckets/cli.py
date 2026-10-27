@@ -405,7 +405,7 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
             say(False, "/sort-imports isn't registered, although the directory is configured (see Hermes's log)")
     else:
         ours = Path(entry["skill_md_path"]).resolve() == skill_md.resolve()
-        say(ours, "/sort-imports → this plugin's skill" if ours
+        say(ours, "/sort-imports -> this plugin's skill" if ours
             else f"/sort-imports is claimed by another skill: {entry['skill_md_path']}")
         _out("      A running chat or gateway keeps its old skill list: run /reload-skills, or restart the gateway.")
     # Copies of an older sort prompt saved as local skills shadow the real one.
