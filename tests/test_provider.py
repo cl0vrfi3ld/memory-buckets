@@ -646,9 +646,16 @@ class ProviderTest(StoreCase):
 
     def test_trace_logs_hooks(self):
         p = self.make()
-        with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": "1"}), self.assertLogs("memory_buckets", "INFO") as logs:
-            p.on_turn_start(1, "hi")
-        self.assertIn("hook on_turn_start", logs.output[0])
+        for spelling in ("1", "true", "TRUE"):
+            with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": spelling}), self.assertLogs("memory_buckets", "INFO") as logs:
+                p.on_turn_start(1, "hi")
+            self.assertIn("hook on_turn_start", logs.output[0])
+
+    def test_trace_ignores_falsey_spellings(self):
+        p = self.make()
+        for spelling in ("0", "false", "off", ""):
+            with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": spelling}), self.assertNoLogs("memory_buckets", "INFO"):
+                p.on_turn_start(1, "hi")
 
 
 if __name__ == "__main__":
