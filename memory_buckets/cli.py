@@ -245,8 +245,6 @@ def _builtin_memory_flags(cfg: dict, cfg_get) -> Tuple[bool, bool]:
     """(memory_enabled, user_profile_enabled) from config.yaml's memory section (default True)."""
     def flag(key: str) -> bool:
         val = cfg_get(cfg, "memory", key)
-        if val is None and isinstance(cfg, dict) and isinstance(cfg.get("memory"), dict):
-            val = cfg["memory"].get(key)
         if val is None:
             return True
         if isinstance(val, str):
@@ -279,12 +277,19 @@ def _parse_toolset_list(raw) -> Optional[List[str]]:
     return None
 
 
+_PLATFORM_DEFAULT_TOOLSETS = {
+    "api_server": "hermes-api-server",
+    "whatsapp_cloud": "hermes-whatsapp",
+    "wecom_callback": "hermes-wecom-callback",
+}
+
+
 def _platform_toolsets(cfg: dict, platform: str) -> List[str]:
     pt = cfg.get("platform_toolsets") if isinstance(cfg, dict) else None
     raw = pt.get(platform) if isinstance(pt, dict) else None
     configured = _parse_toolset_list(raw)
     if configured is None:
-        return [f"hermes-{platform.replace('_', '-')}"]
+        return [_PLATFORM_DEFAULT_TOOLSETS.get(platform, f"hermes-{platform}")]
     return [x for item in configured for x in (("hermes-cli", "hermes-api-server") if item == "hermes" else (item,))]
 
 
@@ -311,9 +316,16 @@ def _find_entry_point():
         return None
 
 
-def _probe_provider(where: Optional[Path], ep, *, is_disabled: bool):
+def _probe_provider(where: Optional[Path], ep, *, is_disabled: bool, isolation: object = None):
     """Instantiate the provider through register(ctx) without side effects."""
     if is_disabled and where is not None:
+        logger.warning("memory-buckets: not loaded: parked in plugins.disabled")
+        return None
+    if (where is None and ep is not None
+            and str(isolation or "").strip().lower().replace("-", "_") == "host"
+            and os.environ.get("HERMES_PLUGIN_HOST_PROCESS") != "1"):
+        logger.warning("memory-buckets: pip-installed memory provider 'memory-buckets' runs only in-process, "
+                       "and plugins.isolation is 'host'")
         return None
     provider = None
 
@@ -408,8 +420,19 @@ def cmd_diagnose(args) -> int:
     where = _find_plugin_dir()
     ep = None if where is not None else _find_entry_point()
     say(bool(where or ep), f"found by entry point {ep.value}" if ep else (f"found at {where}" if where else "not found in any plugin dir or entry point"))
-    instance = _probe_provider(where, ep, is_disabled=is_disabled) if (where or ep) else None
-    say(instance is not None, "loads and registers" if instance is not None else "failed to load (see Hermes's log for the traceback)")
+    isolation = str(cfg_get(cfg, "plugins", "isolation") or "").strip().lower().replace("-", "_")
+    host_refused = (where is None and ep is not None and isolation == "host"
+                    and os.environ.get("HERMES_PLUGIN_HOST_PROCESS") != "1")
+    instance = _probe_provider(where, ep, is_disabled=is_disabled, isolation=isolation) if (where or ep) else None
+    if instance is not None:
+        load_msg = "loads and registers"
+    elif is_disabled and where is not None:
+        load_msg = "not loaded: parked in plugins.disabled"
+    elif host_refused:
+        load_msg = "not loaded: pip-installed provider requires plugins.isolation: in_process (currently 'host')"
+    else:
+        load_msg = "failed to load (see Hermes's log for the traceback)"
+    say(instance is not None, load_msg)
     if instance is not None:
         say(instance.is_available(), "is_available()" if instance.is_available() else f"unavailable: {instance.unavailable_reason()}")
         loaded_from = sys.modules[type(instance).__module__].__file__
