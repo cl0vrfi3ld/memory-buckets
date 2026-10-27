@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import posixpath
 import re
@@ -28,6 +29,8 @@ from .embeddings import EmbeddingError, make_embedder, min_similarity
 from .index import Index, IndexInUse
 from .store import GLOBAL, MAX_FILE_BYTES, Store, StoreError, is_link, stem, validate_path
 from .tools import TOOL_NAMES
+
+logger = logging.getLogger("memory_buckets")
 
 ENTRY_DELIMITER = "\n§\n"  # Hermes tools/memory_tool_store.py
 
@@ -258,7 +261,7 @@ def _core_tool_clashes() -> Optional[List[str]]:
         from tools.registry import discover_builtin_tools, registry
         discover_builtin_tools()
         return sorted(set(TOOL_NAMES) & set(registry.get_all_tool_names()))
-    except ImportError:
+    except Exception:
         return None
 
 
@@ -333,6 +336,7 @@ def _probe_provider(where: Optional[Path], ep, *, is_disabled: bool):
             from . import register
             register(_Collector())
     except Exception:
+        logger.warning("memory-buckets: failed to load memory provider", exc_info=True)
         return None
     return provider
 

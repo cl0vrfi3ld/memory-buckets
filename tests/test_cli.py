@@ -446,9 +446,12 @@ class CliTest(StoreCase):
                 self.assertIn("external_dirs", diag_out.getvalue())
                 self.assertNotIn("Asking the agent to sort your imported memory still works", diag_out.getvalue())
 
-                _, full_diag_out = self.run_cli("diagnose")
+                with self.assertLogs("memory_buckets", "WARNING") as logs:
+                    _, full_diag_out = self.run_cli("diagnose")
                 self.assertIn("found by entry point memory_buckets:register", full_diag_out)
+                self.assertIn("FAIL  failed to load (see Hermes's log for the traceback)", full_diag_out)
                 self.assertNotIn("found at ", full_diag_out)
+                self.assertTrue(any("RuntimeError: boom" in msg for msg in logs.output), logs.output)
 
                 _, prompt_out = self.run_cli("import-prompt")
                 self.assertIn("hermes memory-buckets import-prompt", prompt_out)
@@ -578,13 +581,15 @@ class CliTest(StoreCase):
                 self.assertIn("found at " + str(plugin_dir), diag_out)
                 self.assertIn("ok    cli: memory tools and prompt block exposed", diag_out)
                 self.assertIn("FAIL  telegram: memory tools and prompt block WITHHELD", diag_out)
-                self.assertIn(("['hermes-cli', 'hermes-api-server']" if False else ["hermes-cli", "hermes-api-server"],
-                               ["browser"], False), seen_toolsets)
+                self.assertIn((["hermes-cli", "hermes-api-server"], ["browser"], False), seen_toolsets)
 
                 registered_tools.append("memory_read")
                 code, clash_status = self.run_cli("status")
                 self.assertEqual(code, 1, clash_status)
                 self.assertIn("CLASH with Hermes core tools (ours are ignored): memory_read", clash_status)
+
+                reg_mod.discover_builtin_tools = lambda: (_ for _ in ()).throw(OSError("cache read failed"))
+                self.assertIsNone(cli._core_tool_clashes())
 
                 other_md = local_dir / "sort-imports" / "SKILL.md"
                 other_md.parent.mkdir()
