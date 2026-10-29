@@ -116,7 +116,7 @@ def _sqlite_has_fts5() -> bool:
 def _traced(fn):
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        if os.environ.get("MEMORY_BUCKETS_TRACE"):
+        if os.environ.get("MEMORY_BUCKETS_TRACE", "").strip().lower() in config_mod.BOOL_TRUE_SPELLINGS:
             shown = {k: v for k, v in kwargs.items() if k not in ("warning_callback", "status_callback")}
             logger.info("memory-buckets hook %s args=%.300r kwargs=%.300r session=%s",
                         fn.__name__, args, shown, getattr(self, "_current", ""))
