@@ -80,10 +80,14 @@ class ProjectsTest(unittest.TestCase):
     def test_absent_projects_db_answers_without_opening_it(self):
         # The rows exist, so any lookup that reached connect_closing would find "outer".
         # With the DB absent the guard must answer "no project" before opening it: Hermes's
-        # connect would create an empty projects.db, or raise on a read-only HERMES_HOME.
-        with fake_hermes({"outer": "/src"}, db_path="/nowhere-hermes-home/projects.db"):
-            self.assertIsNone(projects.project_for_path("/src/inner"))
-            self.assertEqual(projects.list_projects(), [])
+        # connect, which the fake now really performs, would create an empty projects.db.
+        # The file check is what pins that side effect: the answers alone pass either way.
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "projects.db"
+            with fake_hermes({"outer": "/src"}, db_path=db):
+                self.assertIsNone(projects.project_for_path("/src/inner"))
+                self.assertEqual(projects.list_projects(), [])
+                self.assertFalse(db.is_file())
 
     def test_present_projects_db_reads_as_usual(self):
         with tempfile.TemporaryDirectory() as tmp:

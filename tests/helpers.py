@@ -5,6 +5,7 @@ import hashlib
 import math
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import time
@@ -47,14 +48,28 @@ def fake_vector(text, dims=DIMS):
 def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere", db_path=None):
     """Stand-ins for Hermes's ``projects_db`` and ``runtime_cwd``, as ``memory_buckets.projects``
     uses them. ``projects`` maps a slug to its folder; ``pinned`` is the per-turn session cwd;
-    ``db_path`` makes the stand-in carry a ``projects_db_path`` pointing there, absent or not."""
+    ``db_path`` makes the stand-in carry a ``projects_db_path`` pointing there, absent or not,
+    and a ``connect_closing`` that really opens that path the way Hermes does."""
     rows = [types.SimpleNamespace(slug=slug, name=slug.title(), primary_path=folder, description=None,
                                   folders=[types.SimpleNamespace(path=folder)])
             for slug, folder in (projects or {}).items()]
 
     @contextmanager
-    def connect_closing(db_path=None):
-        yield None
+    def connect_closing():
+        """Model Hermes's ``connect_closing()`` including its side effect: a read-write
+        sqlite connect that creates ``db_path`` when it is absent, the way a read of a
+        missing ``projects.db`` is a write in disguise. ``None`` stands in for Hermes
+        layouts that keep no such file."""
+        con = sqlite3.connect(db_path) if db_path is not None else None
+        if con is not None:
+            # Hermes runs CREATE TABLE IF NOT EXISTS on connect; the write is what makes
+            # the file appear on disk, which is what the absent-DB test watches for.
+            con.execute("CREATE TABLE IF NOT EXISTS projects(name TEXT, path TEXT)")
+        try:
+            yield con
+        finally:
+            if con is not None:
+                con.close()
 
     def project_for_path(conn, path):
         def owns(folder):  # as Hermes's projects_db: either separator
