@@ -269,7 +269,7 @@ def _search(args, ctx: Context):
     prefix = _str(args, "prefix", required=False, allow_empty=True) or ""
     limit = args.get("limit", ctx.config.search_limit)
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_SEARCH_LIMIT:
-        raise ArgError(f"'limit' must be an integer 1–{MAX_SEARCH_LIMIT}")
+        raise ArgError(f"'limit' must be an integer 1-{MAX_SEARCH_LIMIT}")
     read_ok = (lambda p: p.startswith(prefix)) if prefix else ctx.scope.reads_by_default
     found = ctx.index.search(query, read_ok, project=ctx.scope.project, limit=limit, boost=ctx.config.project_boost)
     for result in found["results"]:

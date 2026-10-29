@@ -21,7 +21,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from . import _compat, frontmatter, inbox, migrate, projects
+from . import _compat, credentials, frontmatter, inbox, migrate, projects
 from . import config as config_mod
 from . import static_model
 from ._paths import SKILLS_DIR
@@ -35,6 +35,8 @@ logger = logging.getLogger("memory_buckets")
 ENTRY_DELIMITER = "\n§\n"  # Hermes tools/memory_tool_store.py
 
 SKILL_FILE = SKILLS_DIR / "sort-imports" / "SKILL.md"
+# Skills shipped under SKILLS_DIR; _register_extras registers every one of them.
+BUNDLED_SKILLS = ("sort-imports", "tidy-memory")
 
 
 def import_prompt() -> str:
@@ -211,18 +213,23 @@ def _scanner_blocking(store: Store) -> List[Tuple[str, str]]:
             text = (store.memories / rel).read_bytes().decode("utf-8", errors="replace")
         except OSError:
             continue  # gone since the walk; lint's own read reports real errors
-        body, err = _check_frontmatter(text, rel)
-        if err is None:
-            fm, _ = frontmatter.parse(text)
-            desc = fm.get("description")
-            desc = desc if isinstance(desc, str) else ""
-            if desc:
-                reason = _blocked_reason(desc)
-                if reason:
-                    findings.append((rel, f"description {reason}; "
-                                          "kept out of every prompt listing and prefetch hint; fix or delete it"))
+        # What the index and the snapshot see, not what the tools may edit: both work
+        # from frontmatter.parse alone (issue #88), so a file whose frontmatter parses
+        # but fails validate() still has its description listed and screened, and an
+        # inlined file is screened as body.strip() either way.
+        try:
+            fm, body = frontmatter.parse(text)
+        except frontmatter.FrontmatterError:
+            fm, body = frontmatter.Frontmatter(), text  # as snapshot._body and Index._index_file
+        desc = fm.get("description")
+        desc = desc if isinstance(desc, str) else ""
+        if desc:
+            reason = _blocked_reason(desc)
+            if reason:
+                findings.append((rel, f"description {reason}; "
+                                      "kept out of every prompt listing and prefetch hint; fix or delete it"))
         if rel.rsplit("/", 1)[-1] in INLINE_TAILS:
-            screened = text if err is not None else body.strip()
+            screened = body.strip()
             if screened:
                 reason = _blocked_reason(screened)
                 if reason:
@@ -494,44 +501,52 @@ def _has_external_skill(skills_dir: Path = SKILLS_DIR) -> bool:
 
 
 def _diagnose_skill(skills_dir: Path, say) -> None:
-    """The sort-imports skill and its /sort-imports command (README: Importing built-in memory)."""
-    skill_md = skills_dir / "sort-imports" / "SKILL.md"
-    say(skill_md.is_file(), f"skill file {skill_md}" if skill_md.is_file()
-        else f"no sort-imports/SKILL.md in {skills_dir}: this copy of the plugin is out of date")
-    if not skill_md.is_file():
+    """The bundled skills and their slash commands (README: Importing built-in memory)."""
+    skill_files = {}
+    for name in BUNDLED_SKILLS:
+        path = skills_dir / name / "SKILL.md"
+        skill_files[name] = path
+        say(path.is_file(), f"skill file {path}" if path.is_file()
+            else f"no {name}/SKILL.md in {skills_dir}: this copy of the plugin is out of date")
+    if not all(path.is_file() for path in skill_files.values()):
         return
     try:
         from tools.skills_tool import find_all_skills, locate_skill, skill_search_dirs
     except ImportError:
-        _out("      (this Hermes has no tools.skills_tool: can't check /sort-imports)")
+        _out("      (this Hermes has no tools.skills_tool: can't check /sort-imports or /tidy-memory)")
         return
     skills_dir = skills_dir.resolve()
     external = [d.resolve() for d in _external_skills_dirs()]
     if skills_dir in external:
         _out(f"ok    skills.external_dirs includes {skills_dir}")
     elif _is_plugin_dir_install():
-        _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
-        _out("      Asking the agent to sort your imported memory still works. To get /sort-imports, add to config.yaml:")
+        _out("note  /sort-imports and /tidy-memory are off: skills.external_dirs doesn't include this plugin's skills.")
+        _out("      Asking the agent to sort your imported memory still works. To get the slash commands, add to config.yaml:")
         _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
     else:
-        _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
+        _out("note  /sort-imports and /tidy-memory are off: skills.external_dirs doesn't include this plugin's skills.")
         _out("      To sort imported memory, paste the prompt from `hermes memory-buckets import-prompt`, or add to config.yaml:")
         _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
     roots, _ = skill_search_dirs()
     loadable = {s.get("name") for s in find_all_skills() if isinstance(s, dict)}
-    _err, _sdir, found_md = (locate_skill("sort-imports", None, roots)
-                             if "sort-imports" in loadable else (None, None, None))
-    entry = {"skill_md_path": str(found_md)} if found_md is not None else None
-    if entry is None:
-        if skills_dir in external:
-            say(False, "/sort-imports isn't registered, although the directory is configured (see Hermes's log)")
-    else:
-        ours = Path(entry["skill_md_path"]).resolve() == skill_md.resolve()
-        say(ours, "/sort-imports → this plugin's skill" if ours
-            else f"/sort-imports is claimed by another skill: {entry['skill_md_path']}")
+    registered = False
+    for name, skill_md in skill_files.items():
+        command = "/" + name
+        _err, _sdir, found_md = (locate_skill(name, None, roots)
+                                 if name in loadable else (None, None, None))
+        if found_md is None:
+            if skills_dir in external:
+                say(False, f"{command} isn't registered, although the directory is configured (see Hermes's log)")
+        else:
+            ours = Path(found_md).resolve() == skill_md.resolve()
+            say(ours, f"{command} -> this plugin's skill" if ours
+                else f"{command} is claimed by another skill: {found_md}")
+            registered = True
+    if registered:
         _out("      A running chat or gateway keeps its old skill list: run /reload-skills, or restart the gateway.")
     # Copies of an older sort prompt saved as local skills shadow the real one.
     local = _local_skills_dir()
+    ours = skill_files["sort-imports"].resolve()
     stale = []
     if local.is_dir():
         for md in local.rglob("SKILL.md"):
@@ -539,7 +554,7 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
                 text = md.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            if "global/inbox.md" in text and md.resolve() != skill_md.resolve():
+            if "global/inbox.md" in text and md.resolve() != ours:
                 stale.append(md)
     for md in stale:
         say(False, f"local skill {md} is a copy of a sort prompt; it goes stale, so delete it")
@@ -757,6 +772,25 @@ def _builtin_entries(memories_dir: Path) -> List[tuple]:
     return out
 
 
+def _screened_reason(entry: str) -> Optional[str]:
+    """Why ``entry`` must not be copied into the inbox: a reason string naming the
+    pattern/family IDs, or None when it is safe. The same checks the provider's
+    ``on_memory_write`` bridge applies: the inbox is a real file, and an entry that
+    ``tools._checked`` would refuse on a later edit would block every ``memory_str_replace``
+    that tries to remove another bullet from it, so the sort-imports skill stalls.
+    The entry text itself is never echoed, as in the write tools' errors."""
+    window = _compat.scan_window_chars
+    patterns = _compat.scan_threats(entry)
+    if patterns:
+        return f"matched threat pattern(s) {', '.join(patterns)}"
+    if window is not None and len(entry) > window:
+        return f"over the {window}-character threat-scan window"
+    families = credentials.scan(entry)
+    if families:
+        return f"looks like a credential: {', '.join(families)}"
+    return None
+
+
 def cmd_import(args) -> int:
     _, home, store, _ = _open(args)
     source_home = Path(args.from_home).expanduser() if args.from_home else home
@@ -766,13 +800,22 @@ def cmd_import(args) -> int:
         return 1
     today = date.today().isoformat()
     for name, path, entries in found:
+        kept = []
+        for entry in entries:
+            reason = _screened_reason(entry)
+            if reason:
+                _out(f"skipped {path}: {reason}; entry left in {path} for manual review")
+            else:
+                kept.append(entry)
+        if not kept:
+            continue
         if args.dry_run:
-            _out(f"would import {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} from {path}")
+            _out(f"would import {len(kept)} entr{'y' if len(kept) == 1 else 'ies'} from {path}")
             continue
         heading = f"imported {name} from {source_home} ({today})"
-        inbox.append(store, heading, entries, source="cli:import")
-        _out(f"imported {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} from {path} into {inbox.PATH}")
-    if not args.dry_run:
+        inbox.append(store, heading, kept, source="cli:import")
+        _out(f"imported {len(kept)} entr{'y' if len(kept) == 1 else 'ies'} from {path} into {inbox.PATH}")
+    if not args.dry_run and _inbox_entries(store):
         _print_import_prompt(store)
     return 0
 

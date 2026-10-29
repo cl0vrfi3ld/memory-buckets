@@ -325,6 +325,20 @@ class ProviderTest(StoreCase):
         p.on_session_switch("s1", parent_session_id="s1", reset=True)
         self.assertEqual(p.prefetch("hello", session_id="s1"), "")
 
+    def test_a_reset_on_a_retained_id_resets_the_turn_counter(self):
+        # The in-place reset must zero the turn counter, not just the flags: the interval
+        # nudge has to come round nudge_interval turns into the new conversation, not on
+        # the leftover modulo from the old one.
+        p = self.make()
+        p.config.nudge_interval = 3
+        p.on_turn_start(1, "one")
+        p.on_turn_start(2, "two")
+        p.on_session_switch("s1", parent_session_id="s1", reset=True)
+        self.assertEqual(p._state("s1").turns, 0)
+        p.on_turn_start(1, "first turn of new conversation")
+        self.assertEqual(p._state("s1").turns, 1)
+        self.assertFalse(p._state("s1").nudge_due)
+
     def test_read_only_session_gets_no_pre_compress_nudge(self):
         # The other "Done when" half: read-only sessions see nothing from the hook.
         p = self.make(agent_context="cron")
@@ -646,9 +660,16 @@ class ProviderTest(StoreCase):
 
     def test_trace_logs_hooks(self):
         p = self.make()
-        with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": "1"}), self.assertLogs("memory_buckets", "INFO") as logs:
-            p.on_turn_start(1, "hi")
-        self.assertIn("hook on_turn_start", logs.output[0])
+        for spelling in ("1", "true", "TRUE"):
+            with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": spelling}), self.assertLogs("memory_buckets", "INFO") as logs:
+                p.on_turn_start(1, "hi")
+            self.assertIn("hook on_turn_start", logs.output[0])
+
+    def test_trace_ignores_falsey_spellings(self):
+        p = self.make()
+        for spelling in ("0", "false", "off", ""):
+            with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": spelling}), self.assertNoLogs("memory_buckets", "INFO"):
+                p.on_turn_start(1, "hi")
 
 
 if __name__ == "__main__":

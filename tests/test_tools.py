@@ -487,7 +487,9 @@ class ToolsTest(StoreCase):
         self.assertEqual(self.call("memory_search", query="colmena")["results"], [], "other projects not by default")
         self.assertEqual(self.call("memory_search", query="colmena", prefix="proj-1/")["results"][0]["path"],
                          "proj-1/topics/deploy.md")
-        self.assertEqual(self.call("memory_search", query="x", limit=99)["error"]["code"], "invalid_args")
+        bad_limit = self.call("memory_search", query="x", limit=99)
+        self.assertEqual(bad_limit["error"]["code"], "invalid_args")
+        self.assertEqual(bad_limit["error"]["message"], "'limit' must be an integer 1-20")
 
     def test_refuses_to_rewrite_unparseable_frontmatter(self):
         self.put("global/topics/broken.md", "---\nname: broken\n: nope\n---\n- a\n")

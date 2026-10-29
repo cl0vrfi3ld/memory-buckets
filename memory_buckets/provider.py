@@ -116,7 +116,7 @@ def _sqlite_has_fts5() -> bool:
 def _traced(fn):
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        if os.environ.get("MEMORY_BUCKETS_TRACE"):
+        if os.environ.get("MEMORY_BUCKETS_TRACE", "").strip().lower() in config_mod.BOOL_TRUE_SPELLINGS:
             shown = {k: v for k, v in kwargs.items() if k not in ("warning_callback", "status_callback")}
             logger.info("memory-buckets hook %s args=%.300r kwargs=%.300r session=%s",
                         fn.__name__, args, shown, getattr(self, "_current", ""))
@@ -333,7 +333,11 @@ class MemoryBucketsProvider(MemoryProvider):
             state.prefetch_turns = 0
             if reset:
                 # A reset on a retained id is still a new conversation: start clean.
+                # The turn counter has to start over too, or the periodic nudge fires
+                # on the previous conversation's modulo instead of nudge_interval turns
+                # into the new one.
                 state.nudge_due = False
+                state.turns = 0
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
