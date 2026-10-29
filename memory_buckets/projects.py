@@ -98,6 +98,14 @@ def session_cwd(init_cwd: str = "", session_id: str = "") -> str:
         return init_cwd or ""
 
 
+def _projects_db_absent(pdb) -> bool:
+    """True when Hermes's ``projects.db`` does not exist on disk yet. Opening it read-write
+    would create an empty DB (and fail outright on a read-only ``HERMES_HOME``), so callers
+    answer without opening it. Hermes layouts without ``projects_db_path`` fall through."""
+    db_path = getattr(pdb, "projects_db_path", None)
+    return callable(db_path) and not db_path().is_file()
+
+
 def project_for_path(path: str) -> Optional[Project]:
     if not path:
         return None
@@ -106,6 +114,8 @@ def project_for_path(path: str) -> Optional[Project]:
     except ImportError:
         return None
     try:
+        if _projects_db_absent(pdb):
+            return None
         with pdb.connect_closing() as conn:
             proj = pdb.project_for_path(conn, path)
     except Exception:  # never let projects.db trouble break memory
@@ -126,6 +136,8 @@ def list_projects() -> Optional[List[Project]]:
     except ImportError:
         return None
     try:
+        if _projects_db_absent(pdb):
+            return []
         with pdb.connect_closing() as conn:
             found = pdb.list_projects(conn)
     except Exception:

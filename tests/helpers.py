@@ -44,9 +44,10 @@ def fake_vector(text, dims=DIMS):
 
 
 @contextmanager
-def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere"):
+def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere", db_path=None):
     """Stand-ins for Hermes's ``projects_db`` and ``runtime_cwd``, as ``memory_buckets.projects``
-    uses them. ``projects`` maps a slug to its folder; ``pinned`` is the per-turn session cwd."""
+    uses them. ``projects`` maps a slug to its folder; ``pinned`` is the per-turn session cwd;
+    ``db_path`` makes the stand-in carry a ``projects_db_path`` pointing there, absent or not."""
     rows = [types.SimpleNamespace(slug=slug, name=slug.title(), primary_path=folder, description=None,
                                   folders=[types.SimpleNamespace(path=folder)])
             for slug, folder in (projects or {}).items()]
@@ -65,6 +66,8 @@ def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere"):
     pdb = types.ModuleType("hermes_cli.projects_db")
     pdb.connect_closing, pdb.project_for_path = connect_closing, project_for_path
     pdb.list_projects = lambda conn, include_archived=False: list(rows)
+    if db_path is not None:
+        pdb.projects_db_path = lambda: Path(db_path)
     hermes_cli = types.ModuleType("hermes_cli")
     hermes_cli.__path__, hermes_cli.projects_db = [], pdb
     rc = types.ModuleType("agent.runtime_cwd")
