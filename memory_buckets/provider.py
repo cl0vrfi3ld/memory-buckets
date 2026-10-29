@@ -333,7 +333,11 @@ class MemoryBucketsProvider(MemoryProvider):
             state.prefetch_turns = 0
             if reset:
                 # A reset on a retained id is still a new conversation: start clean.
+                # The turn counter has to start over too, or the periodic nudge fires
+                # on the previous conversation's modulo instead of nudge_interval turns
+                # into the new one.
                 state.nudge_due = False
+                state.turns = 0
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
