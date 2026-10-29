@@ -101,7 +101,7 @@ class HermesIntegrationTest(unittest.TestCase):
             "readonly", "cron_writes", "nudge_interval", "snapshot_max_chars",
             "prefetch_min_similarity", "prefetch_max_hints", "search_limit", "project_boost",
             "store_path", "embeddings.backend", "embeddings.auto_download",
-            "embeddings.local_model_dir"])
+            "embeddings.local_model_dir", "history_keep", "history_days"])
         self.assertTrue(out["save_config_kept"],
                         "save_config wrote plugins.memory-buckets through Hermes's writer "
                         "and left the unrelated keys alone")
