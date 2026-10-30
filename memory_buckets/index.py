@@ -506,7 +506,7 @@ class Index:
         return scored[:CANDIDATES]
 
     def search(self, query: str, read_ok: Callable[[str], bool], *, project: Optional[str] = None,
-               limit: int = 8, boost: float = 1.3, embed_backlog: bool = True) -> Dict[str, object]:
+               limit: int = 8, boost: float = 1.3, embed_backlog: bool = False) -> Dict[str, object]:
         self.reconcile()
         if embed_backlog:
             self.embed_backlog(max_batches=1)
@@ -636,11 +636,13 @@ class Index:
 
     def hints(self, query: str, read_ok: Callable[[str], bool], *, exclude: Optional[set] = None,
               min_similarity: float = 0.45, max_hints: int = 4, project: Optional[str] = None,
-              boost: float = 1.3, embed_backlog: bool = True) -> List[Tuple[str, str, float]]:
+              boost: float = 1.3, embed_backlog: bool = False) -> List[Tuple[str, str, float]]:
         """(path, description, similarity) for files worth reading, by vectors
-        only. Empty when embeddings are off or down. Embeds one batch of
-        backlog by default. ``project`` files get ``boost``; a file whose exact
-        stem or alias is named in the query is rescued above the threshold."""
+        only. Empty when embeddings are off or down. Scores whatever vectors
+        exist; ``embed_backlog=True`` embeds one batch of backlog first, which
+        only a caller with no time budget should ask for. ``project`` files get
+        ``boost``; a file whose exact stem or alias is named in the query is
+        rescued above the threshold."""
         if self.embedder is None or self.embedder.down_reason():
             return []
         self.reconcile()

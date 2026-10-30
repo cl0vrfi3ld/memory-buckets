@@ -392,26 +392,36 @@ class ProviderTest(StoreCase):
             self.assertIsNone(unscoped_hints.call_args.kwargs["project"])
             self.assertEqual(unscoped_hints.call_args.kwargs.get("boost"), unscoped.config.project_boost)
 
-    def test_prefetch_embeds_backlog_on_turn_one_and_after_external_edit(self):
+    def test_prefetch_never_drains_the_backlog(self):
         p = self.make(embedder=FakeEmbedder())
         p.config.prefetch_min_similarity = 0.3
         p.system_prompt_block()
-        # Turn 1: no prior queue_prefetch call.
-        out1 = p.prefetch("Sam likes climbing", session_id="s1")
-        self.assertIn("- global/people/sam.md: Who Sam is", out1)
-        # External file edit on disk without queue_prefetch or tool calls.
+        # Turn 1: the store is cold and this path does not drain, so there is
+        # nothing to score: no embed call, no hints.
+        with mock.patch.object(p.index, "embed_backlog") as embed_backlog:
+            self.assertEqual(p.prefetch("who likes climbing", session_id="s1"), "")
+        embed_backlog.assert_not_called()
+        # The background path drains, and prefetch scores the result.
+        p.queue_prefetch("x", session_id="s1")
+        self.assertIn("- global/people/sam.md: Who Sam is",
+                      p.prefetch("Sam likes climbing", session_id="s1"))
+        # An external edit leaves the file in the backlog: not hinted until the
+        # background drain embeds it.
         self.put("global/topics/gardening.md", doc("gardening", "Gardening notes", "- grows heirloom tomatoes\n"))
-        out2 = p.prefetch("grows heirloom tomatoes", session_id="s1")
-        self.assertIn("- global/topics/gardening.md: Gardening notes", out2)
-        # When _embed_running is held by a background worker, prefetch skips embedding the backlog.
+        self.assertNotIn("gardening.md", p.prefetch("grows heirloom tomatoes", session_id="s1"))
+        p.queue_prefetch("x", session_id="s1")
+        self.assertIn("- global/topics/gardening.md: Gardening notes",
+                      p.prefetch("grows heirloom tomatoes", session_id="s1"))
+        # prefetch no longer takes the embed lock: a file hinted for the first
+        # time while a background worker holds the lock is still scored.
         self.put("global/topics/baking.md", doc("baking", "Baking notes", "- bakes sourdough bread\n"))
+        p.queue_prefetch("x", session_id="s1")
         self.assertTrue(p._embed_running.acquire(blocking=False))
         try:
-            self.assertEqual(p.prefetch("bakes sourdough bread", session_id="s1"), "")
+            self.assertIn("- global/topics/baking.md: Baking notes",
+                          p.prefetch("bakes sourdough bread", session_id="s1"))
         finally:
             p._embed_running.release()
-        self.assertIn("- global/topics/baking.md: Baking notes",
-                      p.prefetch("bakes sourdough bread", session_id="s1"))
 
     def test_prefetch_hint_cooldown_suppresses_and_rehints_after_five_turns(self):
         p = self.make(embedder=FakeEmbedder())

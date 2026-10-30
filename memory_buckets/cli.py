@@ -583,7 +583,9 @@ def cmd_reindex(args) -> int:
 def cmd_search(args) -> int:
     _, _, store, index = _open(args)
     prefix = args.prefix or ""
-    found = index.search(args.query, lambda p: p.startswith(prefix), limit=args.limit)
+    # The CLI has no background drain and no prefetch budget, so it asks for the
+    # batch explicitly; the Hermes paths (prefetch, memory_search) never do.
+    found = index.search(args.query, lambda p: p.startswith(prefix), limit=args.limit, embed_backlog=True)
     index.close()
     if args.json:
         _out(json.dumps(found, indent=2, ensure_ascii=False))

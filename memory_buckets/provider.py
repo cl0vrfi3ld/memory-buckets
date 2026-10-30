@@ -426,16 +426,16 @@ class MemoryBucketsProvider(MemoryProvider):
                     if turn - seen_turn < HINT_COOLDOWN_TURNS
                 }
                 exclude = base_exclude | cooldown_exclude
-                acquired = self._embed_running.acquire(blocking=False)
-                try:
-                    hints = self.index.hints(query, scope.reads_by_default, exclude=exclude,
-                                             min_similarity=min_similarity(self.config, self.index.embedder),
-                                             max_hints=self.config.prefetch_max_hints,
-                                             project=scope.project, boost=self.config.project_boost,
-                                             embed_backlog=acquired)
-                finally:
-                    if acquired:
-                        self._embed_running.release()
+                # The backlog drains only from the background paths (queue_prefetch,
+                # _after_write). Hermes bounds prefetch at _EXTERNAL_PREFETCH_TIMEOUT_S,
+                # and a synchronous batch put a cold store's first turn over that edge:
+                # the hints were dropped while the embed kept running. So score with
+                # whatever vectors exist, and never take the embed lock here.
+                hints = self.index.hints(query, scope.reads_by_default, exclude=exclude,
+                                         min_similarity=min_similarity(self.config, self.index.embedder),
+                                         max_hints=self.config.prefetch_max_hints,
+                                         project=scope.project, boost=self.config.project_boost,
+                                         embed_backlog=False)
                 for path, _, _ in hints:
                     state.hint_seen[path] = turn
             except Exception:

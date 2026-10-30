@@ -275,8 +275,13 @@ class EmbeddingIndexTest(IndexTest):
         index = self.make(FakeEmbedder())
         found = index.search("Sam likes climbing", ALL)
         self.assertEqual(found["mode"], "hybrid")
+        self.assertIn("not embedded yet", found["note"])
+        # search() leaves the backlog alone until a background path drains it.
+        self.assertGreater(index.stats()["backlog"], 0)
+        index.embed_backlog(max_batches=None)
+        found = index.search("Sam likes climbing", ALL)
         self.assertEqual(found["results"][0]["path"], "global/people/sam.md")
-        self.assertEqual(index.stats()["backlog"], 0)  # small store: one batch embeds everything
+        self.assertEqual(index.stats()["backlog"], 0)
 
     def test_hints_threshold_and_exclusion(self):
         index = self.make(FakeEmbedder())
@@ -289,14 +294,27 @@ class EmbeddingIndexTest(IndexTest):
         self.assertNotIn("global/people/sam.md", [h[0] for h in excluded])
         self.assertEqual(index.hints("quantum chromodynamics lecture", ALL, min_similarity=0.9), [])
 
-    def test_hints_embeds_cold_and_reconciled_backlog(self):
+    def test_hints_and_search_do_not_embed_the_backlog(self):
         index = self.make(FakeEmbedder())
-        hints = index.hints("Sam likes climbing", ALL, min_similarity=0.3)
-        self.assertEqual(hints[0][0], "global/people/sam.md")
+        # The Hermes paths score whatever vectors exist; a cold store gets
+        # keyword results and a note, not a synchronous batch.
+        with mock.patch.object(index, "embed_backlog") as embed_backlog:
+            index.hints("Sam likes climbing", ALL, min_similarity=0.3)
+            index.search("Sam likes climbing", ALL)
+        embed_backlog.assert_not_called()
+        self.assertGreater(index.stats()["backlog"], 0)
+        # The explicit opt-in still drains one batch and scores it.
+        warm = index.hints("Sam likes climbing", ALL, min_similarity=0.3, embed_backlog=True)
+        self.assertEqual(warm[0][0], "global/people/sam.md")
+        self.assertEqual(index.stats()["backlog"], 0)  # small store: one batch covers all
+        # An external edit re-chunks the file into the backlog; a default call
+        # reconciles but never pays for the embed.
         target = self.put("global/people/sam.md", doc("sam", "Who Sam is", "- Sam practices archery\n"))
         os.utime(target, ns=(time.time_ns(), time.time_ns() + 10**9))
-        updated = index.hints("Sam practices archery", ALL, min_similarity=0.3)
-        self.assertEqual(updated[0][0], "global/people/sam.md")
+        with mock.patch.object(index, "embed_backlog") as embed_backlog:
+            index.hints("Sam practices archery", ALL, min_similarity=0.3)
+        embed_backlog.assert_not_called()
+        self.assertGreater(index.stats()["backlog"], 0)
 
     def test_file_level_rrf_fuses_identity_fts_with_body_vector_hit(self):
         for i in range(3):
@@ -306,6 +324,7 @@ class EmbeddingIndexTest(IndexTest):
             )
         self.put("global/topics/target.md", doc("target", "Read for kestrel", "# Birds\n- kite buzzard sky\n"))
         index = self.make(FakeEmbedder())
+        index.embed_backlog(max_batches=None)  # vectors exist: this pins the fusion, not the drain
         hits = list(index.search("kestrel raptor avian", ALL)["results"])  # type: ignore[arg-type]
         self.assertEqual(hits[0]["path"], "global/topics/target.md")
         self.assertEqual(hits[0]["heading"], "Birds")
