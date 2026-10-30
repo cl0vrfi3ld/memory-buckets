@@ -146,6 +146,11 @@ class StoreCase(unittest.TestCase):
         # The first cleanup runs last, after tests' own cleanups have closed their indexes:
         # Windows can't delete a directory holding an open SQLite file.
         self.addCleanup(self._tmp.cleanup)
+        if store.private_modes():
+            # A store the plugin makes is private, so the fixture's stand-in is too. Otherwise
+            # the ambient umask makes it look loose and `migrate` and `status` report it in
+            # tests about something else; test_permissions.py covers the loose cases.
+            self.addCleanup(os.umask, os.umask(0o077))
         self.home = Path(self._tmp.name)
         self.store = store.Store(self.home / "memory-buckets")
         self.store.memories.mkdir(parents=True)

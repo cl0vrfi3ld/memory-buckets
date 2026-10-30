@@ -7,7 +7,7 @@ name = "memory-buckets"
 version = "0.4.0"
 description = "Markdown-based memory provider with hybrid search (FTS keyword + static embeddings), inspired by Claude memory."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = []  # stdlib only, ever
@@ -48,3 +48,13 @@ include = ["memory_buckets", "skills", "tests", "plugin.yaml", "__init__.py", "c
 addopts = "--import-mode=importlib"
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+# The `lint` command checks these rules and nothing else, so a newer ruff's new default
+# rules can't turn a clean tree red. `ruff format` is not enforced: the code keeps its
+# own wide lines, and reformatting it would touch every file.
+line-length = 140
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

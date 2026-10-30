@@ -1,5 +1,6 @@
 import json
 import unittest
+from unittest import mock
 
 from .helpers import StoreCase, doc
 from memory_buckets import config, frontmatter, inbox, index, scopes, tools
@@ -48,6 +49,71 @@ class ToolsTest(StoreCase):
         self.assertEqual({e["code"] for e in got["errors"]}, {"not_found", "invalid_path"})
         self.assertFalse(self.call("memory_read", paths=["global/topics/nope.md"])["ok"])
         self.assertEqual(self.call("memory_read", paths=[])["error"]["code"], "invalid_args")
+        # A file under the cap reads whole, exactly as before: no paging fields.
+        small = self.call("memory_read", paths=["global/topics/nix.md"])["files"][0]
+        self.assertNotIn("truncated", small)
+        self.assertNotIn("total_bytes", small)
+
+    def test_a_file_over_the_write_cap_reads_in_pages(self):
+        # Issue 17: MAX_FILE_BYTES is checked on writes only, so a hand-edited or
+        # synced file can be any size; one read must not flood the context.
+        body = "- fact\n" * 720_000  # about 5 MB
+        self.put("global/topics/big.md", doc("big", "Read for a big topic", body))
+        size = (self.store.memories / "global/topics/big.md").stat().st_size
+        first = self.call("memory_read", paths=["global/topics/big.md"])["files"][0]
+        self.assertTrue(first["truncated"])
+        self.assertEqual(first["total_bytes"], size)
+        self.assertLessEqual(len(first["content"].encode("utf-8")), tools.MAX_FILE_BYTES)
+        # Paging: next_offset feeds the next read until the file is done.
+        offset, pages = first["next_offset"], [first["content"]]
+        while True:
+            entry = self.call("memory_read", paths=["global/topics/big.md"], offset=offset)["files"][0]
+            pages.append(entry["content"])
+            if not entry.get("truncated"):
+                self.assertEqual(entry["total_bytes"], size)
+                break
+            self.assertEqual(entry["next_offset"], offset + tools.MAX_FILE_BYTES)
+            offset = entry["next_offset"]
+        self.assertEqual("".join(pages), self.store.read_bytes("global/topics/big.md").decode("utf-8"))
+
+    def test_a_page_never_cuts_inside_a_letter(self):
+        self.put("global/topics/cafe.md", doc("cafe", "Read for accents", "café " * 40))
+        whole = self.store.read_bytes("global/topics/cafe.md").decode("utf-8")
+        with mock.patch.object(tools, "MAX_FILE_BYTES", 10):
+            offset, pages = 0, []
+            while True:
+                entry = self.call("memory_read", paths=["global/topics/cafe.md"], offset=offset)["files"][0]
+                pages.append(entry["content"])
+                if not entry.get("truncated"):
+                    break
+                offset = entry["next_offset"]
+        joined = "".join(pages)
+        self.assertEqual(joined, whole)
+        self.assertNotIn("\ufffd", joined)
+
+    def test_read_of_a_continuation_byte_file_pages_instead_of_raising(self):
+        # A hand-made file whose whole first window is UTF-8 continuation bytes
+        # (invalid UTF-8, so only a hand edit or sync can make one) must not
+        # walk the page boundary past the start of the file (it raised
+        # IndexError), and paging must still make progress.
+        path = self.store.memories / "global/topics/garbage.md"
+        path.write_bytes(b"\xa9" * 60_000)
+        first = self.call("memory_read", paths=["global/topics/garbage.md"])["files"][0]
+        self.assertTrue(first["truncated"])
+        self.assertEqual(first["total_bytes"], 60_000)
+        # Cut at the cap, not past the start of the file: the next page advances.
+        self.assertEqual(first["next_offset"], tools.MAX_FILE_BYTES)
+        second = self.call("memory_read", paths=["global/topics/garbage.md"],
+                           offset=first["next_offset"])["files"][0]
+        self.assertFalse(second.get("truncated"))
+        self.assertEqual(second["total_bytes"], 60_000)
+
+    def test_bad_read_args(self):
+        self.call("memory_read", paths=["global/topics/nix.md"])
+        got = self.call("memory_read", paths=["global/topics/nix.md"], offset=-1)
+        self.assertEqual(got["error"]["code"], "invalid_args")
+        got = self.call("memory_read", paths=["global/topics/nix.md"], offset="one")
+        self.assertEqual(got["error"]["code"], "invalid_args")
 
     def test_write_create_and_replace(self):
         made = self.call("memory_write", path="global/people/sam.md", description="Who Sam is",
@@ -178,7 +244,6 @@ class ToolsTest(StoreCase):
         self.assertEqual(fm.get("sources"), ["telegram@*"])
 
     def test_every_edit_stamps_edited_at(self):
-        import re
         from unittest import mock
         stamp_re = r"(?m)^edited_at: \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$"
         self.assertNotIn("edited_at", self.content("global/topics/nix.md"))
@@ -422,7 +487,9 @@ class ToolsTest(StoreCase):
         self.assertEqual(self.call("memory_search", query="colmena")["results"], [], "other projects not by default")
         self.assertEqual(self.call("memory_search", query="colmena", prefix="proj-1/")["results"][0]["path"],
                          "proj-1/topics/deploy.md")
-        self.assertEqual(self.call("memory_search", query="x", limit=99)["error"]["code"], "invalid_args")
+        bad_limit = self.call("memory_search", query="x", limit=99)
+        self.assertEqual(bad_limit["error"]["code"], "invalid_args")
+        self.assertEqual(bad_limit["error"]["message"], "'limit' must be an integer 1-20")
 
     def test_refuses_to_rewrite_unparseable_frontmatter(self):
         self.put("global/topics/broken.md", "---\nname: broken\n: nope\n---\n- a\n")

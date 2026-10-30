@@ -4,9 +4,11 @@ import sys
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from .helpers import StoreCase, doc, symlink_or_skip
+from memory_buckets import frontmatter
 from memory_buckets import store as st
 
 
@@ -18,6 +20,20 @@ def _hold_lock(root, ready, release):
 
 
 class StoreTest(StoreCase):
+    def test_edited_at_reads_what_stamp_writes(self):
+        fm = frontmatter.parse(doc("nix", "Nix"))[0]
+        self.assertIsNone(st.edited_at(fm))
+        st.stamp(fm)
+        self.assertAlmostEqual(st.edited_at(fm), time.time(), delta=5)
+        fm.set(st.EDITED_AT, "2031-01-02T03:04:05Z")
+        self.assertEqual(st.edited_at(fm), 1925089445.0)
+        # Anything stamp() would not write is not a stamp: the caller falls back to mtime.
+        for odd in ("last Tuesday", "2031-01-02", "2031-01-02T03:04:05+01:00", ""):
+            fm.set(st.EDITED_AT, odd)
+            self.assertIsNone(st.edited_at(fm), odd)
+        fm.set(st.EDITED_AT, ["2031-01-02T03:04:05Z"])
+        self.assertIsNone(st.edited_at(fm))
+
     def test_write_read_delete(self):
         v1 = self.store.write("global/topics/nix.md", doc("nix", "Nix"), "new")["version"]
         got = self.store.read("global/topics/nix.md")
@@ -45,6 +61,16 @@ class StoreTest(StoreCase):
         self.assertIsNone(self.store.read_bytes("global/topics/nix.md"))
 
     def test_lock_times_out_while_another_process_holds_it(self):
+        # multiprocessing spawn re-imports this module in the child under the name
+        # pytest gave it (<checkout>.tests.test_store). With --import-mode=importlib
+        # the checkout directory is on sys.path but its parent is not, so the child
+        # cannot import the top-level package: Nix builds the checkout as
+        # /build/source and the unpickle fails there every time. The child inherits
+        # sys.path, so put the checkout's parent on it before spawning.
+        parent = str(Path(__file__).resolve().parents[2])
+        if parent not in sys.path:
+            sys.path.append(parent)
+            self.addCleanup(sys.path.remove, parent)
         ctx = multiprocessing.get_context("spawn")  # Windows has no fork
         ready, release = ctx.Event(), ctx.Event()
         proc = ctx.Process(target=_hold_lock, args=(self.store.root, ready, release))
@@ -75,6 +101,40 @@ class StoreTest(StoreCase):
         self.put("global/topics/Nope.md", "x")
         self.put("global/random.txt", "x")
         self.assertEqual(list(self.store.iter_paths()), ["global/topics/nix.md"])
+
+    def test_iter_skipped_reports_what_iter_paths_passes_over(self):
+        # The four files from the issue, plus an attachment and a nested project path.
+        self.put("global/topics/nix.md", doc("nix", "Nix"))
+        self.put("global/topics/My Note.md", "x")
+        self.put("global/topics/nix/flakes.md", "x")
+        self.put("global/topics/ex_luna.md", "x")
+        self.put("global/notes.md", "x")
+        self.put("Proj/topics/y.md", "x")
+        self.put("proj-1/topics/diagram.png", "x")
+        # Hidden files and directories (Obsidian's config, our own temp files) aren't reported.
+        self.put(".obsidian/app.json", "{}")
+        self.put("global/topics/.nix.md.tmp.1.2", "x")
+        skipped = dict(self.store.iter_skipped())
+        self.assertEqual(sorted(skipped), ["Proj/topics/y.md", "global/notes.md", "global/topics/My Note.md",
+                                           "global/topics/ex_luna.md", "global/topics/nix/flakes.md",
+                                           "proj-1/topics/diagram.png"])
+        self.assertEqual(set(skipped.values()), {"path"})
+        # Nothing is both read and reported.
+        self.assertEqual(list(self.store.iter_paths()), ["global/topics/nix.md"])
+
+    def test_iter_skipped_reports_symlinks_without_following_them(self):
+        outside = self.home / "outside"
+        outside.mkdir()
+        (outside / "Loose.md").write_text("x", encoding="utf-8")
+        self.put("global/topics/real.md", doc("real", "Real"))
+        symlink_or_skip(self, self.store.memories / "global/topics/real.md", self.store.memories / "global/topics/sym.md")
+        symlink_or_skip(self, outside, self.store.memories / "global/linked")
+        self.assertEqual(list(self.store.iter_skipped()),
+                         [("global/linked", "symlink"), ("global/topics/sym.md", "symlink")])
+
+    def test_iter_skipped_with_no_store_yet(self):
+        self.store.memories.rmdir()
+        self.assertEqual(list(self.store.iter_skipped()), [])
 
     def test_projects_lists_buckets_on_disk(self):
         self.assertEqual(self.store.projects(), [])

@@ -5,24 +5,32 @@ in full, then, when the session has a project, the project index: generated
 here from the Hermes project (name, description, folders) and the bucket's own
 ``profile.md`` and ``preferences.md`` in full. No file holds it. Then a path +
 description listing of the other files the session reads by default (project
-files first). Capped at ``snapshot_max_chars``. When over the cap, drop listing
-lines first, then whole files, in ``drop_order()``'s order. The global profile and the
-project header are never dropped. The provider freezes the result per session
+files first, each group in path order). Capped at ``snapshot_max_chars``. When over
+the cap, drop listing lines first, least recently edited first (project files last),
+then whole files, in ``drop_order()``'s order. The global profile and the
+project header are never dropped. A file or description that matches one of Hermes's
+threat patterns, or is longer than the scanner reads, is replaced by a
+``[BLOCKED: ...]`` line (see ``blocked`` and ``blocked_too_large``). A file that
+still cannot fit is cut to its head, ending with a line that says how much was
+cut and points at ``memory_read``. The provider freezes the result per session
 id for prefix caching.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import List, Optional, Set
 
-from . import frontmatter
+from . import _compat, frontmatter
 from .config import Config
 from .index import Index
 from .projects import Project
 from .scopes import Scope
-from .store import GLOBAL, Store, StoreError, stem
+from .store import GLOBAL, Store, StoreError, edited_at, stem
+
+logger = logging.getLogger("memory_buckets")
 
 PROFILE = f"{GLOBAL}/profile.md"
 PREFERENCES = f"{GLOBAL}/preferences.md"
@@ -146,7 +154,7 @@ OTHER_PROJECTS_ADD = "- You may only add to their files. Do not edit or delete t
 @dataclass
 class Snapshot:
     text: str
-    paths: Set[str] = field(default_factory=set)  # files inlined in full
+    paths: Set[str] = field(default_factory=set)  # files shown in the block (whole, or cut with a note)
 
 
 def rules(scope: Scope, config: Config, projects: List[str]) -> str:
@@ -163,6 +171,45 @@ def rules(scope: Scope, config: Config, projects: List[str]) -> str:
     return "\n\n".join([READING, SAVING, where, elsewhere])
 
 
+def blocked(path: str, patterns: List[str]) -> str:
+    """What stands in for a file the threat scan rejected. It names the file and the
+    patterns, never the text, so the model learns the file is bad without reading it.
+    The user still sees (and ``memory_read`` still returns) the real file, so the model
+    is told to pass the problem on rather than fetch the file to fix it."""
+    return f"[BLOCKED: {path} matched {', '.join(patterns)}; tell the user to fix or delete it]"
+
+
+def blocked_too_large(path: str, window: int) -> str:
+    """What stands in for a file longer than the scanner reads at once, so not one
+    that was scanned and passed. Like ``blocked`` it names the file, never the text,
+    and the real file stays readable."""
+    return f"[BLOCKED: {path} is over the {window}-character threat-scan window; tell the user to fix or delete it]"
+
+
+def _screened(path: str, text: str) -> str:
+    """``text`` as it may enter the prompt: unchanged, or a ``blocked`` line if it
+    matches a threat pattern or is longer than the scanner reads. Hand edits and
+    synced files never pass the write-time scan in ``tools``, so the prompt is
+    checked here as well."""
+    window = _compat.scan_window_chars
+    if window is not None and len(text) > window:
+        # The scanner truncates its input to ``window`` characters, so the tail of a
+        # longer file would enter the prompt unchecked, and no slicing closes that:
+        # the patterns accept unbounded filler words, so a crafted match can span
+        # any cut. The tools cap writes at store.MAX_FILE_BYTES, well under the
+        # window, so a longer file was hand-edited or synced in, never written by
+        # them. Refuse it whole rather than inline what was never fully checked.
+        logger.warning("memory-buckets: %s is over the %s-character threat-scan window; keeping it out of the model's context",
+                       path, window)
+        return blocked_too_large(path, window)
+    patterns = _compat.scan_threats(text)
+    if not patterns:
+        return text
+    logger.warning("memory-buckets: %s matched threat pattern(s) %s; keeping it out of the model's context",
+                   path, ", ".join(patterns))
+    return blocked(path, patterns)
+
+
 def _body(store: Store, path: str) -> Optional[str]:
     try:
         text = store.read(path)["content"]
@@ -173,7 +220,25 @@ def _body(store: Store, path: str) -> Optional[str]:
     except frontmatter.FrontmatterError:
         body = text
     body = body.strip()
-    return body or None
+    return _screened(path, body) if body else None
+
+
+def _recency(store: Store, path: str, mtime: float) -> float:
+    """When the file was last edited, as a Unix time: its ``edited_at`` stamp, else the
+    file's mtime. Hand edits carry no stamp, and a file whose frontmatter can't be
+    parsed has none to read. A listed file can also turn unreadable after it was
+    indexed (its permissions changed): its stamp is unreachable, not absent, and
+    raising here would cost the session its whole memory block, so it ranks by the
+    mtime with the rest."""
+    try:
+        data = store.read_bytes(path)
+        if data is None:
+            return mtime
+        fm, _ = frontmatter.parse(data.decode("utf-8", errors="replace"))
+    except (OSError, StoreError, frontmatter.FrontmatterError):
+        return mtime
+    stamped = edited_at(fm)
+    return mtime if stamped is None else stamped
 
 
 def _profile_state(store: Store, path: str) -> str:
@@ -263,6 +328,32 @@ def drop_order(project: Optional[str]) -> List[str]:
     return [PREFERENCES, f"{project}/preferences.md", f"{project}/profile.md"]
 
 
+CUT_NOTE = "{cut} of {total} characters are not shown. Use memory_read to read the rest of {path}."
+
+
+def _cut_body(body: str, path: str, budget: int) -> str:
+    """The head of ``body`` that fits in ``budget``, ending with a line that says
+    how much was cut. The cut backs up to the end of a line when one is close, so
+    the head doesn't end mid-sentence."""
+    keep = max(budget, 0)
+    while True:
+        head = body[:keep]
+        newline = head.rfind("\n")
+        if newline >= keep // 2:  # near a line end: cut there, not mid-sentence
+            head = head[:newline]
+        head = head.rstrip()
+        note = CUT_NOTE.format(cut=len(body) - len(head), total=len(body), path=path)
+        if not head:
+            return note  # no room even for the head: the line still names the file
+        text = f"{head}\n\n{note}"
+        if len(text) <= budget:
+            return text
+        # Once more, sized to leave room for the note. If the budget can't fit
+        # even the note, floor the head at 0 so the empty-head path returns it
+        # instead of slicing from the tail of the body forever.
+        keep = max(budget - len(note) - 2, 0)
+
+
 def build(
     store: Store,
     index: Index,
@@ -312,7 +403,19 @@ def build(
     ]
     if scope.project:
         defaults.sort(key=lambda pd: (not pd[0].startswith(f"{scope.project}/"), pd[0]))
-    listing = [f"- {p}: {d}" if d else f"- {p}" for p, d in defaults]
+    listing = [f"- {p}: {_screened(p, d)}" if d else f"- {p}" for p, d in defaults]
+    # When the cap cuts the listing, recently edited files survive, not whatever sorts
+    # first. Project files still outrank global ones. `survival` holds listing indexes,
+    # most deserving first; `render` shows the kept ones back in path order.
+    mtimes = index.mtimes()
+    stamps = {p: _recency(store, p, mtimes.get(p, 0.0)) for p, _ in defaults}
+    survival = sorted(  # stable: equal times keep path order
+        range(len(defaults)),
+        key=lambda i: (
+            bool(scope.project) and not defaults[i][0].startswith(f"{scope.project}/"),
+            -stamps[defaults[i][0]],
+        ),
+    )
     has_inbox = any(p == INBOX for p, _ in listing_files)
 
     def render(shown, kept, dropped):
@@ -333,7 +436,7 @@ def build(
             )
         omitted = len(listing) - kept
         if kept or omitted:
-            lines = ["### Other files", *listing[:kept]]
+            lines = ["### Other files", *(listing[i] for i in sorted(survival[:kept]))]
             if omitted:
                 lines.append(
                     f"- … and {omitted} more files. Call memory_list to see all of them."
@@ -389,4 +492,20 @@ def build(
         if floor(trial_shown, trial_dropped) < floor(shown, dropped):
             shown, dropped = trial_shown, trial_dropped
             text = fit(shown, dropped)
+    if len(text) > cap:
+        # Whole-file dropping is exhausted (the global profile is never dropped):
+        # cut what is still shown to the space left after everything else and say
+        # what was cut. Only the profile is ever still over, but the loop treats
+        # every shown file the same way.
+        if profile:
+            base = render(shown, 0, dropped)
+            budget = cap - (len(base) - len(profile))
+            if budget < len(profile):
+                profile = _cut_body(profile, PROFILE, budget)
+        for path in list(shown):
+            base = render(shown, 0, dropped)  # includes the profile cut and any earlier cut
+            budget = cap - (len(base) - len(shown[path]))
+            if budget < len(shown[path]):
+                shown[path] = _cut_body(shown[path], path, budget)
+        text = fit(shown, dropped)
     return Snapshot(text=text, paths=set(shown) | ({PROFILE} if profile else set()))

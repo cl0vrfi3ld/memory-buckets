@@ -37,7 +37,7 @@ and Nix installs bundle the model at build time; see [Install](#install).
 Whichever install method you use, enable the provider by setting
 `memory.provider: memory-buckets` in `config.yaml`.
 
-Requirements are Linux, macOS or Windows, Python 3.10+, and a `sqlite3` module compiled
+Requirements are Linux, macOS or Windows, Python 3.11+, and a `sqlite3` module compiled
 with FTS5 (`hermes memory-buckets diagnose` checks this). On Windows the plugin runs on
 Hermes's native install, where `$HERMES_HOME` is `%LOCALAPPDATA%\hermes` and
 `config.yaml` lives there too.
@@ -229,6 +229,28 @@ and preferences match the message, and injects their paths and descriptions as h
 holds it back for the next four turns so the agent isn't nagged with the same hint on
 every message. Every `nudge_interval` turns (default 10), a short reminder also asks
 the agent to save any new durable facts from the conversation.
+
+### Threat scanning
+
+A session that has just read a hostile web page or repository can write to `global/`,
+so, like Hermes's built-in memory, the plugin screens memory with Hermes's own threat
+patterns (`tools.threat_patterns`, `strict` scope). On a match:
+
+- **Writes.** `memory_write`, `memory_append` and `memory_str_replace` refuse the
+  content with the error code `threat_detected` and the pattern IDs in `patterns`.
+- **The prompt.** Matching prompt-bound text (hand-edited or synced files, and their
+  listing descriptions) is replaced by a `[BLOCKED: <path> matched <pattern ids>;
+  tell the user to fix or delete it]` stand-in; `memory_read` still returns the file.
+- **Hints.** A matching hint description is dropped with a warning, and a matching
+  built-in memory write is never mirrored into `global/inbox.md`.
+- **Tool results.** `memory_list` and `memory_search` also screen the frontmatter
+  description they return: a matching one comes back as the same `[BLOCKED: ...]`
+  stand-in with a warning logged. What stays raw is what the model asked for:
+  `memory_read` bodies, and search snippets from files that have bodies; a file
+  with no body chunks returns an empty snippet, never its identity text.
+
+Matching is heuristic, so harmless text can be blocked; the tests and the docstrings
+carry the detail.
 
 ### Embeddings
 
@@ -426,7 +448,8 @@ Inside the Nix devshell (`direnv allow` or `nix develop`):
 - `check` runs the test suite (`uv run pytest tests/`);
 - `check-windows` runs it on Windows Python under Wine (`tests/wine.sh`, x86_64 Linux;
   the first run fetches Wine and a Windows CPython into `~/.cache/memory-buckets/wine`);
-- `lint` runs `ruff check .` and `ruff format --check .`;
+- `lint` runs `ruff check .` with the rules pinned in `pyproject.toml`, so every ruff version
+  checks the same thing (the code is not auto-formatted);
 - `run` executes a command inside the project venv (`uv run`).
 
 Two environment variables enable extra test coverage:
@@ -443,6 +466,10 @@ Two environment variables enable extra test coverage:
 - `MEMORY_BUCKETS_MODEL_DIR=<path to potion-retrieval-32M>` enables the real-model
   embedding and retrieval tests.
 
+Every other `MEMORY_BUCKETS_*` variable in your shell is ignored by the tests
+(`tests/conftest.py` clears them), so a `MEMORY_BUCKETS_STORE` you use day to day can't
+fail them.
+
 To run the synthetic retrieval and prefetch benchmark added in 0.3.0:
 
 ```sh
@@ -456,7 +483,7 @@ chat test against a throwaway profile (never `~/.hermes`); it's a bash script, s
 runs on Linux and macOS only.
 
 Windows runs in CI: `.github/workflows/windows.yml` on the GitHub mirror runs the test
-suite on Windows x64 (Python 3.10 and 3.14) and arm64 (3.14) with the real model, and
+suite on Windows x64 (Python 3.11 and 3.14) and arm64 (3.14) with the real model, and
 the Hermes integration tests against the Hermes release pinned in `HERMES_REF`. Bump
 that pin when Hermes releases. Hermes refuses to build as a wheel, so the job installs
 an editable checkout.

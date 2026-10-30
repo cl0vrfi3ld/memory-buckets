@@ -10,13 +10,28 @@ change the store's layout; the plugin migrates the store itself (see
 
 ### Added
 
-- **Drift detection for the Hermes internals the plugin depends on.** The Hermes
-  integration probe now imports and calls the private code behind the desktop workspace
-  override, the gateway per-turn cwd, the TUI status line and project lookup, and fails
-  naming whichever moved. Before, those paths fell back silently (an ignored workspace,
-  no status line, an unscoped session) and a Hermes refactor looked like behaviour drift.
-  A new weekly CI job runs the integration tests on Linux against Hermes `main`, apart
-  from the job pinned to a Hermes release.
+- **Threat scanning for memory.** Writes and prompt-bound text now go through the same
+  prompt-injection scan Hermes's built-in memory uses.
+  - `memory_write`, `memory_append` and `memory_str_replace` refuse content that matches,
+    with a new `threat_detected` error listing the pattern IDs in `patterns` (the text is
+    not quoted). `memory_delete` is never blocked.
+  - Matching prompt-bound text (a hand-edited or synced file, or a listing description) is
+    replaced by a `[BLOCKED: ...]` stand-in, and matching hint descriptions are dropped.
+    Oversize files are treated the same, so padding can't hide an injection. The file on
+    disk is untouched and `memory_read` still returns it. Matching or oversize built-in
+    writes are not mirrored into `global/inbox.md`.
+  - Upgrading scans an existing store for the first time, so a file you never changed can
+    newly match. One matching line removes the file from the prompt; nothing is deleted,
+    and fixing the line puts it back.
+
+### Fixed
+
+- **Closing the session no longer closes the index under a running `queue_prefetch`.**
+  Hermes drains its background executor only up to a timeout, so a prefetch could still be
+  reading SQLite when `shutdown()` closed the connection, which can crash the interpreter.
+  `shutdown()` now waits for prefetches in flight, within the same 10 seconds it gives the
+  embedding worker, and leaves the index open, with a warning, if one outlasts that. A
+  `queue_prefetch` that starts after `shutdown()` does nothing.
 
 ## [0.4.0] - 2026-10-16
 

@@ -13,6 +13,7 @@ file, with the session's project boosted.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -25,11 +26,13 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from . import frontmatter
 from .embeddings import EmbeddingError, StaticEmbedder, dot
-from .store import GLOBAL, Store, scope_of, stem, version
+from .store import GLOBAL, Store, create_private_file, scope_of, stem, version
 
 logger = logging.getLogger("memory_buckets")
 
-SCHEMA_VERSION = "4"
+# 5: files.aliases went from ", "-joined text to a JSON array, so an alias such
+# as "Smith, John" stays one alias. An older cache is dropped and rebuilt.
+SCHEMA_VERSION = "5"
 CHUNK_CHARS = 300
 RRF_K = 60
 CANDIDATES = 200
@@ -179,10 +182,29 @@ def _embed_text(rel: str, ord_: int, heading: str, text: str, description: str, 
     return text
 
 
+def _aliases_stored(value: Optional[str]) -> List[str]:
+    """The alias list as stored: a JSON array since schema 5. Before that it was
+    comma-joined text, which split an alias such as Smith, John in two. A bad
+    value reads as no aliases; a schema mismatch drops the whole cache anyway."""
+    try:
+        loaded = json.loads(value) if value else []
+    except ValueError:
+        return []
+    return [a for a in loaded if isinstance(a, str)] if isinstance(loaded, list) else []
+
+
 def _active_tokens(query: str) -> List[str]:
-    """Query tokens worth matching on: stopwords dropped, bare single-digit
-    numbers dropped from anything multi-word, order-preserving dedupe."""
-    tokens = re.findall(r"\w+", query.lower())[:32]
+    """Query tokens worth matching on: head and tail sampling first, so a key
+    term at the end of a long paste survives, then stopwords dropped, bare
+    single-digit numbers dropped from anything multi-word, order-preserving
+    dedupe."""
+    all_tokens = re.findall(r"\w+", query.lower())
+    # Head/tail sampling mirrors the embedder's own query pre-truncation in
+    # static_model.py, so the FTS leg sees the same beginning and end of a
+    # long message the vector leg does. Order-preserving dedupe collapses the
+    # head/tail overlap; for short queries the sampled list is the whole
+    # query, so behaviour is unchanged.
+    tokens = list(dict.fromkeys(all_tokens[:32] + all_tokens[-32:]))
     if not tokens:
         return []
     content_tokens = [t for t in tokens if t not in _STOPWORDS]
@@ -215,7 +237,10 @@ class Index:
     def _conn(self) -> sqlite3.Connection:
         con = getattr(self._local, "con", None)
         if con is None:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.store.ensure_dir(self.path.parent)
+            # Pre-created so the database, and the -wal and -shm files SQLite makes from its
+            # mode, are private from the start. The index holds every memory's text.
+            create_private_file(self.path)
             con = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
             try:
                 con.execute("PRAGMA journal_mode=WAL")
@@ -376,7 +401,7 @@ class Index:
             con.execute("INSERT INTO chunks_fts(rowid, text, heading) VALUES(?, ?, ?)",
                         (cur.lastrowid, fts_text, heading))
         con.execute("INSERT INTO files VALUES(?, ?, ?, ?, ?, ?)",
-                    (rel, version(data), mtime, size, description, ", ".join(aliases)))
+                    (rel, version(data), mtime, size, description, json.dumps(aliases)))
 
     # -- embeddings ------------------------------------------------------------
 
@@ -401,7 +426,7 @@ class Index:
                 break
             try:
                 vectors = self.embedder.embed_documents([
-                    _embed_text(path, ord_, heading, text, desc, aliases.split(", ") if aliases else [])
+                    _embed_text(path, ord_, heading, text, desc, _aliases_stored(aliases))
                     for _, path, ord_, heading, text, desc, aliases in rows
                 ])
             except EmbeddingError:
@@ -592,6 +617,13 @@ class Index:
                                       "ORDER BY ord LIMIT 1", (path,)).fetchone()
                     if row is not None:
                         heading, text = row
+                    else:
+                        # No body chunk at all. The identity text would repeat the
+                        # metadata the result already carries (path, description,
+                        # aliases), and a hand-edited or synced-in description or
+                        # alias would ride into the model unscreened, since tools
+                        # screens only the description field. Return no snippet.
+                        heading, text = "", ""
             snippet = " ".join(text.split())
             results.append({
                 "path": path,
@@ -637,7 +669,7 @@ class Index:
                 terms.append(stem_.replace("-", " "))
                 terms.append(stem_)
             terms.extend(
-                a for a in (t.strip() for t in (aliases or "").split(","))
+                a for a in _aliases_stored(aliases)
                 if len(a) >= 3 and a.lower() not in _STOPWORDS
             )
             if not any(re.search(r"(?<!\w)" + re.escape(t.lower()) + r"(?!\w)", lowered) for t in terms):
@@ -664,6 +696,10 @@ class Index:
     def files(self) -> List[Tuple[str, str, str, int]]:
         """(path, version, description, size) for every indexed file, sorted."""
         return self._conn().execute("SELECT path, version, description, size FROM files ORDER BY path").fetchall()
+
+    def mtimes(self) -> Dict[str, float]:
+        """Path -> mtime in seconds for every indexed file. Already in the index, so no ``stat``."""
+        return {path: ns / 1e9 for path, ns in self._conn().execute("SELECT path, mtime_ns FROM files")}
 
     def stats(self) -> Dict[str, object]:
         con = self._conn()
