@@ -349,12 +349,13 @@ class MemoryBucketsProvider(MemoryProvider):
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
-        # A pending filing reminder rides over too: Hermes may rotate the id when it compresses,
-        # and on_pre_compress has just set the flag on the OLD id, which the next turn would
-        # otherwise lose. A reset is a genuinely new conversation, so it starts clean.
+        # A pending filing reminder and the turn counter ride over too: Hermes may rotate the id
+        # when it compresses, and on_pre_compress has just set the flag on the OLD id, which the
+        # next turn would otherwise lose. A reset is a genuinely new conversation, so it starts clean.
         self._remember(new_session_id, SessionState(
             platform=previous.platform, agent_context=previous.agent_context, cwd=previous.cwd,
-            status=previous.status, nudge_due=previous.nudge_due and not reset,
+            status=previous.status, turns=0 if reset else previous.turns,
+            nudge_due=previous.nudge_due and not reset,
         ))
         self._current = new_session_id
 

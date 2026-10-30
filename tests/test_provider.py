@@ -339,6 +339,29 @@ class ProviderTest(StoreCase):
         self.assertEqual(p._state("s1").turns, 1)
         self.assertFalse(p._state("s1").nudge_due)
 
+    def test_session_rotation_preserves_the_turn_counter_unless_reset(self):
+        # Rotating the session id on compression (reset=False) keeps counting towards
+        # nudge_interval; a reset onto a new id (reset=True) zeroes the counter.
+        p = self.make()
+        p.config.nudge_interval = 3
+        p.on_turn_start(1, "one")
+        p.on_turn_start(2, "two")
+        p.on_session_switch("s2", parent_session_id="s1", reset=False)
+        self.assertEqual(p._state("s2").turns, 2)
+        p.on_turn_start(3, "three")
+        self.assertEqual(p._state("s2").turns, 3)
+        self.assertIn(prov.NUDGE, p.prefetch("three", session_id="s2"))
+
+        p = self.make()
+        p.config.nudge_interval = 3
+        p.on_turn_start(1, "one")
+        p.on_turn_start(2, "two")
+        p.on_session_switch("s2", parent_session_id="s1", reset=True)
+        self.assertEqual(p._state("s2").turns, 0)
+        p.on_turn_start(1, "first turn of new conversation")
+        self.assertEqual(p._state("s2").turns, 1)
+        self.assertFalse(p._state("s2").nudge_due)
+
     def test_read_only_session_gets_no_pre_compress_nudge(self):
         # The other "Done when" half: read-only sessions see nothing from the hook.
         p = self.make(agent_context="cron")
