@@ -99,7 +99,8 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertEqual(out["slash"], [], "the plugin registers no slash commands")
         self.assertEqual(out["schema_keys"], [
             "readonly", "cron_writes", "nudge_interval", "snapshot_max_chars",
-            "prefetch_min_similarity", "prefetch_max_hints", "search_limit", "project_boost",
+            "prefetch_min_similarity", "prefetch_max_hints", "prefetch_min_query_tokens",
+            "search_limit", "project_boost",
             "store_path", "embeddings.backend", "embeddings.auto_download",
             "embeddings.local_model_dir", "history_keep", "history_days"])
         self.assertTrue(out["save_config_kept"],
