@@ -52,7 +52,10 @@ class HermesIntegrationTest(unittest.TestCase):
             out = self.probe(tmp, home)
             self.check(out)
             self.assertTrue(out["pm_member"], "plugin directory admits dependencies through PM")
-            self.assertEqual(out["pm_requirements"], ["onnxruntime>=1.20,<2", "tokenizers>=0.23,<0.24"])
+            self.assertEqual(out["pm_requirements"], [
+                "onnxruntime>=1.20,<2; (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'",
+                "tokenizers>=0.23,<0.24; (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'",
+            ])
             self.assertTrue(out["skill_ok"], "skill_view('memory-buckets:sort-imports')")
             self.assertEqual(out["skill_name"], "memory-buckets:sort-imports")
             self.assertTrue(out["tidy_ok"], "skill_view('memory-buckets:tidy-memory')")

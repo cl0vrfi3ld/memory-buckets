@@ -169,7 +169,11 @@ class RegisterTest(unittest.TestCase):
         version = lambda text: re.search(r'(?m)^version\s*[:=]\s*"?([^"\s]+)', text).group(1)  # noqa: E731
         self.assertEqual(version(pyproject), version(manifest))
         self.assertIn('memory-buckets = "memory_buckets"', pyproject, "entry point name must be the provider name")
-        self.assertIn('dependencies = ["onnxruntime>=1.20,<2", "tokenizers>=0.23,<0.24"]', pyproject)
+        # Same marker guards Hermes uses for its own onnxruntime extras: no Intel macOS or
+        # Android wheel, so the pins drop off there and the plugin degrades to keyword-only.
+        for entry in ("onnxruntime>=1.20,<2; (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'",
+                      "tokenizers>=0.23,<0.24; (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'"):
+            self.assertIn(f'"{entry}"', pyproject, "declared pins must match verbatim")
         self.assertIn('license = "MIT"', pyproject)
         self.assertTrue((PLUGIN_DIR / "LICENSE").is_file(), "the plugin dir ships its own LICENSE")
 

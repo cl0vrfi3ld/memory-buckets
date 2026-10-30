@@ -10,7 +10,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = ["onnxruntime>=1.20,<2", "tokenizers>=0.23,<0.24"]
+dependencies = [
+    "onnxruntime>=1.20,<2; (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'",
+    "tokenizers>=0.23,<0.24; (platform_machine != 'x86_64' or sys_platform != 'darwin') and sys_platform != 'android'",
+]
 
 [project.urls]
 Homepage = "https://git.cl0vr.co/cl0vr/memory-buckets"
