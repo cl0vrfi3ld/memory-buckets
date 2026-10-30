@@ -212,6 +212,24 @@ def _active_tokens(query: str) -> List[str]:
     return list(dict.fromkeys(active))
 
 
+# Short conversational turns ("thanks, that worked", "hi again") score 0.68-0.72
+# against unrelated notes on EmbeddingGemma 2, clear the prefetch default and hint
+# junk (issue #109). N picked against the benchmark's negative split: four of its
+# six false positives at 0.68 have 2-3 unique word tokens, while the shortest query
+# in the exact and paraphrase splits has 6, so the vector leg stays untouched there.
+PREFETCH_MIN_QUERY_TOKENS = 4
+
+
+def _prefetch_worthy(query: str) -> bool:
+    """Whether a turn may earn prefetch hints from the vector leg at all. Below
+    ``PREFETCH_MIN_QUERY_TOKENS`` unique word tokens the turn is an acknowledgement,
+    greeting or filler, not a request; a turn whose every token is a stopword has
+    nothing to match either. Exact stem/alias rescue is deliberately not gated here:
+    a turn that names a file means that file whatever its length."""
+    tokens = set(re.findall(r"\w+", query.lower()))
+    return len(tokens) >= PREFETCH_MIN_QUERY_TOKENS and bool(tokens - _STOPWORDS)
+
+
 # -- the index -----------------------------------------------------------------
 
 class IndexInUse(sqlite3.OperationalError):
@@ -640,23 +658,28 @@ class Index:
         """(path, description, similarity) for files worth reading, by vectors
         only. Empty when embeddings are off or down. Embeds one batch of
         backlog by default. ``project`` files get ``boost``; a file whose exact
-        stem or alias is named in the query is rescued above the threshold."""
+        stem or alias is named in the query is rescued above the threshold.
+        Short conversational turns (see ``_prefetch_worthy``) skip the embed-and-
+        cosine leg; the rescue still runs for them."""
         if self.embedder is None or self.embedder.down_reason():
             return []
         self.reconcile()
         if embed_backlog:
             self.embed_backlog(max_batches=1)
-        qvec, _ = self._query_vector(query)
-        if qvec is None:
-            return []
         exclude = exclude or set()
         best: Dict[str, float] = {}
-        for _, path, sim in self._cosine(qvec, lambda p: read_ok(p) and p not in exclude, min_similarity):
-            if sim >= min_similarity:
-                project_boost = boost if (project and path.startswith(f"{project}/")) else 1.0
-                score = sim * project_boost
-                if score > best.get(path, -1.0):
-                    best[path] = score
+        if _prefetch_worthy(query):
+            # Short turns skip the embed-and-cosine leg (issue #109); the exact
+            # stem/alias rescue below still runs for them.
+            qvec, _ = self._query_vector(query)
+            if qvec is None:
+                return []
+            for _, path, sim in self._cosine(qvec, lambda p: read_ok(p) and p not in exclude, min_similarity):
+                if sim >= min_similarity:
+                    project_boost = boost if (project and path.startswith(f"{project}/")) else 1.0
+                    score = sim * project_boost
+                    if score > best.get(path, -1.0):
+                        best[path] = score
         # Exact stem or alias match: a topic named in a noisy turn should surface
         # even when the weak embedding misses it.
         lowered = query.lower()

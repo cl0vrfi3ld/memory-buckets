@@ -344,7 +344,9 @@ class EmbeddingIndexTest(IndexTest):
         index.embed_backlog(max_batches=None)
         embedded_texts = [text for batch in embedder.calls for text in batch]
         self.assertIn("Infrastructure > Hetzner Storage Box\n- mounted at /mnt/box", embedded_texts)
-        hints = index.hints("Infrastructure", ALL, min_similarity=0.2)
+        # Issue 109 guard: one-word turns skip the vector leg, so this sanity hint
+        # sits above PREFETCH_MIN_QUERY_TOKENS to keep testing the heading embed.
+        hints = index.hints("Infrastructure storage box mount", ALL, min_similarity=0.2)
         self.assertEqual(hints[0][0], "global/topics/infra.md")
 
     def test_unrelated_and_zero_vector_queries_return_no_results(self):
@@ -503,6 +505,22 @@ class HintsProjectAndRescueTest(StoreCase):
         hints = self.make().hints("please look at the hetzner box setup", ALL, min_similarity=0.45)
         self.assertEqual(hints[0][0], "global/topics/hetzner-box.md")
 
+    def test_short_turns_skip_the_vector_leg_but_named_files_rescue(self):
+        # Issue 109: acknowledgements embed 0.68+ against unrelated notes (measured
+        # on EmbeddingGemma 2); the fake bag-of-words reproduces the trap by
+        # repeating the note's own words inside a turn too short to be a request.
+        self.put("global/topics/receipts.md", doc("receipts", "Sundry thanks", "- thanks that worked fine\n"))
+        index = self.make()
+        self.assertEqual(index.hints("thanks, that worked", ALL, min_similarity=0.2), [])
+        # An all-stopword turn has nothing to match even above the token floor.
+        self.assertEqual(index.hints("this is it then and of", ALL, min_similarity=0.2), [])
+        # The rescue is not gated: naming the stem still hints the file.
+        self.assertIn("global/topics/receipts.md",
+                      [h[0] for h in index.hints("receipts", ALL, min_similarity=0.9)])
+        # At the token floor the vector leg behaves exactly as before.
+        self.assertEqual(index.hints("thanks, that worked fine today", ALL, min_similarity=0.2)[0][0],
+                         "global/topics/receipts.md")
+
     def test_an_alias_with_a_comma_is_one_alias_not_two(self):
         # Issue 17: "Smith, John" used to be read back as two aliases, so the word
         # "John" alone rescued the file in prefetch.
@@ -518,7 +536,9 @@ class HintsProjectAndRescueTest(StoreCase):
         body = "- identical duplicated line entry\n"
         self.put("global/topics/shared.md", doc("shared", "identical duplicated line", body))
         self.put("proj-1/topics/shared.md", doc("shared", "identical duplicated line", body))
-        hints = self.make().hints("identical duplicated line", ALL,
+        # Issue 109 guard: the vector leg needs PREFETCH_MIN_QUERY_TOKENS, so the
+        # ranking query carries a fourth token; the boost order is the point here.
+        hints = self.make().hints("identical duplicated line entry", ALL,
                                   min_similarity=0.1, project="proj-1", boost=1.3)
         self.assertEqual([h[0] for h in hints][:2],
                          ["proj-1/topics/shared.md", "global/topics/shared.md"])

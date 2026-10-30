@@ -538,7 +538,9 @@ class CliTest(StoreCase):
         out = io.StringIO()
         with mock.patch.dict(os.environ, {"HERMES_HOME": str(self.home)}), contextlib.redirect_stdout(out), \
                 mock.patch.object(cli, "make_embedder", lambda *a, **k: FakeEmbedder()):
-            code = run_hermes_cli("hints", "Sam likes climbing", "--threshold", "0.5")
+            code = run_hermes_cli("hints", "Sam likes climbing today", "--threshold", "0.5")
+            # Issue 109 guard: 3-token turns skip the vector leg, and this probe
+            # needs the ranking similarities, so it clears the token floor.
         lines = out.getvalue().splitlines()
         self.assertEqual(code, 0)
         self.assertTrue(lines[0].endswith("global/people/sam.md: Who Sam is"))

@@ -401,17 +401,19 @@ class ProviderTest(StoreCase):
         self.assertIn("- global/people/sam.md: Who Sam is", out1)
         # External file edit on disk without queue_prefetch or tool calls.
         self.put("global/topics/gardening.md", doc("gardening", "Gardening notes", "- grows heirloom tomatoes\n"))
-        out2 = p.prefetch("grows heirloom tomatoes", session_id="s1")
+        # Issue 109 guard: the vector leg needs 4 unique tokens, so the probe
+        # turn clears the floor; the cold-embed point is unchanged.
+        out2 = p.prefetch("it grows heirloom tomatoes here", session_id="s1")
         self.assertIn("- global/topics/gardening.md: Gardening notes", out2)
         # When _embed_running is held by a background worker, prefetch skips embedding the backlog.
         self.put("global/topics/baking.md", doc("baking", "Baking notes", "- bakes sourdough bread\n"))
         self.assertTrue(p._embed_running.acquire(blocking=False))
         try:
-            self.assertEqual(p.prefetch("bakes sourdough bread", session_id="s1"), "")
+            self.assertEqual(p.prefetch("bakes sourdough bread today", session_id="s1"), "")
         finally:
             p._embed_running.release()
         self.assertIn("- global/topics/baking.md: Baking notes",
-                      p.prefetch("bakes sourdough bread", session_id="s1"))
+                      p.prefetch("bakes sourdough bread today", session_id="s1"))
 
     def test_prefetch_hint_cooldown_suppresses_and_rehints_after_five_turns(self):
         p = self.make(embedder=FakeEmbedder())
@@ -509,7 +511,9 @@ class ProviderTest(StoreCase):
             p.config.prefetch_min_similarity = 0.1
             p.queue_prefetch("x", session_id="s1")
             self.assertIsNone(p._state("s1").snapshot)
-            out = p.prefetch("Alex", session_id="s1")
+            # Issue 109 guard: one-word turns skip the vector leg, so the probe
+            # sits above the token floor; the inlined-exclusion point stands.
+            out = p.prefetch("Alex uses SQLite now", session_id="s1")
         self.assertIn("proj-1/topics/arch.md", out)
         for inlined in ("global/profile.md", "global/preferences.md", "proj-1/profile.md", "proj-1/preferences.md"):
             self.assertNotIn(inlined, out)
