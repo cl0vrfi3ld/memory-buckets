@@ -45,9 +45,9 @@ NUDGE = ("Memory check: has this conversation produced new durable facts about t
          "mention this check to the user.")
 
 # Setup fields for `hermes memory setup` (agent/memory_provider.py get_config_schema):
-# the fourteen non-secret settings from config.py, in the README table's order for the
-# twelve it lists, then history_keep and history_days (config.py's last two fields; the
-# README table belongs to the maintainer). Defaults and
+# the fifteen non-secret settings from config.py, in the README table's order for the
+# twelve it lists, then prefetch_min_query_tokens, history_keep and history_days
+# (config.py's fields outside the maintainer's README table). Defaults and
 # types come from the Config dataclasses. The minimums advise the wizard rather than bind
 # the code: snapshot.py floors snapshot_max_chars at 1000 and tools.py rejects search_limit
 # < 1, but index.hints merely slices [:prefetch_max_hints], and nudge_interval 0 is off
@@ -67,6 +67,9 @@ CONFIG_SCHEMA = [
      "type": "number", "default": -1.0},
     {"key": "prefetch_max_hints", "description": "Maximum prefetch hints per turn",
      "type": "integer", "default": 4, "minimum": 1},
+    {"key": "prefetch_min_query_tokens",
+     "description": "Unique word tokens a turn needs before prefetch hints search by vectors (0 gates only the stopword check)",
+     "type": "integer", "default": 4, "minimum": 0},
     {"key": "search_limit", "description": "Default memory_search result count",
      "type": "integer", "default": 8, "minimum": 1},
     {"key": "project_boost", "description": "Score multiplier for the session's own bucket",
@@ -431,6 +434,7 @@ class MemoryBucketsProvider(MemoryProvider):
                     hints = self.index.hints(query, scope.reads_by_default, exclude=exclude,
                                              min_similarity=min_similarity(self.config, self.index.embedder),
                                              max_hints=self.config.prefetch_max_hints,
+                                             min_query_tokens=self.config.prefetch_min_query_tokens,
                                              project=scope.project, boost=self.config.project_boost,
                                              embed_backlog=acquired)
                 finally:

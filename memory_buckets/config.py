@@ -52,6 +52,7 @@ class Config:
     store_path: str = ""  # default: $HERMES_HOME/memory-buckets
     prefetch_min_similarity: float = -1.0  # < 0: the built-in model's measured default, 0.27
     prefetch_max_hints: int = 4
+    prefetch_min_query_tokens: int = 4  # unique word tokens a turn needs before the vector leg runs; 0 leaves only the stopword check
     snapshot_max_chars: int = 12000  # the rules alone are ~3k; the rest is profile, preferences and the file list
     nudge_interval: int = 10  # user turns between filing reminders; 0 = off
     cron_writes: bool = False
@@ -77,12 +78,15 @@ class Config:
                     _assign(cfg.embeddings, f.name, emb[f.name], f.type)
         if "write_policy" in data and str(data["write_policy"]).strip().lower() == "confined":
             _warn_confined_once()
-        for name, default in (("history_keep", HISTORY_KEEP_DEFAULT), ("history_days", HISTORY_DAYS_DEFAULT)):
+        for name, default in (("history_keep", HISTORY_KEEP_DEFAULT), ("history_days", HISTORY_DAYS_DEFAULT),
+                              ("prefetch_min_query_tokens", 4)):
             value = getattr(cfg, name)
             if value < 0:
                 # Negative retention is bad config, not a shorter retention:
                 # history_days would prune the entry just recorded, and
-                # history_keep would record nothing while claiming to keep some.
+                # history_keep would record nothing while claiming to keep some;
+                # a negative token gate opens the vector leg to every turn while
+                # claiming to raise the bar, so it falls back like the others.
                 logger.warning("memory-buckets: %s=%s is negative; using the default (%s)",
                                name, value, default)
                 setattr(cfg, name, default)

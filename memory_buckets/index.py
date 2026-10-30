@@ -212,22 +212,21 @@ def _active_tokens(query: str) -> List[str]:
     return list(dict.fromkeys(active))
 
 
-# Short conversational turns ("thanks, that worked", "hi again") score 0.68-0.72
-# against unrelated notes on EmbeddingGemma 2, clear the prefetch default and hint
-# junk (issue #109). N picked against the benchmark's negative split: four of its
-# six false positives at 0.68 have 2-3 unique word tokens, while the shortest query
-# in the exact and paraphrase splits has 6, so the vector leg stays untouched there.
-PREFETCH_MIN_QUERY_TOKENS = 4
-
-
-def _prefetch_worthy(query: str) -> bool:
+# The token gate's default of 4 (issue #109): short conversational turns ("thanks,
+# that worked", "hi again") score 0.68-0.72 against unrelated notes on EmbeddingGemma
+# 2, clear the prefetch default and hint junk. 4 picked against the benchmark's
+# negative split: four of its six false positives at 0.68 have 2-3 unique word
+# tokens, while the shortest query in the exact and paraphrase splits has 6, so the
+# vector leg stays untouched there. Configurable as ``prefetch_min_query_tokens``
+# (config.py); 0 opens the leg to every turn, leaving only the stopword check.
+def _prefetch_worthy(query: str, min_query_tokens: int = 4) -> bool:
     """Whether a turn may earn prefetch hints from the vector leg at all. Below
-    ``PREFETCH_MIN_QUERY_TOKENS`` unique word tokens the turn is an acknowledgement,
+    ``min_query_tokens`` unique word tokens the turn is an acknowledgement,
     greeting or filler, not a request; a turn whose every token is a stopword has
     nothing to match either. Exact stem/alias rescue is deliberately not gated here:
     a turn that names a file means that file whatever its length."""
     tokens = set(re.findall(r"\w+", query.lower()))
-    return len(tokens) >= PREFETCH_MIN_QUERY_TOKENS and bool(tokens - _STOPWORDS)
+    return len(tokens) >= min_query_tokens and bool(tokens - _STOPWORDS)
 
 
 # -- the index -----------------------------------------------------------------
@@ -653,7 +652,8 @@ class Index:
         return {"mode": mode, "note": note, "results": results}
 
     def hints(self, query: str, read_ok: Callable[[str], bool], *, exclude: Optional[set] = None,
-              min_similarity: float = 0.45, max_hints: int = 4, project: Optional[str] = None,
+              min_similarity: float = 0.45, max_hints: int = 4, min_query_tokens: int = 4,
+              project: Optional[str] = None,
               boost: float = 1.3, embed_backlog: bool = True) -> List[Tuple[str, str, float]]:
         """(path, description, similarity) for files worth reading, by vectors
         only. Empty when embeddings are off or down. Embeds one batch of
@@ -668,7 +668,7 @@ class Index:
             self.embed_backlog(max_batches=1)
         exclude = exclude or set()
         best: Dict[str, float] = {}
-        if _prefetch_worthy(query):
+        if _prefetch_worthy(query, min_query_tokens):
             # Short turns skip the embed-and-cosine leg (issue #109); the exact
             # stem/alias rescue below still runs for them.
             qvec, _ = self._query_vector(query)

@@ -345,7 +345,8 @@ class EmbeddingIndexTest(IndexTest):
         embedded_texts = [text for batch in embedder.calls for text in batch]
         self.assertIn("Infrastructure > Hetzner Storage Box\n- mounted at /mnt/box", embedded_texts)
         # Issue 109 guard: one-word turns skip the vector leg, so this sanity hint
-        # sits above PREFETCH_MIN_QUERY_TOKENS to keep testing the heading embed.
+        # sits above the token floor (min_query_tokens, default 4) to keep testing
+        # the heading embed.
         hints = index.hints("Infrastructure storage box mount", ALL, min_similarity=0.2)
         self.assertEqual(hints[0][0], "global/topics/infra.md")
 
@@ -520,6 +521,12 @@ class HintsProjectAndRescueTest(StoreCase):
         # At the token floor the vector leg behaves exactly as before.
         self.assertEqual(index.hints("thanks, that worked fine today", ALL, min_similarity=0.2)[0][0],
                          "global/topics/receipts.md")
+        # The floor is a parameter: 0 reopens the vector leg to the short turn,
+        # and a higher floor skips the five-token turn that the default admits.
+        self.assertEqual(index.hints("thanks, that worked", ALL, min_similarity=0.2, min_query_tokens=0)[0][0],
+                         "global/topics/receipts.md")
+        self.assertEqual(index.hints("thanks, that worked fine today", ALL, min_similarity=0.2,
+                                     min_query_tokens=6), [])
 
     def test_an_alias_with_a_comma_is_one_alias_not_two(self):
         # Issue 17: "Smith, John" used to be read back as two aliases, so the word
@@ -536,8 +543,9 @@ class HintsProjectAndRescueTest(StoreCase):
         body = "- identical duplicated line entry\n"
         self.put("global/topics/shared.md", doc("shared", "identical duplicated line", body))
         self.put("proj-1/topics/shared.md", doc("shared", "identical duplicated line", body))
-        # Issue 109 guard: the vector leg needs PREFETCH_MIN_QUERY_TOKENS, so the
-        # ranking query carries a fourth token; the boost order is the point here.
+        # Issue 109 guard: the vector leg needs its token floor (min_query_tokens,
+        # default 4), so the ranking query carries a fourth token; the boost order
+        # is the point here.
         hints = self.make().hints("identical duplicated line entry", ALL,
                                   min_similarity=0.1, project="proj-1", boost=1.3)
         self.assertEqual([h[0] for h in hints][:2],

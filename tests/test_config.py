@@ -69,6 +69,32 @@ class ConfigTest(unittest.TestCase):
         self.assertIn("banana", logs.output[0])
         self.assertIn("maybe", logs.output[1])
 
+    # --- prefetch_min_query_tokens: the int gate from issue #109's review -------
+    # The token floor is configurable; junk text and negatives must warn and keep
+    # the default 4 rather than opening or disabling the gate silently.
+
+    def test_token_floor_number_loads(self):
+        cfg = config.Config.from_dict({"prefetch_min_query_tokens": "6"})
+        self.assertEqual(cfg.prefetch_min_query_tokens, 6)
+
+    def test_token_floor_junk_warns_and_keeps_default(self):
+        with self.assertLogs("memory_buckets", level="WARNING") as logs:
+            cfg = config.Config.from_dict({"prefetch_min_query_tokens": "banana"})
+        self.assertEqual(cfg.prefetch_min_query_tokens, 4)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("banana", logs.output[0])
+
+    def test_token_floor_negative_warns_and_keeps_default(self):
+        with self.assertLogs("memory_buckets", level="WARNING") as logs:
+            cfg = config.Config.from_dict({"prefetch_min_query_tokens": -3})
+        self.assertEqual(cfg.prefetch_min_query_tokens, 4)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("negative", logs.output[0])
+
+    def test_token_floor_zero_opens_the_gate(self):
+        cfg = config.Config.from_dict({"prefetch_min_query_tokens": 0})
+        self.assertEqual(cfg.prefetch_min_query_tokens, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

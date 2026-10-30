@@ -24,7 +24,7 @@ from memory_buckets.provider import CONFIG_SCHEMA, MemoryBucketsProvider
 
 EXPECTED_KEYS = [
     "readonly", "cron_writes", "nudge_interval", "snapshot_max_chars",
-    "prefetch_min_similarity", "prefetch_max_hints", "search_limit", "project_boost",
+    "prefetch_min_similarity", "prefetch_max_hints", "prefetch_min_query_tokens", "search_limit", "project_boost",
     "store_path", "embeddings.backend", "embeddings.auto_download", "embeddings.local_model_dir",
     "history_keep", "history_days",
 ]
@@ -100,6 +100,7 @@ class SetupSchemaTest(unittest.TestCase):
         self.assertEqual(defaults["snapshot_max_chars"], 12000)
         self.assertEqual(defaults["prefetch_min_similarity"], -1.0)
         self.assertEqual(defaults["prefetch_max_hints"], 4)
+        self.assertEqual(defaults["prefetch_min_query_tokens"], 4)
         self.assertEqual(defaults["search_limit"], 8)
         self.assertEqual(defaults["project_boost"], 1.3)
         self.assertEqual(defaults["store_path"], "")
@@ -119,6 +120,7 @@ class SetupSchemaTest(unittest.TestCase):
         self.assertEqual(minimums["nudge_interval"], 0)  # 0 turns the nudge off
         self.assertEqual(minimums["snapshot_max_chars"], 1000)  # snapshot.py floors the cap
         self.assertEqual(minimums["prefetch_max_hints"], 1)  # advisory: nothing clamps it
+        self.assertEqual(minimums["prefetch_min_query_tokens"], 0)  # 0 leaves only the stopword check; config.py falls back on negatives
         self.assertEqual(minimums["search_limit"], 1)  # tools.py requires limit >= 1
         self.assertEqual(minimums["history_keep"], 0)  # 0 turns history off
         self.assertEqual(minimums["history_days"], 0)  # 0 keeps versions forever
