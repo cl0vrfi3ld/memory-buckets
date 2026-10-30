@@ -5,6 +5,7 @@ import hashlib
 import math
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import tempfile
@@ -44,15 +45,28 @@ def fake_vector(text, dims=DIMS):
     return [x / norm for x in vec]
 
 
+NEW_HERMES_DB = object()  # fake_hermes default: stand in for a current Hermes layout
+
+
 @contextmanager
-def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere", db_path=None):
+def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere", db_path=NEW_HERMES_DB):
     """Stand-ins for Hermes's ``projects_db`` and ``runtime_cwd``, as ``memory_buckets.projects``
     uses them. ``projects`` maps a slug to its folder; ``pinned`` is the per-turn session cwd;
-    ``db_path`` makes the stand-in carry a ``projects_db_path`` pointing there, absent or not,
-    and a ``connect_closing`` that really opens that path the way Hermes does."""
+    ``db_path`` points at the stand-in's ``projects_db_path``: pass a path (existing or not)
+    or ``None`` for legacy layouts that keep no such file. Left alone, the stand-in carries
+    a freshly created sqlite ``projects.db`` in a temp home, the layout current Hermes has
+    on disk, so no test leans on the missing-file fallback by accident; a ``connect_closing``
+    really opens that path the way Hermes does."""
     rows = [types.SimpleNamespace(slug=slug, name=slug.title(), primary_path=folder, description=None,
                                   folders=[types.SimpleNamespace(path=folder)])
             for slug, folder in (projects or {}).items()]
+
+    fake_home = None
+    if db_path is NEW_HERMES_DB:
+        fake_home = Path(tempfile.mkdtemp(prefix="fake-hermes-home-"))
+        db_path = fake_home / "projects.db"
+        with sqlite3.connect(db_path) as con:  # the file exists: Hermes created it once, reads never make it
+            con.execute("CREATE TABLE IF NOT EXISTS projects(name TEXT, path TEXT)")
 
     @contextmanager
     def connect_closing():
@@ -101,6 +115,8 @@ def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere", db_path=None)
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+        if fake_home is not None:
+            shutil.rmtree(fake_home)
 
 
 def run_hermes_cli(*argv) -> int:

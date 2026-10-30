@@ -97,6 +97,14 @@ class ProjectsTest(unittest.TestCase):
                 self.assertEqual(projects.project_for_path("/src/x").bucket, "outer")
                 self.assertEqual([p.bucket for p in projects.list_projects()], ["outer"])
 
+    def test_legacy_layout_without_projects_db_path(self):
+        # Older Hermes layouts keep no projects_db_path at all: the guard must fall
+        # through to connect_closing there rather than answer "absent". This is now
+        # opt-in: the fake's default carries a real projects_db_path instead.
+        with fake_hermes({"outer": "/src"}, db_path=None):
+            self.assertEqual(projects.project_for_path("/src/inner").bucket, "outer")
+            self.assertEqual([p.bucket for p in projects.list_projects()], ["outer"])
+
     def test_carries_folders_and_description(self):
         row = types.SimpleNamespace(slug="proj_1", name="Proj", primary_path="/a", description="  A web app  ",
                                     folders=[types.SimpleNamespace(path="/a"), types.SimpleNamespace(path="/b")])
