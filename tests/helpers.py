@@ -13,7 +13,7 @@ import time
 import types
 import unittest
 from array import array
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 from memory_buckets import embeddings, store
@@ -65,8 +65,9 @@ def fake_hermes(projects=None, *, pinned="", agent_cwd="/nowhere", db_path=NEW_H
     if db_path is NEW_HERMES_DB:
         fake_home = Path(tempfile.mkdtemp(prefix="fake-hermes-home-"))
         db_path = fake_home / "projects.db"
-        with sqlite3.connect(db_path) as con:  # the file exists: Hermes created it once, reads never make it
+        with closing(sqlite3.connect(db_path)) as con:  # the file exists: Hermes created it once; reads never make it
             con.execute("CREATE TABLE IF NOT EXISTS projects(name TEXT, path TEXT)")
+            con.commit()  # commit and close explicitly: sqlite3's own context manager commits but never closes, and an open handle here breaks the teardown rmtree on Windows
 
     @contextmanager
     def connect_closing():
