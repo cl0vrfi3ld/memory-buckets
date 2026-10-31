@@ -155,7 +155,10 @@ class StaticModelTest(unittest.TestCase):
         # word's row reaches the cache.
         for k in range(0, len(words), 300):
             model.encode(" ".join(words[k:k + 300]))
-        self.assertLessEqual(len(model._row_cache), sm.ROW_CACHE_MAX_ROWS)
+        # One clear at the cap leaves exactly len(words) - cap rows: asserting the exact
+        # count pins both the eviction and the insertions after it, which a bare
+        # assertLessEqual and a vacuous all() over an empty cache would not.
+        self.assertEqual(len(model._row_cache), len(words) - sm.ROW_CACHE_MAX_ROWS)
         self.assertTrue(all(isinstance(row, sm.array) for row in model._row_cache.values()))
 
     def test_query_windowing_preserves_tail_tokens_for_long_prompts(self):
