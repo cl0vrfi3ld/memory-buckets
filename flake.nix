@@ -117,8 +117,8 @@
               {
                 name = "lint";
                 category = "test";
-                help = "ruff check + format --check";
-                command = ''cd "$PRJ_ROOT" && ruff check . && ruff format --check .'';
+                help = "ruff check";
+                command = ''cd "$PRJ_ROOT" && ruff check .'';
               }
             ];
           };

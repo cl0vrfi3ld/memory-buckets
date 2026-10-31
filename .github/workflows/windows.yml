@@ -36,7 +36,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            python: "3.10"  # the floor in pyproject.toml
+            python: "3.11"  # the floor in pyproject.toml
           - os: windows-latest
             python: "3.14"  # what Hermes ships on Windows
           - os: windows-11-arm

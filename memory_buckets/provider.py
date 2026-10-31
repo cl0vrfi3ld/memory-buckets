@@ -20,14 +20,16 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from . import _compat
 from . import config as config_mod
-from . import inbox, migrate, projects, scopes, snapshot, tools
+from . import credentials, inbox, migrate, projects, scopes, snapshot, tools
 from ._compat import (TUI_PLATFORMS, MemoryProvider, RecallStatus, spawn_context_thread, status_muted,
                       tui_status_callback)
 from .embeddings import make_embedder, min_similarity
@@ -41,6 +43,70 @@ HINT_COOLDOWN_TURNS = 5
 NUDGE = ("Memory check: has this conversation produced new durable facts about the user or their work? If yes, "
          "save them now with the memory tools, following your memory instructions. If no, do nothing. Do not "
          "mention this check to the user.")
+
+# Setup fields for `hermes memory setup` (agent/memory_provider.py get_config_schema):
+# the fourteen non-secret settings from config.py, in the README table's order for the
+# twelve it lists, then history_keep and history_days (config.py's last two fields; the
+# README table belongs to the maintainer). Defaults and
+# types come from the Config dataclasses. The minimums advise the wizard rather than bind
+# the code: snapshot.py floors snapshot_max_chars at 1000 and tools.py rejects search_limit
+# < 1, but index.hints merely slices [:prefetch_max_hints], and nudge_interval 0 is off
+# because the check skips anything below 1; history_keep 0 turns history off and
+# history_days 0 keeps versions forever, while config.py falls back to the defaults on
+# negative values. No secret field: every value belongs in
+# config.yaml, never .env.
+CONFIG_SCHEMA = [
+    {"key": "readonly", "description": "Make every session read-only (true or false)", "type": "boolean", "default": False},
+    {"key": "cron_writes", "description": "Allow cron sessions to write (true or false)", "type": "boolean", "default": False},
+    {"key": "nudge_interval", "description": "User turns between filing reminders (0 disables them)",
+     "type": "integer", "default": 10, "minimum": 0},
+    {"key": "snapshot_max_chars", "description": "Character cap on the system prompt block",
+     "type": "integer", "default": 12000, "minimum": 1000},
+    {"key": "prefetch_min_similarity",
+     "description": "Minimum cosine similarity for prefetch hints (below 0: the model's own default)",
+     "type": "number", "default": -1.0},
+    {"key": "prefetch_max_hints", "description": "Maximum prefetch hints per turn",
+     "type": "integer", "default": 4, "minimum": 1},
+    {"key": "search_limit", "description": "Default memory_search result count",
+     "type": "integer", "default": 8, "minimum": 1},
+    {"key": "project_boost", "description": "Score multiplier for the session's own bucket",
+     "type": "number", "default": 1.3},
+    {"key": "store_path", "description": "Store directory (default: $HERMES_HOME/memory-buckets)",
+     "type": "text", "default": ""},
+    {"key": "embeddings.backend", "description": "Embedding search: local (built-in model) or off (keyword search only)",
+     "type": "text", "default": "local", "choices": ["local", "off"]},
+    {"key": "embeddings.auto_download", "description": "Download the model in the background when not bundled (true or false)",
+     "type": "boolean", "default": True},
+    {"key": "embeddings.local_model_dir", "description": "Load the model from this directory instead",
+     "type": "text", "default": ""},
+    {"key": "history_keep", "description": "Newest versions of each file kept in .history/ (0 turns history off)",
+     "type": "integer", "default": config_mod.HISTORY_KEEP_DEFAULT, "minimum": 0},
+    {"key": "history_days", "description": "Recorded versions older than this many days are dropped (0 keeps them forever)",
+     "type": "integer", "default": config_mod.HISTORY_DAYS_DEFAULT, "minimum": 0},
+]
+
+
+def _coerce(value: Any, type_name: str) -> Any:
+    """One schema value from the setup wizard, which hands every answer over as a
+    string, into the type config.yaml should hold. A value that won't coerce is
+    kept as-is: config.py already warns and ignores bad values at load, so the
+    user's typed text is never silently dropped here."""
+    try:
+        if type_name == "boolean" and isinstance(value, str):
+            lowered = value.strip().lower()
+            # The wizard prompts booleans as free text, so the short spellings must count
+            # both ways (a `y` is yes, not silently false); anything else stays as typed
+            # rather than quietly becoming false. config._assign accepts the same table.
+            if lowered in config_mod.BOOL_TRUE_SPELLINGS:
+                return True
+            if lowered in config_mod.BOOL_FALSE_SPELLINGS:
+                return False
+            return value
+        if type_name in ("integer", "number") and isinstance(value, str):
+            return int(value) if type_name == "integer" else float(value)
+    except ValueError:
+        pass
+    return value
 
 
 def _sqlite_has_fts5() -> bool:
@@ -58,7 +124,7 @@ def _sqlite_has_fts5() -> bool:
 def _traced(fn):
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        if os.environ.get("MEMORY_BUCKETS_TRACE"):
+        if os.environ.get("MEMORY_BUCKETS_TRACE", "").strip().lower() in config_mod.BOOL_TRUE_SPELLINGS:
             shown = {k: v for k, v in kwargs.items() if k not in ("warning_callback", "status_callback")}
             logger.info("memory-buckets hook %s args=%.300r kwargs=%.300r session=%s",
                         fn.__name__, args, shown, getattr(self, "_current", ""))
@@ -92,6 +158,11 @@ class MemoryBucketsProvider(MemoryProvider):
         self._embed_again = False
         self._embed_thread = None
         self._shut = False
+        # queue_prefetch runs on Hermes's executor, which can outlive shutdown(): count the
+        # calls in flight so shutdown can wait for them (the event is set while none run).
+        self._prefetching = 0
+        self._prefetch_idle = threading.Event()
+        self._prefetch_idle.set()
 
     # -- identity and availability -----------------------------------------------
 
@@ -110,17 +181,65 @@ class MemoryBucketsProvider(MemoryProvider):
         cfg = self.config if self.store is not None and self.config is not None else config_mod.load()
         return [str(Path(cfg.store_path).expanduser())] if cfg.store_path else []
 
+    def get_config_schema(self) -> List[Dict[str, Any]]:
+        """Setup fields for `hermes memory setup`; see CONFIG_SCHEMA for the field list."""
+        return copy.deepcopy(CONFIG_SCHEMA)
+
+    def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
+        """Write non-secret setup values to ``plugins.memory-buckets`` in config.yaml.
+
+        Through Hermes's own writer (``hermes_cli.config.save_config``, the same
+        one behind `hermes config set` and the wizard), so unrelated keys survive
+        and the file stays parseable: no raw string surgery. Dotted schema keys
+        (``embeddings.backend``) nest the way config.py reads them. Runs under a
+        hermes-home override keyed to ``hermes_home``, because a caller may serve
+        a profile other than the process-wide one (memory_setup does exactly
+        this for its .env writes). Outside Hermes there is nothing to write to,
+        and the lazy import says so with an ImportError.
+        """
+        from hermes_cli.config import load_config, save_config  # lazy, like config.py
+        from hermes_constants import reset_hermes_home_override, set_hermes_home_override
+
+        types = {f["key"]: f.get("type", "text") for f in CONFIG_SCHEMA}
+        token = set_hermes_home_override(hermes_home) if hermes_home else None
+        try:
+            cfg = load_config()
+            plugins = cfg.get("plugins")
+            if not isinstance(plugins, dict):  # a stray scalar must not block the write
+                plugins = {}
+                cfg["plugins"] = plugins
+            block = plugins.get(config_mod.CONFIG_KEY)
+            if not isinstance(block, dict):
+                block = {}
+                plugins[config_mod.CONFIG_KEY] = block
+            for key, value in values.items():
+                if not isinstance(key, str) or not key:
+                    continue
+                node = block
+                parts = key.split(".")
+                for part in parts[:-1]:
+                    child = node.get(part)
+                    if not isinstance(child, dict):
+                        child = {}
+                        node[part] = child
+                    node = child
+                node[parts[-1]] = _coerce(value, types.get(key, "text"))
+            save_config(cfg)
+        finally:
+            if token is not None:
+                reset_hermes_home_override(token)
+
     # -- lifecycle -----------------------------------------------------------------
 
     @_traced
     def initialize(self, session_id: str, **kwargs) -> None:
         self.config = config_mod.load()
         root = Path(self.config.store_path).expanduser() if self.config.store_path else Path(kwargs["hermes_home"]) / "memory-buckets"
-        self.store = Store(root)
+        self.store = Store(root, history_keep=self.config.history_keep, history_days=self.config.history_days)
         # Create the store up front (not just on first write), so it exists as soon as the
         # provider is active and the log says where it went (profiles move HERMES_HOME).
         try:
-            (self.store.memories / GLOBAL).mkdir(parents=True, exist_ok=True)
+            self.store.ensure_dir(self.store.memories / GLOBAL)
             logger.info("memory-buckets: active, store at %s (platform=%s, context=%s)", root,
                         kwargs.get("platform") or "cli", kwargs.get("agent_context") or "primary")
         except OSError as err:
@@ -142,7 +261,7 @@ class MemoryBucketsProvider(MemoryProvider):
             return
         try:
             for step in migrate.run(self.store):
-                level = logging.WARNING if step.action == "skip" else logging.INFO
+                level = logging.WARNING if step.action in ("skip", "tighten") else logging.INFO
                 logger.log(level, "memory-buckets: migration: %s", step.describe())
         except (StoreError, OSError) as err:  # never fail startup; the next session tries again
             logger.warning("memory-buckets: migration didn't run (%s); `hermes memory-buckets migrate` retries it",
@@ -150,15 +269,21 @@ class MemoryBucketsProvider(MemoryProvider):
 
     @_traced
     def shutdown(self) -> None:
-        # Stop the embedding worker before closing SQLite: closing a connection another
-        # thread is using can crash the interpreter.
-        self._shut = True
+        # Stop the embedding worker and any queue_prefetch before closing SQLite: closing a
+        # connection another thread is using can crash the interpreter. Setting _shut under
+        # the lock means a prefetch either is counted before we look or never starts.
+        with self._lock:
+            self._shut = True
+        deadline = time.monotonic() + 10
         worker = self._embed_thread
         if worker is not None and worker.is_alive():
-            worker.join(timeout=10)
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
             if worker.is_alive():
                 logger.warning("memory-buckets: embedding worker still running at shutdown; leaving the index open")
                 return
+        if not self._prefetch_idle.wait(timeout=max(0.0, deadline - time.monotonic())):
+            logger.warning("memory-buckets: prefetch still running at shutdown; leaving the index open")
+            return
         if self.index is not None:
             self.index.close()
 
@@ -214,12 +339,23 @@ class MemoryBucketsProvider(MemoryProvider):
             state.snapshot = None
             state.hint_seen.clear()
             state.prefetch_turns = 0
+            if reset:
+                # A reset on a retained id is still a new conversation: start clean.
+                # The turn counter has to start over too, or the periodic nudge fires
+                # on the previous conversation's modulo instead of nudge_interval turns
+                # into the new one.
+                state.nudge_due = False
+                state.turns = 0
             return
         previous = self._state()
         # Same agent, same workspace: the project follows the cwd, whatever the switch.
+        # A pending filing reminder and the turn counter ride over too: Hermes may rotate the id
+        # when it compresses, and on_pre_compress has just set the flag on the OLD id, which the
+        # next turn would otherwise lose. A reset is a genuinely new conversation, so it starts clean.
         self._remember(new_session_id, SessionState(
             platform=previous.platform, agent_context=previous.agent_context, cwd=previous.cwd,
-            status=previous.status,
+            status=previous.status, turns=0 if reset else previous.turns,
+            nudge_due=previous.nudge_due and not reset,
         ))
         self._current = new_session_id
 
@@ -247,6 +383,24 @@ class MemoryBucketsProvider(MemoryProvider):
         state.turns += 1
         if interval > 0 and state.turns % interval == 0:
             state.nudge_due = True
+
+    @_traced
+    def on_pre_compress(self, messages: List[Dict[str, Any]]) -> str:
+        """Hermes is about to compress the transcript: facts mentioned since the last save and
+        never filed would die with it. Make the turn after compression carry the NUDGE (even
+        mid-interval) and return "". A note does not work here: Hermes serialises this slot with
+        json.dumps inside a fenced "memory provider context" block the summary prompt declares
+        as source material, not instructions (agent/context_compressor.py, _memory_provider_section),
+        so an imperative sentence is ignored. The queued NUDGE is what closes the gap.
+        ``messages`` is not read and there is no model call here: filing stays the agent's job,
+        this only closes the gap. Sessions that turned reminders off (interval 0) or cannot
+        write (read-only) opt out here too, as they do for the interval nudge."""
+        if self.store is None or self.config is None or self.config.nudge_interval <= 0:
+            return ""
+        if self._read_scope().read_only:
+            return ""
+        self._state().nudge_due = True
+        return ""
 
     @_traced
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -288,9 +442,21 @@ class MemoryBucketsProvider(MemoryProvider):
             except Exception:
                 logger.warning("memory-buckets: prefetch hints failed", exc_info=True)
                 hints = []
-        if hints:
-            self._last_recall = len(hints)
-            lines = [f"- {path}: {desc}" if desc else f"- {path}" for path, desc, _ in hints]
+        lines = []
+        for path, desc, _ in hints:
+            if not desc:
+                lines.append(f"- {path}")
+                continue
+            # A hint description enters the model's context exactly like a listing
+            # line, so it gets the same screen. A blocked one is dropped rather
+            # than shown (the warning is logged in _screened): this whole block
+            # invites memory_read, and the model must not be nudged towards a
+            # file the scan rejected.
+            shown = snapshot._screened(path, desc)
+            if not shown.startswith("[BLOCKED:"):
+                lines.append(f"- {path}: {shown}")
+        if lines:
+            self._last_recall = len(lines)
             parts.append("Memory files that may be relevant to this message. Read them with memory_read if they could help "
                          "you answer:\n" + "\n".join(lines))
         if state.nudge_due and not scope.read_only:
@@ -301,6 +467,11 @@ class MemoryBucketsProvider(MemoryProvider):
     @_traced
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         if self.index is not None and self.index.embedder is not None:
+            with self._lock:
+                if self._shut:  # the index may already be closed
+                    return
+                self._prefetching += 1
+                self._prefetch_idle.clear()
             try:
                 self.index.reconcile()
                 if self._embed_running.acquire(blocking=False):
@@ -310,6 +481,11 @@ class MemoryBucketsProvider(MemoryProvider):
                         self._embed_running.release()
             except Exception:
                 logger.warning("memory-buckets: background embedding failed", exc_info=True)
+            finally:
+                with self._lock:
+                    self._prefetching -= 1
+                    if not self._prefetching:
+                        self._prefetch_idle.set()
 
     def recall_status(self) -> Optional[RecallStatus]:
         return RecallStatus("memory-buckets", self._last_recall) if self._last_recall else None
@@ -421,13 +597,35 @@ class MemoryBucketsProvider(MemoryProvider):
 
     @_traced
     def on_memory_write(self, action: str, target: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
-        """Mirror built-in memory writes into global/inbox.md while built-in memory is still on."""
+        """Mirror built-in memory writes into global/inbox.md while built-in memory is still on.
+        A matched or oversize entry is skipped with a warning and not mirrored."""
         if self.store is None:
             return
         entry = f"[{target} {action}] {content}".strip()
         previous = (metadata or {}).get("previous_content")
         if action in ("replace", "remove") and previous:
             entry += f" (was: {previous})"
+        window = _compat.scan_window_chars
+        patterns = _compat.scan_threats(entry)
+        if patterns or (window is not None and len(entry) > window):
+            # A matched or oversize built-in entry must not be copied into the store,
+            # not even as a placeholder: the inbox is a real file, and anything
+            # written to it must be text a later read can trust. For `add` the
+            # original stays in built-in memory for the user to review by hand; for
+            # `replace` and `remove` the previous content has already left it, and
+            # this warning is the only record.
+            logger.warning("memory-buckets: kept a built-in memory %s on %s out of the inbox "
+                           "(matched %s or over the threat-scan window)", action, target,
+                           ", ".join(patterns) or "an oversize entry")
+            return
+        families = credentials.scan(entry)
+        if families:
+            # The same rule as the write tools, on the one write path that skips them: a
+            # credential pasted into built-in memory must not be copied into the synced
+            # store, not even as a placeholder (the threat branch above says why).
+            logger.warning("memory-buckets: kept a built-in memory %s on %s out of the inbox "
+                           "(it looks like a credential: %s)", action, target, ", ".join(families))
+            return
         try:
             inbox.append(self.store, f"mirrored from built-in memory {date.today().isoformat()}", [entry],
                          source=f"builtin:{self._state().platform}")

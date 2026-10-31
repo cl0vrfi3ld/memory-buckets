@@ -40,7 +40,8 @@ from pathlib import Path
 from typing import List, NamedTuple, Optional, Tuple
 
 from . import frontmatter, inbox
-from .store import GLOBAL, Store, StoreError, _fsync_dir, check_content, is_link, is_project_id, stamp, version
+from .store import (GLOBAL, GROUP_OTHER, Store, StoreError, _fsync_dir, check_content, is_link, is_project_id, stamp,
+                    version)
 
 logger = logging.getLogger("memory_buckets")
 
@@ -49,6 +50,7 @@ INDEX_MIGRATION = "0.1.0"
 INBOX_MIGRATION = "0.2.0"  # the description change lands with the _pending/ removal
 PENDING_MIGRATION = "0.2.0"
 PENDING_DIR = "_pending"  # 0.1.0's pending.py PENDING_DIR: <store>/_pending/<id>.json
+PERMISSIONS = "(permissions)"  # Step.project for the private-store steps; no file is rewritten
 SOURCE = "migration"
 MOVED_HEADING = "## Moved from index.md"
 DEFAULT_PROFILE_DESCRIPTION = "What the {p} project is, its purpose, technology and status, and where things are"
@@ -56,14 +58,18 @@ DEFAULT_PROFILE_DESCRIPTION = "What the {p} project is, its purpose, technology 
 
 @dataclass
 class Step:
-    project: str  # or PENDING_DIR for the 0.2.0 steps
-    action: str  # rename | merge | remove | skip | inbox | pending
+    project: str  # or PENDING_DIR for the 0.2.0 steps, PERMISSIONS for the permission steps
+    action: str  # rename | merge | remove | skip | inbox | pending | tighten
     detail: str = ""
     name: str = ""  # PENDING_DIR steps: the file in it, or "" for the folder itself
     removed: str = ""  # inbox step: the empty headings that went in the same run
 
     def describe(self) -> str:
         p = self.project
+        if p == PERMISSIONS:
+            if self.action == "tighten":
+                return self.detail
+            return f"{self.name} left as it is: {self.detail}"
         if p == PENDING_DIR:
             where = f"{PENDING_DIR}/{self.name}"
             if self.action == "pending":
@@ -364,15 +370,50 @@ def _apply_pending(store: Store, planned: List[Step]) -> List[Step]:
     return steps
 
 
+def _tighten_step(paths: List[Tuple[str, int]]) -> Step:
+    first, mode = paths[0]
+    where = "the store root" if first == "." else first
+    return Step(PERMISSIONS, "tighten",
+                f"group and other access removed from {len(paths)} path(s) in the store (first: {where}, was {mode:04o})")
+
+
+def tighten_plan(store: Store) -> Optional[Step]:
+    """The step that would make the store private, or None when it already is (always, on Windows)."""
+    loose = store.loose_modes()
+    return _tighten_step(loose) if loose else None
+
+
+def _apply_tighten(store: Store) -> List[Step]:
+    """Clear the group and other bits on every loose path, and nothing else: a mode only ever
+    loses access here, so a read-only file stays read-only. Contents are not touched, so no
+    backup is kept. A path that can't be changed (not ours, or on a filesystem without modes)
+    is a skip step for it alone; the rest still are."""
+    changed: List[Tuple[str, int]] = []
+    steps: List[Step] = []
+    for rel, mode in store.loose_modes():
+        target = store.root if rel == "." else store.root / rel
+        try:
+            os.chmod(target, mode & ~GROUP_OTHER)
+        except FileNotFoundError:
+            continue  # removed since the scan
+        except OSError as err:
+            steps.append(Step(PERMISSIONS, "skip", f"{_reason(err)}; {RERUN}", rel))
+            continue
+        changed.append((rel, mode))
+    return ([_tighten_step(changed)] if changed else []) + steps
+
+
 def run(store: Store, *, dry_run: bool = False) -> List[Step]:
     """Run every pending migration. Raises ``StoreError("locked")`` if the store stays
     locked. Anything else that goes wrong with one file is a ``skip`` step for that file."""
-    if not leftover_indexes(store) and _inbox_plan(store) is None and leftover_pending(store) is None:
+    if (not leftover_indexes(store) and _inbox_plan(store) is None and leftover_pending(store) is None
+            and tighten_plan(store) is None):
         return []
     if dry_run:
         steps = [_plan(store, p)[0] for p in leftover_indexes(store)]
         inbox_step = _inbox_plan(store)
-        return steps + ([inbox_step] if inbox_step else []) + _pending_plan(store)
+        tighten_step = tighten_plan(store)
+        return steps + ([inbox_step] if inbox_step else []) + _pending_plan(store) + ([tighten_step] if tighten_step else [])
     steps = []
     with store.lock():
         for project in leftover_indexes(store):  # again, under the lock
@@ -390,4 +431,5 @@ def run(store: Store, *, dry_run: bool = False) -> List[Step]:
         if inbox_step is not None:
             steps.append(inbox_step)
         steps.extend(_apply_pending(store, _pending_plan(store)))
+        steps.extend(_apply_tighten(store))  # last: the steps above may have made files and directories
     return steps

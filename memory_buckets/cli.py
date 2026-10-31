@@ -18,9 +18,9 @@ import time
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
 
-from . import frontmatter, inbox, migrate, projects
+from . import _compat, credentials, frontmatter, inbox, migrate, projects
 from . import config as config_mod
 from . import static_model
 from ._paths import SKILLS_DIR
@@ -32,6 +32,8 @@ from .tools import TOOL_NAMES
 ENTRY_DELIMITER = "\n§\n"  # Hermes tools/memory_tool_store.py
 
 SKILL_FILE = SKILLS_DIR / "sort-imports" / "SKILL.md"
+# Skills shipped under SKILLS_DIR; _register_extras registers every one of them.
+BUNDLED_SKILLS = ("sort-imports", "tidy-memory")
 
 
 def import_prompt() -> str:
@@ -59,7 +61,7 @@ def _open(args):
     home = _hermes_home()
     root = Path(cfg.store_path or home / "memory-buckets").expanduser()
     embedder = make_embedder(cfg, root)
-    store = Store(root)
+    store = Store(root, history_keep=cfg.history_keep, history_days=cfg.history_days)
     return cfg, home, store, Index(store, embedder)
 
 
@@ -85,6 +87,13 @@ def cmd_status(args) -> int:
         index.reconcile()
         s = index.stats()
         _out(f"index       {s['files']} files, {s['chunks']} chunks, {s['embedded']} embedded, {s['backlog']} waiting")
+        oversized = [p for p in store.iter_paths()
+                     if (store.memories / p).stat().st_size > MAX_FILE_BYTES]
+        if oversized:
+            # A file over the write cap can only have come from a hand edit or a
+            # sync; no memory tool can rewrite it whole.
+            _out(f"oversized   {'; '.join(oversized)}: over the {MAX_FILE_BYTES}-byte write cap; "
+                 "the tools can't rewrite one, so fix or split it by hand")
     if index.embedder is None:
         _out("embeddings  off (keyword search only)")
     else:
@@ -99,6 +108,12 @@ def cmd_status(args) -> int:
             _out(f"embeddings  built-in {static_model.MODEL_NAME}: not ready ({err})")
     problems += _status_hermes(home)
     _status_projects(store)
+    loose = store.loose_modes()
+    if loose:
+        first, mode = loose[0]
+        _out(f"permissions {len(loose)} path(s) in the store can be read by group or other "
+             f"(first: {'the store root' if first == '.' else first}, mode {mode:04o}); "
+             "run `hermes memory-buckets migrate` to make them private")
     leftovers = migrate.leftover_indexes(store)
     if leftovers:
         _out(f"migration   index.md left over in: {', '.join(leftovers)}; run `hermes memory-buckets migrate`")
@@ -110,8 +125,124 @@ def cmd_status(args) -> int:
     waiting = _inbox_entries(store)
     if waiting:
         _out(f"inbox       {inbox.PATH}: {_entries(waiting)} waiting to be sorted")
+    _status_skipped(store)
+    _status_blocked(store)
     index.close()
     return 1 if problems else 0
+
+
+def _plural(n: int, singular: str, plural: str = "") -> str:
+    return f"{n} {singular if n == 1 else plural or singular + 's'}"
+
+
+def _status_skipped(store: Store) -> None:
+    """What the agent can't see or edit in the store. Obsidian lets you create files the
+    path rules reject, and they'd otherwise vanish without a word. Not a fault, so it
+    doesn't fail the command; ``lint`` has the per-file detail."""
+    # A leftover project index.md has its own `migration` line above.
+    leftovers = {f"{d}/index.md" for d in migrate.leftover_indexes(store)}
+    skipped = [(path, why) for path, why in store.iter_skipped() if path not in leftovers]
+    outside = sum(1 for _, why in skipped if why == "path")
+    links = len(skipped) - outside
+    if outside:
+        _out(f"ignored     {_plural(outside, 'file')} outside the path rules, so the agent can't see "
+             f"{'it' if outside == 1 else 'them'}; run `hermes memory-buckets lint`")
+    if links:
+        _out(f"ignored     {_plural(links, 'symlink')} (never followed); run `hermes memory-buckets lint`")
+    broken = 0
+    for path in store.iter_paths():
+        try:
+            text = (store.memories / path).read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            continue  # gone since the walk; lint reports real read errors
+        if _check_frontmatter(text, path)[1] is not None:
+            broken += 1
+    if broken:
+        _out(f"frontmatter {_plural(broken, 'file')} with invalid frontmatter, so tools won't edit "
+             f"{'it' if broken == 1 else 'them'} until it's fixed; run `hermes memory-buckets lint`")
+
+
+def _check_frontmatter(text: str, rel: str):
+    """``(body, error)``: ``error`` is the reason the file's frontmatter is unusable, else None.
+    The one test both ``lint`` and ``status`` apply."""
+    try:
+        fm, body = frontmatter.parse(text)
+        if not fm.entries:
+            raise frontmatter.FrontmatterError("no frontmatter")
+        frontmatter.validate(fm, stem(rel))
+    except frontmatter.FrontmatterError as err:
+        return text, err
+    return body, None
+
+
+INLINE_TAILS = ("profile.md", "preferences.md")  # snapshot.build inlines these whole
+
+
+def _blocked_reason(text: str) -> Optional[str]:
+    """Why Hermes's threat scanner keeps ``text`` out of the prompt, None when it passes.
+    The two rejections of ``snapshot._screened``, as one question lint and status can ask
+    without the warning that belongs to prompt time. Outside Hermes there is no scanner
+    (scan_threats returns [] and scan_window_chars is None), so nothing is reported off."""
+    window = _compat.scan_window_chars
+    if window is not None and len(text) > window:
+        return f"over the {window}-character threat-scan window"
+    patterns = _compat.scan_threats(text)
+    if patterns:
+        return f"matched threat pattern(s) {', '.join(patterns)}"
+    return None
+
+
+def _scanner_blocking(store: Store) -> List[Tuple[str, str]]:
+    """``(path, reason)`` for what Hermes's threat scanner keeps out of the prompt.
+
+    ``snapshot._screened`` silently blocks two kinds of text: the file-listing
+    descriptions (which also feed the prefetch hints), and the whole bodies of the
+    files it inlines, */profile.md and */preferences.md. Hand edits and synced files never
+    pass the write-time scan in ``tools``, so a store can lose a file from every prompt
+    after an upgrade with only Hermes's log as signal; issue #49 asks lint and status to
+    name them. Other files' bodies do not enter the prompt (memory_read returns them raw
+    on request, a deliberate choice), so their body matches are not reported here;
+    ``inbox.md`` is one of them, its note being fixed text, so only its description
+    is checked."""
+    findings: List[Tuple[str, str]] = []
+    for rel in sorted(store.iter_paths()):
+        try:
+            text = (store.memories / rel).read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            continue  # gone since the walk; lint's own read reports real errors
+        # What the index and the snapshot see, not what the tools may edit: both work
+        # from frontmatter.parse alone (issue #88), so a file whose frontmatter parses
+        # but fails validate() still has its description listed and screened, and an
+        # inlined file is screened as body.strip() either way.
+        try:
+            fm, body = frontmatter.parse(text)
+        except frontmatter.FrontmatterError:
+            fm, body = frontmatter.Frontmatter(), text  # as snapshot._body and Index._index_file
+        desc = fm.get("description")
+        desc = desc if isinstance(desc, str) else ""
+        if desc:
+            reason = _blocked_reason(desc)
+            if reason:
+                findings.append((rel, f"description {reason}; "
+                                      "kept out of every prompt listing and prefetch hint; fix or delete it"))
+        if rel.rsplit("/", 1)[-1] in INLINE_TAILS:
+            screened = body.strip()
+            if screened:
+                reason = _blocked_reason(screened)
+                if reason:
+                    findings.append((rel, f"body {reason}; the snapshot inlines the "
+                                          "whole file; fix or delete it by hand"))
+    return findings
+
+
+def _status_blocked(store: Store) -> None:
+    """What the scanner keeps out of the agent's prompt. Not a fault, so it doesn't
+    fail the command; ``lint`` has the per-file detail."""
+    blocked = _scanner_blocking(store)
+    files = {rel for rel, _ in blocked}
+    if files:
+        _out(f"blocked     {_plural(len(files), 'file')} whose text Hermes's threat scanner "
+             f"rejects, so it stays out of the prompt; run `hermes memory-buckets lint` for details")
 
 
 def _status_hermes(home: Path) -> int:
@@ -251,41 +382,51 @@ def _has_external_skill(skills_dir: Path = SKILLS_DIR) -> bool:
 
 
 def _diagnose_skill(skills_dir: Path, say) -> None:
-    """The sort-imports skill and its /sort-imports command (README: Importing built-in memory)."""
-    skill_md = skills_dir / "sort-imports" / "SKILL.md"
-    say(skill_md.is_file(), f"skill file {skill_md}" if skill_md.is_file()
-        else f"no sort-imports/SKILL.md in {skills_dir}: this copy of the plugin is out of date")
-    if not skill_md.is_file():
+    """The bundled skills and their slash commands (README: Importing built-in memory)."""
+    skill_files = {}
+    for name in BUNDLED_SKILLS:
+        path = skills_dir / name / "SKILL.md"
+        skill_files[name] = path
+        say(path.is_file(), f"skill file {path}" if path.is_file()
+            else f"no {name}/SKILL.md in {skills_dir}: this copy of the plugin is out of date")
+    if not all(path.is_file() for path in skill_files.values()):
         return
     try:
         from agent.skill_commands import scan_skill_commands
         from agent.skill_utils import get_external_skills_dirs, get_skills_dir
     except ImportError:
-        _out("      (this Hermes has no agent.skill_commands: can't check /sort-imports)")
+        _out("      (this Hermes has no agent.skill_commands: can't check /sort-imports or /tidy-memory)")
         return
     skills_dir = skills_dir.resolve()
     external = [d.resolve() for d in get_external_skills_dirs()]
     if skills_dir in external:
         _out(f"ok    skills.external_dirs includes {skills_dir}")
     elif _is_plugin_dir_install():
-        _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
-        _out("      Asking the agent to sort your imported memory still works. To get /sort-imports, add to config.yaml:")
+        _out("note  /sort-imports and /tidy-memory are off: skills.external_dirs doesn't include this plugin's skills.")
+        _out("      Asking the agent to sort your imported memory still works. To get the slash commands, add to config.yaml:")
         _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
     else:
-        _out("note  /sort-imports is off: skills.external_dirs doesn't include this plugin's skills.")
+        _out("note  /sort-imports and /tidy-memory are off: skills.external_dirs doesn't include this plugin's skills.")
         _out("      To sort imported memory, paste the prompt from `hermes memory-buckets import-prompt`, or add to config.yaml:")
         _out(f"        skills:\n          external_dirs:\n            - {skills_dir}")
-    entry = scan_skill_commands().get("/sort-imports")
-    if entry is None:
-        if skills_dir in external:
-            say(False, "/sort-imports isn't registered, although the directory is configured (see Hermes's log)")
-    else:
-        ours = Path(entry["skill_md_path"]).resolve() == skill_md.resolve()
-        say(ours, "/sort-imports → this plugin's skill" if ours
-            else f"/sort-imports is claimed by another skill: {entry['skill_md_path']}")
+    commands = scan_skill_commands()
+    registered = False
+    for name, skill_md in skill_files.items():
+        command = "/" + name
+        entry = commands.get(command)
+        if entry is None:
+            if skills_dir in external:
+                say(False, f"{command} isn't registered, although the directory is configured (see Hermes's log)")
+        else:
+            ours = Path(entry["skill_md_path"]).resolve() == skill_md.resolve()
+            say(ours, f"{command} -> this plugin's skill" if ours
+                else f"{command} is claimed by another skill: {entry['skill_md_path']}")
+            registered = True
+    if registered:
         _out("      A running chat or gateway keeps its old skill list: run /reload-skills, or restart the gateway.")
     # Copies of an older sort prompt saved as local skills shadow the real one.
     local = get_skills_dir()
+    ours = skill_files["sort-imports"].resolve()
     stale = []
     if local.is_dir():
         for md in local.rglob("SKILL.md"):
@@ -293,7 +434,7 @@ def _diagnose_skill(skills_dir: Path, say) -> None:
                 text = md.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            if "global/inbox.md" in text and md.resolve() != skill_md.resolve():
+            if "global/inbox.md" in text and md.resolve() != ours:
                 stale.append(md)
     for md in stale:
         say(False, f"local skill {md} is a copy of a sort prompt; it goes stale, so delete it")
@@ -335,14 +476,9 @@ def lint(store: Store) -> List[str]:
             if len(data) > MAX_FILE_BYTES:
                 problems.append(f"{rel}: {len(data)} bytes, over the {MAX_FILE_BYTES}-byte cap")
             text = data.decode("utf-8", errors="replace")
-            try:
-                fm, body = frontmatter.parse(text)
-                if not fm.entries:
-                    raise frontmatter.FrontmatterError("no frontmatter")
-                frontmatter.validate(fm, stem(rel))
-            except frontmatter.FrontmatterError as err:
+            body, err = _check_frontmatter(text, rel)
+            if err is not None:
                 problems.append(f"{rel}: bad frontmatter ({err}); tools won't edit it until it's fixed")
-                body = text
             scope = rel.split("/", 1)[0]
             names[(scope, stem(rel))].append(rel)
             stems[scope].add(stem(rel))
@@ -361,6 +497,8 @@ def lint(store: Store) -> List[str]:
                     ok = target in stems[scope] or target in stems[GLOBAL]
                 if not ok:
                     problems.append(f"{rel}: broken link [[{target}]]")
+    for rel, reason in _scanner_blocking(store):
+        problems.append(f"{rel}: {reason}")
     return problems
 
 
@@ -417,7 +555,7 @@ def cmd_migrate(args) -> int:
     for step in steps:
         _out(("would: " if args.dry_run else "") + step.describe())
     backup = store.root / migrate.BACKUP_DIR
-    if not args.dry_run and backup.exists() and any(s.action not in ("skip", "tidy", "remove") for s in steps):
+    if not args.dry_run and backup.exists() and any(s.action not in ("skip", "tidy", "remove", "tighten") for s in steps):
         _out(f"originals kept in {backup}")
     return 1 if any(s.action == "skip" for s in steps) else 0
 
@@ -492,6 +630,9 @@ def cmd_fetch_model(args) -> int:
     if found is not None and not args.force:
         _out(f"built-in model already available at {found}")
         return 0
+    # fetch mkdirs <root>/.models with parents, which would create the root itself at
+    # the umask's mode; every other creation path goes through the store's ensure_dir.
+    store.ensure_dir(store.root)
     try:
         dest = static_model.fetch(store.root, progress=lambda msg: _out(msg), timeout=120.0)
     except (OSError, static_model.ModelUnavailable) as err:
@@ -511,6 +652,25 @@ def _builtin_entries(memories_dir: Path) -> List[tuple]:
     return out
 
 
+def _screened_reason(entry: str) -> Optional[str]:
+    """Why ``entry`` must not be copied into the inbox: a reason string naming the
+    pattern/family IDs, or None when it is safe. The same checks the provider's
+    ``on_memory_write`` bridge applies: the inbox is a real file, and an entry that
+    ``tools._checked`` would refuse on a later edit would block every ``memory_str_replace``
+    that tries to remove another bullet from it, so the sort-imports skill stalls.
+    The entry text itself is never echoed, as in the write tools' errors."""
+    window = _compat.scan_window_chars
+    patterns = _compat.scan_threats(entry)
+    if patterns:
+        return f"matched threat pattern(s) {', '.join(patterns)}"
+    if window is not None and len(entry) > window:
+        return f"over the {window}-character threat-scan window"
+    families = credentials.scan(entry)
+    if families:
+        return f"looks like a credential: {', '.join(families)}"
+    return None
+
+
 def cmd_import(args) -> int:
     _, home, store, _ = _open(args)
     source_home = Path(args.from_home).expanduser() if args.from_home else home
@@ -520,13 +680,22 @@ def cmd_import(args) -> int:
         return 1
     today = date.today().isoformat()
     for name, path, entries in found:
+        kept = []
+        for entry in entries:
+            reason = _screened_reason(entry)
+            if reason:
+                _out(f"skipped {path}: {reason}; entry left in {path} for manual review")
+            else:
+                kept.append(entry)
+        if not kept:
+            continue
         if args.dry_run:
-            _out(f"would import {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} from {path}")
+            _out(f"would import {len(kept)} entr{'y' if len(kept) == 1 else 'ies'} from {path}")
             continue
         heading = f"imported {name} from {source_home} ({today})"
-        inbox.append(store, heading, entries, source="cli:import")
-        _out(f"imported {len(entries)} entr{'y' if len(entries) == 1 else 'ies'} from {path} into {inbox.PATH}")
-    if not args.dry_run:
+        inbox.append(store, heading, kept, source="cli:import")
+        _out(f"imported {len(kept)} entr{'y' if len(kept) == 1 else 'ies'} from {path} into {inbox.PATH}")
+    if not args.dry_run and _inbox_entries(store):
         _print_import_prompt(store)
     return 0
 
@@ -570,6 +739,40 @@ def cmd_import_prompt(args) -> int:
     return 0
 
 
+def cmd_history(args) -> int:
+    """Versions of one memory file recorded in .history/, newest first."""
+    _, _, store, _ = _open(args)
+    try:
+        entries = store.history(args.path)
+    except StoreError as err:
+        _out(f"error: {err.message}")
+        return 1
+    if not entries:
+        _out(f"no history for {args.path}")
+        return 1
+    for e in entries:
+        _out(f"{e['timestamp']}  {e['version']}  {e['bytes']} bytes")
+    _out("restore one with: hermes memory-buckets restore PATH [VERSION]")
+    return 0
+
+
+def cmd_restore(args) -> int:
+    _, _, store, _ = _open(args)
+    try:
+        got = store.restore(args.path, args.version)
+    except StoreError as err:
+        _out(f"error: {err.message}")
+        return 1
+    if got["unchanged"]:
+        _out(f"{args.path} already holds version {got['version']} (recorded {got['timestamp']})")
+    elif got["recreated"]:
+        _out(f"recreated {args.path} from recorded version {got['version']} (recorded {got['timestamp']})")
+    else:
+        _out(f"restored {args.path} to version {got['version']} (recorded {got['timestamp']}); "
+             "the content it replaced is itself recorded")
+    return 0
+
+
 # -- argparse ----------------------------------------------------------------------
 
 def _add_commands(parser: argparse.ArgumentParser) -> None:
@@ -608,12 +811,19 @@ def _add_commands(parser: argparse.ArgumentParser) -> None:
     p.set_defaults(bm_func=cmd_import)
     p = sub.add_parser("import-prompt", help="Print the prompt that asks the agent to sort the imported memory in global/inbox.md")
     p.set_defaults(bm_func=cmd_import_prompt)
+    p = sub.add_parser("history", help="List the recorded versions of one memory file (.history/)")
+    p.add_argument("path", help="Memory path, e.g. global/topics/nix.md")
+    p.set_defaults(bm_func=cmd_history)
+    p = sub.add_parser("restore", help="Write a recorded version of one memory file back (itself recorded)")
+    p.add_argument("path", help="Memory path, e.g. global/topics/nix.md")
+    p.add_argument("version", nargs="?", help="Version from `history`; default: the newest recorded version")
+    p.set_defaults(bm_func=cmd_restore)
 
 
 def _dispatch(args) -> int:
     func = getattr(args, "bm_func", None)
     if func is None:
-        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, import-prompt (--help for more)", file=sys.stderr)
+        print("usage: pick a command: status, diagnose, lint, migrate, reindex, search, hints, fetch-model, import, import-prompt, history, restore (--help for more)", file=sys.stderr)
         return 2
     return func(args)
 

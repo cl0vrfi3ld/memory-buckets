@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Issue tracker (git.cl0vr.co)
+    url: https://git.cl0vr.co/cl0vr/memory-buckets/issues
+    about: Issues and pull requests are tracked on git.cl0vr.co, not on the GitHub mirror.

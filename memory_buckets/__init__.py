@@ -4,8 +4,9 @@ Hermes calls ``register(ctx)`` once per ``AIAgent``, so each call hands back a
 fresh provider. Concurrent chats get separate instances that share the store
 through its lock.
 
-It also registers the ``memory-buckets:sort-imports`` skill. That is optional: a
-context without ``register_skill`` still gets the provider.
+It also registers the ``memory-buckets:sort-imports`` and
+``memory-buckets:tidy-memory`` skills. That is optional: a context without
+``register_skill`` still gets the provider.
 """
 
 from ._paths import SKILLS_DIR

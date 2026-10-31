@@ -67,6 +67,35 @@ class FrontmatterTest(unittest.TestCase):
             with self.assertRaises(fmm.FrontmatterError, msg=bad):
                 fmm.parse(bad)
 
+    def test_whole_line_comments_are_kept_and_hidden(self):
+        text = ("---\n# note to self\nname: nix\n# between keys\n\ndescription: x\ntags:\n  - a\n  - b\n"
+                "# after a list\naliases: [nixos]\n# last\n---\nbody\n")
+        fm, body = fmm.parse(text)
+        self.assertEqual(fm.keys(), ["name", "description", "tags", "aliases"])
+        self.assertEqual([k for k, _ in fm.pairs()], fm.keys())
+        self.assertEqual(fm.get("tags"), ["a", "b"])
+        self.assertEqual(fm.get("aliases"), ["nixos"])
+        self.assertEqual(fmm.render(fm, body), text)  # untouched: byte for byte
+        fmm.validate(fm, "nix")
+
+    def test_comments_survive_an_edit(self):
+        fm, body = fmm.parse("---\n# keep me\nname: nix\ndescription: x\n# and me\n---\nbody\n")
+        fm.set("description", "y")
+        fm.set("edited_at", "2026-10-17T00:00:00Z")
+        self.assertEqual(fmm.render(fm, body),
+                         "---\n# keep me\nname: nix\ndescription: y\n# and me\nedited_at: 2026-10-17T00:00:00Z\n---\nbody\n")
+
+    def test_a_comment_does_not_adopt_indented_lines(self):
+        # They'd be a list item cut off from its key, so it stays an error.
+        with self.assertRaises(fmm.FrontmatterError):
+            fmm.parse("---\ntags:\n  - a\n# c\n  - b\n---\n")
+
+    def test_a_comment_only_block_has_no_keys(self):
+        fm, _ = fmm.parse("---\n# nothing else\n---\n")
+        self.assertEqual(fm.keys(), [])
+        with self.assertRaises(fmm.FrontmatterError):
+            fmm.validate(fm, "nix")
+
     def test_validate(self):
         fm, _ = fmm.parse("---\nname: nix\ndescription: x\n---\n")
         fmm.validate(fm, "nix")

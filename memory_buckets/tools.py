@@ -3,10 +3,14 @@
 Every result carries ``ok``. Errors are ``{"ok": false, "error": {"code", "message"}, ...}``:
 
 - ``conflict`` adds ``current: {path, version, content}`` so the agent can merge and retry;
-- ``out_of_scope`` adds ``allowed_prefixes``; the add-only refusal also adds ``add_only_buckets``.
+- ``out_of_scope`` adds ``allowed_prefixes``; the add-only refusal also adds ``add_only_buckets``;
+- ``threat_detected`` adds ``patterns``, the IDs of the Hermes threat patterns the
+  content matched;
+- ``secret_detected`` adds ``patterns``, the credential families (``credentials.py``)
+  the content matched.
 
 The contract codes come from ``store.py``. The tool layer adds ``out_of_scope``,
-``read_only`` and ``invalid_args``.
+``read_only``, ``invalid_args``, ``threat_detected`` and ``secret_detected``.
 
 Write rights: a session writes fully inside ``scope.write_prefixes``.
 Into another known bucket it may only append to existing files
@@ -21,11 +25,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
-from . import frontmatter, inbox
+from . import _compat, credentials, frontmatter, inbox, snapshot
 from .config import Config
 from .index import Index
 from .scopes import Scope
-from .store import NEW, Store, StoreError, check_content, stamp, stem, validate_path
+from .store import MAX_FILE_BYTES, NEW, Store, StoreError, check_content, stamp, stem, validate_path, version
 
 MAX_READ_PATHS = 20
 MAX_SEARCH_LIMIT = 20
@@ -50,10 +54,14 @@ SCHEMAS: List[Dict[str, Any]] = [
         {"prefix": {"type": "string", "description": "Only list paths that start with this, for example 'global/people/'."},
          "include_projects": {"type": "boolean", "description": "Set to true to also list other projects' files."}}, []),
     _fn("memory_read",
-        "Read one or more memory files in full. Each result has the file's content and its version. To edit a "
-        "file later, pass that version as if_version.",
+        "Read one or more memory files. Each result has the file's content and its version; to edit a "
+        "file later, pass that version as if_version. A file over 48 KiB comes back in pages: the result "
+        "sets truncated and gives next_offset, which you pass back as offset to read the rest.",
         {"paths": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": MAX_READ_PATHS,
-                   "description": _EXISTING_PATH_HELP}}, ["paths"]),
+                   "description": _EXISTING_PATH_HELP},
+         "offset": {"type": "integer", "minimum": 0,
+                    "description": "Byte offset into a file that was truncated (use next_offset from the "
+                                   "previous read). Only needed for files over 48 KiB."}}, ["paths"]),
     _fn("memory_search",
         "Search memory by meaning and by keywords. Use it when no file description in the list matches what you "
         "need. Returns matching files, each with its best-matching passage.",
@@ -181,6 +189,15 @@ def handle(name: str, args: Dict[str, Any], ctx: Context) -> Dict[str, Any]:
 
 # -- reads -----------------------------------------------------------------------
 
+def _screened_description(path: str, description: str) -> str:
+    """The description as it may go back to the model: unchanged, or a ``[BLOCKED:
+    ...]`` line (see ``snapshot``). A tool result lands in the conversation like a
+    prompt block does, and the model never asked to read the description, so a
+    poisoned one is screened exactly like a listing line. The snippet in a search
+    result and every ``memory_read`` body stay raw, like the read path always was."""
+    return snapshot._screened(path, description) if description else ""
+
+
 def _list(args, ctx: Context):
     prefix = _str(args, "prefix", required=False, allow_empty=True) or ""
     include_projects = args.get("include_projects") is True
@@ -191,21 +208,56 @@ def _list(args, ctx: Context):
             continue
         if not (prefix or include_projects or ctx.scope.reads_by_default(path)):
             continue
-        files.append({"path": path, "description": description, "version": ver, "bytes": size})
+        files.append({"path": path, "description": _screened_description(path, description),
+                      "version": ver, "bytes": size})
     return {"ok": True, "scope": ctx.scope.describe(), "files": files}
 
 
 def _read(args, ctx: Context):
     paths = _str_list(args, "paths")
     if not paths or len(paths) > MAX_READ_PATHS:
-        raise ArgError(f"'paths' needs 1–{MAX_READ_PATHS} paths")
+        raise ArgError(f"'paths' needs 1-{MAX_READ_PATHS} paths")
+    offset = args.get("offset")
+    if offset is None:
+        offset = 0
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+        raise ArgError("'offset' must be a byte offset of 0 or more")
     files, errors = [], []
     for path in dict.fromkeys(paths):
+        data = None
         try:
-            got = ctx.store.read(path)
-            files.append({"path": path, "version": got["version"], "content": got["content"]})
+            data = ctx.store.read_bytes(path)
         except StoreError as err:
             errors.append({"path": path, "code": err.code, "message": err.message})
+            continue
+        if data is None:
+            errors.append({"path": path, "code": "not_found", "message": f"{path} doesn't exist"})
+            continue
+        window = data[offset:offset + MAX_FILE_BYTES]
+        # Don't cut inside a UTF-8 sequence: back up to its start. The next page
+        # starts at the end of what was returned, so nothing is skipped. The
+        # clamp keeps a hand-made file whose whole window is continuation bytes
+        # from walking the boundary past the start of the file.
+        end = offset + len(window)
+        while end > offset and end < len(data) and (data[end] & 0xC0) == 0x80:
+            end -= 1
+        if end == offset and offset < len(data):
+            # Degenerate: no character boundary anywhere in the window (only a
+            # hand edit or sync can make one). Cut at the cap instead of
+            # pinning the next offset in place; the next page starts
+            # mid-sequence and decodes with replacement characters.
+            end = offset + len(window)
+        window = data[offset:end]
+        entry = {"path": path, "version": version(data), "content": window.decode("utf-8", errors="replace")}
+        if end < len(data):
+            # A file the write path can't create (a hand edit or sync over the cap)
+            # would flood the context whole; page it instead.
+            entry["truncated"] = True
+            entry["total_bytes"] = len(data)
+            entry["next_offset"] = end
+        elif offset > 0:
+            entry["total_bytes"] = len(data)  # the last page says how big the file is
+        files.append(entry)
     out: Dict[str, Any] = {"ok": bool(files) or not errors, "files": files}
     if errors:
         out["errors"] = errors
@@ -217,9 +269,11 @@ def _search(args, ctx: Context):
     prefix = _str(args, "prefix", required=False, allow_empty=True) or ""
     limit = args.get("limit", ctx.config.search_limit)
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= MAX_SEARCH_LIMIT:
-        raise ArgError(f"'limit' must be an integer 1–{MAX_SEARCH_LIMIT}")
+        raise ArgError(f"'limit' must be an integer 1-{MAX_SEARCH_LIMIT}")
     read_ok = (lambda p: p.startswith(prefix)) if prefix else ctx.scope.reads_by_default
     found = ctx.index.search(query, read_ok, project=ctx.scope.project, limit=limit, boost=ctx.config.project_boost)
+    for result in found["results"]:
+        result["description"] = _screened_description(result["path"], result.get("description") or "")
     out: Dict[str, Any] = {"ok": True, "mode": found["mode"], "results": found["results"]}
     if found.get("note"):
         out["note"] = found["note"]
@@ -252,12 +306,53 @@ def _body_text(body: str) -> str:
     return body if body.endswith("\n") or not body else body + "\n"
 
 
+def _checked(path: str, content: str) -> bytes:
+    """``check_content`` plus the credential and threat scans, on the whole rendered file: the memory
+    files inlined into the system prompt are the ones an injection wants to reach, and
+    a session that has just read a hostile page can write to ``global/``. Scanning the
+    result rather than the arguments covers all three edit tools, and the frontmatter
+    description, which is also shown to the model. An edit that leaves an existing
+    match in place is refused too; ``memory_delete`` never scans, so a poisoned file
+    can still be removed."""
+    data = check_content(path, content)
+    # Credentials first: Hermes's own ``hardcoded_secret`` pattern also fires on a quoted
+    # value, and its message below talks about injection, which would tell the agent the
+    # wrong thing. Local and Hermes-free, so it runs wherever the plugin does.
+    families = credentials.scan(content)
+    if families:
+        # Names the families, never quotes the content, for the same reason as below.
+        raise StoreError(
+            "secret_detected",
+            f"{path} was not saved: it looks like it contains a credential ({', '.join(families)}). "
+            "Memory is plain Markdown that gets synced and offered back to the model, so it can't hold "
+            "credentials. Note where the user keeps it instead (for example 'GitHub token: in the "
+            "password manager'), then try again.",
+            patterns=families,
+        )
+    patterns = _compat.scan_threats(content)
+    if patterns:
+        # Names the patterns, never quotes the content: the error goes back into the
+        # conversation, and the text that tripped the scan shouldn't be repeated there.
+        raise StoreError(
+            "threat_detected",
+            f"{path} was not saved: it matches threat pattern(s) {', '.join(patterns)}. Memory is injected "
+            "into the system prompt, so it can't hold injection or exfiltration text. Remove that text and "
+            "try again.",
+            patterns=patterns,
+        )
+    return data
+
+
 def _mutate(ctx: Context, path: str, if_version: Optional[str],
             edit: Callable[[Optional[bytes]], str], *, append: bool = False,
             create: bool = False) -> Dict[str, Any]:
     validate_path(path)
     ctx.scope.check_write(path, append=append, create=create)
-    result = ctx.store.update(path, lambda current: check_content(path, edit(current)), if_version)
+    # An append never destroys content, so it isn't recorded in .history (an
+    # append's frontmatter rewrite still touches sources and edited_at, but the
+    # body only grows); overwrites and str_replace edits are.
+    result = ctx.store.update(path, lambda current: _checked(path, edit(current)), if_version,
+                              record_history=not append)
     if ctx.on_write:
         ctx.on_write(path)
     if ctx.scope.cross_project_write(path):

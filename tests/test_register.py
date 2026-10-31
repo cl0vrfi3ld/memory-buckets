@@ -5,6 +5,9 @@ from pathlib import Path
 from . import PLUGIN_DIR, memory_buckets
 from memory_buckets import _compat, frontmatter, snapshot, tools
 
+# Every directory under skills/. A new skill has to be added here, so it gets the checks below.
+BUNDLED_SKILLS = ["sort-imports", "tidy-memory"]
+
 
 class _Ctx:
     def __init__(self, name=None, register_skill=None, register_command=None):
@@ -49,8 +52,13 @@ class RegisterTest(unittest.TestCase):
             self.assertTrue((provider.store.memories / "global").is_dir(), "store exists as soon as it's active")
             provider.shutdown()
 
-    def test_registers_the_skill_and_no_slash_commands(self):
-        skill_md = PLUGIN_DIR / "skills/sort-imports/SKILL.md"
+    def test_registers_the_skills_and_no_slash_commands(self):
+        for skill in BUNDLED_SKILLS:
+            with self.subTest(skill=skill):
+                self._check_skill_registers(skill)
+
+    def _check_skill_registers(self, skill):
+        skill_md = PLUGIN_DIR / "skills" / skill / "SKILL.md"
         fm, _ = frontmatter.parse(skill_md.read_text(encoding="utf-8"))
         as_dict = getattr(fm, "as_dict", None)
         expected_fm = as_dict() if callable(as_dict) else dict(fm.pairs())
@@ -70,14 +78,15 @@ class RegisterTest(unittest.TestCase):
                     commands.__setitem__(name, handler)
                 )
                 memory_buckets.register(ctx)
-                [(name, path, description, fm_dict)] = ctx.skills
-                self.assertEqual(name, "sort-imports")
+                self.assertEqual(sorted(s[0] for s in ctx.skills), BUNDLED_SKILLS)
+                [(name, path, description, fm_dict)] = [s for s in ctx.skills if s[0] == skill]
+                self.assertEqual(name, skill)
                 self.assertEqual(path, skill_md)
                 self.assertTrue(path.is_file())
                 self.assertEqual(description, expected_desc)
                 self.assertTrue(description)
                 self.assertEqual(fm_dict, expected_fm)
-                self.assertEqual(fm_dict["name"], "sort-imports")
+                self.assertEqual(fm_dict["name"], skill)
                 self.assertEqual(fm_dict["description"], expected_desc)
                 self.assertEqual(snapshot.SORT_SKILL, "memory-buckets:sort-imports")
                 self.assertEqual(ctx.commands, {}, "the skill is the only slash command; the plugin registers none")
@@ -87,10 +96,47 @@ class RegisterTest(unittest.TestCase):
         ctx.skills = []
         ctx.register_skill = lambda name, path: ctx.skills.append((name, path))
         memory_buckets.register(ctx)
-        [(name, path)] = ctx.skills
-        self.assertEqual(name, "sort-imports")
-        self.assertTrue(path.is_file())
+        self.assertEqual([name for name, _ in ctx.skills], BUNDLED_SKILLS)
+        for _, path in ctx.skills:
+            self.assertTrue(path.is_file())
         self.assertEqual(snapshot.SORT_SKILL, "memory-buckets:sort-imports")
+
+    def test_every_skill_directory_is_covered_here(self):
+        on_disk = sorted(d.name for d in (PLUGIN_DIR / "skills").iterdir() if (d / "SKILL.md").is_file())
+        self.assertEqual(on_disk, BUNDLED_SKILLS, "add a new skill to BUNDLED_SKILLS so it is registered and checked")
+
+    def test_skill_text_only_names_real_tools_and_has_no_dashes(self):
+        import re
+        for skill in BUNDLED_SKILLS:
+            with self.subTest(skill=skill):
+                text = (PLUGIN_DIR / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
+                self.assertLessEqual(set(re.findall(r"\bmemory_[a-z_]+", text)), set(tools.TOOL_NAMES))
+                self.assertNotIn("\u2014", text, "house rule: no em dashes")
+                self.assertNotIn("\u2013", text, "house rule: no en dashes")
+
+    def test_tidy_memory_asks_before_changing_anything(self):
+        # The plugin cannot enforce this: the tools do not know what the user said. The skill text is the
+        # only guard, so pin the lines that carry it. Rewording them should be a deliberate act.
+        text = (PLUGIN_DIR / "skills/tidy-memory/SKILL.md").read_text(encoding="utf-8")
+        _, body = frontmatter.parse(text)
+        sections = body.split("\n## ")
+        self.assertTrue(sections[1].startswith("Ask first"), "the rule comes before anything else")
+        rule = sections[1]
+        self.assertIn("You ask before you change anything.", rule)
+        self.assertIn("only after the user has answered your proposal", rule)
+        for writer in ("memory_write", "memory_str_replace", "memory_append", "memory_delete"):
+            self.assertIn(writer, rule, "the rule names every tool that changes a file")
+        steps = next(s for s in sections if s.startswith("Steps"))
+        self.assertIn("Do not call a writing tool in this turn.", steps)
+        self.assertIn("Wait for the user.", steps)
+        self.assertLess(steps.index("**Propose.**"), steps.index("**Apply.**"))
+
+    def test_tidy_memory_keeps_out_of_the_inbox_and_other_projects(self):
+        # memory_list shows global/inbox.md, and the tools let any session add to another project's bucket.
+        text = (PLUGIN_DIR / "skills/tidy-memory/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Never touch global/inbox.md.", text)
+        self.assertIn("Never touch another project's files.", text)
+        self.assertIn("Do not add a line to them.", text)
 
     def test_entry_point_namespace_skips_register_skill(self):
         self.addCleanup(setattr, snapshot, "SORT_SKILL", "memory-buckets:sort-imports")

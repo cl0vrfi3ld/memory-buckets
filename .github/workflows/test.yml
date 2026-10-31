@@ -1,0 +1,79 @@
+name: test
+
+# The test suite on Linux and macOS, the platforms most people use, for every push
+# and pull request. This lives on the GitHub mirror next to windows.yml because
+# git.cl0vr.co has Actions enabled but no runner; branches pushed there are mirrored
+# here, so every push and pull request branch still gets its checks.
+#
+# Lint runs as its own job below: pyproject.toml pins the [tool.ruff.lint] rules,
+# so every push and pull request is gated on `ruff check .`.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: ruff check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0; setup-uv publishes no floating major tag
+
+      # uvx fetches ruff on demand; it is not a project dependency. The rules
+      # checked are the pinned [tool.ruff.lint] selection in pyproject.toml.
+      - run: uvx ruff check .
+
+  test:
+    name: pytest (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # Hermes needs 3.11 to 3.14; the 3.11 floor in pyproject.toml is exercised
+        # by the Windows job, so this stays inside Hermes's range.
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0; setup-uv publishes no floating major tag
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      # The real model enables the real-model tests (mmap of the weights, encode).
+      # static_model.py pins the revision and hashes, so it keys the cache.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ runner.temp }}/mb-model
+          key: model-${{ hashFiles('memory_buckets/static_model.py') }}
+
+      - name: Fetch the embedding model
+        run: |
+          uv run python - <<'PY'
+          import os
+          from pathlib import Path
+          from memory_buckets import static_model as sm
+          d = sm.fetch(Path(os.environ['RUNNER_TEMP']) / 'mb-model')
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'MEMORY_BUCKETS_MODEL_DIR={d}\n')
+              env.write(f'MEMORY_BUCKETS_MODEL_F32={d / "model.safetensors"}\n')
+          PY
+
+      - run: uv run pytest -rs

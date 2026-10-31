@@ -313,6 +313,11 @@ class FactoryTest(unittest.TestCase):
         self.assertIsInstance(self.pick(), embeddings.StaticEmbedder)
         self.assertIsInstance(self.pick(backend="auto"), embeddings.StaticEmbedder)  # the old default
         self.assertIsNone(self.pick(backend="off"))
+        # `hermes config set ... embeddings.backend off` stores a YAML boolean (Hermes coerces
+        # the word before writing, and a hand-edited unquoted `off` parses as one too), which
+        # config.py stringifies to "False": that also means off, not a fallback to the model.
+        self.assertIsNone(self.pick(backend=False))
+        self.assertIsNone(self.pick(backend="False"))
         with self.assertLogs("memory_buckets", "WARNING"):
             self.assertIsInstance(self.pick(backend="http"), embeddings.StaticEmbedder)
 

@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import unittest
 from unittest import mock
 
@@ -282,6 +283,103 @@ class ProviderTest(StoreCase):
         p.on_turn_start(1, "x")
         self.assertEqual(p.prefetch("x", session_id="s1"), "")
 
+    def test_pre_compress_queues_the_nudge(self):
+        # "Done when" for the issue: a call to on_pre_compress makes the NEXT prefetch carry the
+        # reminder, even though the interval has not come round.
+        p = self.make()
+        p.config.nudge_interval = 10
+        p.on_turn_start(1, "hello")
+        self.assertEqual(p.prefetch("hello", session_id="s1"), "", "interval not reached yet")
+        # Hermes fences on_pre_compress's return into the summary prompt as data, not
+        # instructions, so the hook returns nothing and the queued NUDGE does the work.
+        self.assertEqual(p.on_pre_compress([{"role": "user", "content": "I switched to Neovim"}]), "")
+        self.assertIn(prov.NUDGE, p.prefetch("what's new", session_id="s1"))
+        self.assertNotIn(prov.NUDGE, p.prefetch("and now", session_id="s1"), "one reminder per compression")
+
+    def test_pre_compress_nudge_survives_compression_rotating_the_session_id(self):
+        # Hermes says compression may reassign the session id; the queued reminder has to ride over.
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s2", parent_session_id="s1", reset=False, reason="compression")
+        self.assertIn(prov.NUDGE, p.prefetch("hello", session_id="s2"))
+
+    def test_pre_compress_nudge_survives_in_place_compression(self):
+        # Compression keeping the id truncates the transcript: the flag lives on the same state.
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s1", parent_session_id="s1", reset=False, reason="compression")
+        self.assertIn(prov.NUDGE, p.prefetch("hello", session_id="s1"))
+
+    def test_a_reset_drops_a_pending_pre_compress_nudge(self):
+        # A genuinely new conversation starts clean: /new must not inherit a queued reminder.
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s2", parent_session_id="s1", reset=True)
+        self.assertEqual(p.prefetch("hello", session_id="s2"), "")
+
+    def test_a_reset_on_a_retained_id_drops_a_pending_pre_compress_nudge(self):
+        # Same, but compression kept the session id: the reset guard lives in the in-place
+        # branch of on_session_switch, not only in the rotation path.
+        p = self.make()
+        p.on_pre_compress([])
+        p.on_session_switch("s1", parent_session_id="s1", reset=True)
+        self.assertEqual(p.prefetch("hello", session_id="s1"), "")
+
+    def test_a_reset_on_a_retained_id_resets_the_turn_counter(self):
+        # The in-place reset must zero the turn counter, not just the flags: the interval
+        # nudge has to come round nudge_interval turns into the new conversation, not on
+        # the leftover modulo from the old one.
+        p = self.make()
+        p.config.nudge_interval = 3
+        p.on_turn_start(1, "one")
+        p.on_turn_start(2, "two")
+        p.on_session_switch("s1", parent_session_id="s1", reset=True)
+        self.assertEqual(p._state("s1").turns, 0)
+        p.on_turn_start(1, "first turn of new conversation")
+        self.assertEqual(p._state("s1").turns, 1)
+        self.assertFalse(p._state("s1").nudge_due)
+
+    def test_session_rotation_preserves_the_turn_counter_unless_reset(self):
+        # Rotating the session id on compression (reset=False) keeps counting towards
+        # nudge_interval; a reset onto a new id (reset=True) zeroes the counter.
+        p = self.make()
+        p.config.nudge_interval = 3
+        p.on_turn_start(1, "one")
+        p.on_turn_start(2, "two")
+        p.on_session_switch("s2", parent_session_id="s1", reset=False)
+        self.assertEqual(p._state("s2").turns, 2)
+        p.on_turn_start(3, "three")
+        self.assertEqual(p._state("s2").turns, 3)
+        self.assertIn(prov.NUDGE, p.prefetch("three", session_id="s2"))
+
+        p = self.make()
+        p.config.nudge_interval = 3
+        p.on_turn_start(1, "one")
+        p.on_turn_start(2, "two")
+        p.on_session_switch("s2", parent_session_id="s1", reset=True)
+        self.assertEqual(p._state("s2").turns, 0)
+        p.on_turn_start(1, "first turn of new conversation")
+        self.assertEqual(p._state("s2").turns, 1)
+        self.assertFalse(p._state("s2").nudge_due)
+
+    def test_read_only_session_gets_no_pre_compress_nudge(self):
+        # The other "Done when" half: read-only sessions see nothing from the hook.
+        p = self.make(agent_context="cron")
+        self.assertEqual(p.on_pre_compress([]), "")
+        self.assertEqual(p.prefetch("x", session_id="s1"), "")
+        self.assertFalse(p._state("s1").nudge_due)
+
+    def test_pre_compress_off_when_reminders_are_off(self):
+        # nudge_interval 0 already disables the reminder; pre-compression opts out with it.
+        p = self.make()
+        p.config.nudge_interval = 0
+        self.assertEqual(p.on_pre_compress([]), "")
+        self.assertEqual(p.prefetch("x", session_id="s1"), "")
+
+    def test_pre_compress_before_initialize_returns_empty(self):
+        # An uninitialized provider (loaded but never started) must answer, not crash.
+        self.assertEqual(prov.MemoryBucketsProvider().on_pre_compress([]), "")
+
     def test_prefetch_is_empty_without_embeddings(self):
         p = self.make()
         with self.assertNoLogs("memory_buckets", "WARNING"):
@@ -466,6 +564,81 @@ class ProviderTest(StoreCase):
         p.shutdown()
         self.assertFalse(p._embed_thread.is_alive())
 
+    def test_shutdown_waits_for_an_inflight_queue_prefetch(self):
+        # Hermes drains its executor only up to a timeout, so queue_prefetch can still be
+        # inside SQLite when shutdown runs; closing the index then can crash the interpreter.
+        p = self.make(embedder=FakeEmbedder())
+        entered, release = threading.Event(), threading.Event()
+
+        def slow_backlog(max_batches=1):
+            entered.set()
+            release.wait(10)
+            return 0
+
+        with mock.patch.object(p.index, "embed_backlog", slow_backlog), \
+                mock.patch.object(p.index, "close", wraps=p.index.close) as close:
+            prefetch = threading.Thread(target=p.queue_prefetch, args=("x",), kwargs={"session_id": "s1"})
+            prefetch.start()
+            self.assertTrue(entered.wait(10))
+            stopper = threading.Thread(target=p.shutdown)
+            stopper.start()
+            stopper.join(0.3)
+            self.assertTrue(stopper.is_alive(), "shutdown returned while queue_prefetch was running")
+            close.assert_not_called()
+            release.set()
+            prefetch.join(10)
+            stopper.join(10)
+            self.assertFalse(stopper.is_alive())
+            close.assert_called_once()
+
+    def test_shutdown_leaves_the_index_open_if_a_prefetch_outlasts_it(self):
+        p = self.make(embedder=FakeEmbedder())
+        stuck = mock.Mock()
+        stuck.wait.return_value = False  # what Event.wait returns on timeout
+        p._prefetch_idle = stuck
+        with mock.patch.object(p.index, "close") as close, self.assertLogs("memory_buckets", "WARNING") as logs:
+            p.shutdown()
+        close.assert_not_called()
+        self.assertTrue(any("prefetch still running at shutdown" in line for line in logs.output), logs.output)
+
+    def test_queue_prefetch_after_shutdown_does_nothing(self):
+        p = self.make(embedder=FakeEmbedder())
+        p.shutdown()
+        with mock.patch.object(p.index, "reconcile") as reconcile, \
+                mock.patch.object(p.index, "embed_backlog") as embed_backlog:
+            p.queue_prefetch("x", session_id="s1")
+        reconcile.assert_not_called()
+        embed_backlog.assert_not_called()
+        self.assertTrue(p._prefetch_idle.is_set())
+
+    def test_queue_prefetch_counts_even_when_it_fails(self):
+        p = self.make(embedder=FakeEmbedder())
+        with mock.patch.object(p.index, "reconcile", side_effect=RuntimeError("boom")), \
+                self.assertLogs("memory_buckets", "WARNING"):
+            p.queue_prefetch("x", session_id="s1")
+        self.assertTrue(p._prefetch_idle.is_set())
+
+    def test_shutdown_prefetch_wait_spends_the_shared_deadline_not_a_fresh_ten(self):
+        # Pins the `fresh_deadline` mutation from Kai's review of PR #37: the prefetch
+        # wait must spend what is left of the embedding worker's 10 seconds, not a fresh
+        # 10 of its own, or a worker join that ran down most of the budget would hand a
+        # prefetch nearly twice the cap. A fake clock burns 6 of the 10 before the wait.
+        p = self.make()
+        reads = {"n": 0}
+        waited = []
+
+        def fake_monotonic():
+            reads["n"] += 1
+            return 1000.0 if reads["n"] == 1 else 1006.0
+
+        p._prefetch_idle = mock.Mock()
+        p._prefetch_idle.wait.side_effect = lambda timeout=None: waited.append(timeout) or True
+        with mock.patch.object(prov.time, "monotonic", fake_monotonic), \
+                mock.patch.object(p.index, "close") as close:
+            p.shutdown()
+        self.assertEqual(waited, [4.0])
+        close.assert_called_once()
+
     def test_on_memory_write_mirrors_into_inbox(self):
         p = self.make()
         p.on_memory_write("add", "user", "Prefers tea")
@@ -490,7 +663,9 @@ class ProviderTest(StoreCase):
 
     def test_nothing_to_set_up_and_uninitialised(self):
         p = prov.MemoryBucketsProvider()
-        self.assertEqual(p.get_config_schema(), [])
+        # The setup schema is static (it describes config.py, not the store), so an
+        # uninitialised provider reports it; the full shape is tests/test_setup.py's.
+        self.assertEqual(len(p.get_config_schema()), 14)
         self.assertEqual(p.system_prompt_block(), "")
         self.assertEqual(json.loads(p.handle_tool_call("memory_list", {}))["ok"], False)
 
@@ -508,9 +683,16 @@ class ProviderTest(StoreCase):
 
     def test_trace_logs_hooks(self):
         p = self.make()
-        with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": "1"}), self.assertLogs("memory_buckets", "INFO") as logs:
-            p.on_turn_start(1, "hi")
-        self.assertIn("hook on_turn_start", logs.output[0])
+        for spelling in ("1", "true", "TRUE"):
+            with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": spelling}), self.assertLogs("memory_buckets", "INFO") as logs:
+                p.on_turn_start(1, "hi")
+            self.assertIn("hook on_turn_start", logs.output[0])
+
+    def test_trace_ignores_falsey_spellings(self):
+        p = self.make()
+        for spelling in ("0", "false", "off", ""):
+            with mock.patch.dict(os.environ, {"MEMORY_BUCKETS_TRACE": spelling}), self.assertNoLogs("memory_buckets", "INFO"):
+                p.on_turn_start(1, "hi")
 
 
 if __name__ == "__main__":
