@@ -56,6 +56,15 @@ def forget_loaded_models():
     gc.collect()
 
 
+def rss_kb():
+    """Current VmRSS in KB from /proc/self/status; raises OSError where there is no /proc."""
+    with open("/proc/self/status", encoding="ascii") as status:
+        for line in status:
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    raise OSError("no VmRSS line")
+
+
 class TokenizerTest(unittest.TestCase):
     def setUp(self):
         self.wp = sm.WordPiece({t: i for i, t in enumerate(VOCAB)})
@@ -108,7 +117,7 @@ class StaticModelTest(unittest.TestCase):
         for tok in ("climb", "##ing", "tea", "sam"):
             tid = model.vocab[tok]
             self.assertIn(tid, model._row_cache)
-            self.assertIsInstance(model._row_cache[tid], tuple)
+            self.assertIsInstance(model._row_cache[tid], sm.array)  # issue #32: rows are arrays now, not tuples
             self.assertEqual(len(model._row_cache[tid]), model.dims)
         self.assertEqual(list(model.encode("tea tea tea")), list(model.encode("tea")))
         # Manual un-deduplicated sum for "climbing tea climbing sam" (6 token occurrences).
@@ -124,6 +133,30 @@ class StaticModelTest(unittest.TestCase):
             self.assertAlmostEqual(got, want, delta=1e-6)
         self.assertAlmostEqual(embeddings.dot(vec, expected), 1.0, places=5)
         self.assertEqual(embeddings.dot(vec, sm.array("f", [1.0])), 0.0)
+
+    def test_row_cache_clears_at_the_cap_and_rows_stay_arrays(self):
+        # Issue #32: the row cache must not grow without bound. On main this fails twice:
+        # the cache holds all 4,295 rows (> the cap), and the rows are tuples, not arrays.
+        n = sm.ROW_CACHE_MAX_ROWS + 204
+        vocab = list(sm.SPECIAL_TOKENS) + [f"tk{i}" for i in range(n - len(sm.SPECIAL_TOKENS))]
+        d = self.root / "wide"
+        d.mkdir()
+        (d / "vocab.txt").write_text("\n".join(vocab) + "\n", encoding="utf-8")
+        dims = 4
+        values = [float((i + j) % 7) for i in range(len(vocab)) for j in range(dims)]
+        data = struct.pack(f"<{len(values)}f", *values)
+        header = json.dumps({"embeddings": {"dtype": "F32", "shape": [len(vocab), dims],
+                                            "data_offsets": [0, len(data)]}}).encode()
+        (d / "model.safetensors").write_bytes(struct.pack("<Q", len(header)) + header + data)
+        model = sm.StaticModel(d)
+        words = vocab[len(sm.SPECIAL_TOKENS):]
+        # 300 words per call stay under both the 512-token cap and the pre-truncation
+        # (median token length here is 6 chars, so 300 x 7 fits comfortably), so every
+        # word's row reaches the cache.
+        for k in range(0, len(words), 300):
+            model.encode(" ".join(words[k:k + 300]))
+        self.assertLessEqual(len(model._row_cache), sm.ROW_CACHE_MAX_ROWS)
+        self.assertTrue(all(isinstance(row, sm.array) for row in model._row_cache.values()))
 
     def test_query_windowing_preserves_tail_tokens_for_long_prompts(self):
         model_dir = write_model(self.root / "m")
@@ -326,6 +359,25 @@ class RealModelTest(unittest.TestCase):
             q = self.model.encode(query)
             hits += max(docs, key=lambda k: cos(q, docs[k])) == want
         self.assertGreaterEqual(hits, 10, "measured 11/12 when the model was adopted")
+
+    def test_rss_stays_bounded_while_encoding_many_distinct_tokens(self):
+        # Issue #32's acceptance probe as an assertion: encoding a corpus of 20,000
+        # distinct tokens through the real model must not park hundreds of MB. On main
+        # the delta was 455,984 KB (tuple rows, unbounded). With array rows capped at
+        # ROW_CACHE_MAX_ROWS the delta is dominated by the model's own mmap pages,
+        # which stay resident; 200 MB of slack separates the two states. Skips where
+        # there is no /proc (Windows legs included).
+        try:
+            before = rss_kb()
+        except OSError:
+            self.skipTest("no /proc/self/status")
+            return
+        words = [t for t in self.model.vocab if t.isascii() and t.isalpha() and not t.startswith("##")]
+        words = words[:20_000]
+        for k in range(0, len(words), 300):
+            self.model.encode(" ".join(words[k:k + 300]))
+        delta = rss_kb() - before
+        self.assertLess(delta, 200_000, f"{delta} KB parked for {len(words)} distinct tokens")
 
     @unittest.skipUnless(os.environ.get("MEMORY_BUCKETS_MODEL_F32"), "set MEMORY_BUCKETS_MODEL_F32 to the upstream file")
     def test_bundled_precision(self):

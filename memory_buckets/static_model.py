@@ -63,6 +63,13 @@ QUERY_HEAD_TOKENS = 352
 QUERY_TAIL_TOKENS = MAX_TOKENS - QUERY_HEAD_TOKENS
 UNK = "[UNK]"
 MAX_WORD_CHARS = 100
+# Cap for the per-token row cache in StaticModel.encode (issue #32: unbounded tuple
+# rows cost ~16 KB each and parked hundreds of MB in the gateway). A row is dims
+# float32s: about 2 KB as an array("f"), so 4096 rows keep the cache near 8 MB.
+# Clearing wholesale on overflow is deliberate: the working set of one turn is far
+# smaller than the cap, and a re-read is an mmap memcpy the cache already pays for,
+# so the bookkeeping of a real LRU is not worth it here.
+ROW_CACHE_MAX_ROWS = 4096
 
 
 class ModelUnavailable(Exception):
@@ -236,7 +243,7 @@ class StaticModel:
                 data = memoryview(swapped.tobytes())
             self.weights = data.cast(fmt)
         self.rows = rows
-        self._row_cache: Dict[int, Tuple[float, ...]] = {}
+        self._row_cache: Dict[int, array] = {}  # array rows: ~2 KB, not ~16 KB tuples (issue #32)
         if len(self.weights) != rows * self.dims or rows != len(vocab_lines):
             raise ModelUnavailable(f"model shape {rows}x{self.dims} doesn't match vocab of {len(vocab_lines)}")
 
@@ -261,7 +268,13 @@ class StaticModel:
         for i, count in Counter(ids).items():
             row = row_cache.get(i)
             if row is None:
-                row = tuple(w[i * dims:(i + 1) * dims])
+                # array("f") costs 512 x 4 B against the ~16 KB of a tuple of boxed
+                # floats; encode() only iterates and multiplies rows, which an array
+                # does unchanged. _HalfRows' slice yields plain floats, so this wraps
+                # the float16 leg too.
+                row = array("f", w[i * dims:(i + 1) * dims])
+                if len(row_cache) >= ROW_CACHE_MAX_ROWS:
+                    row_cache.clear()  # see ROW_CACHE_MAX_ROWS
                 row_cache[i] = row
             rows.append([x * count for x in row] if count > 1 else row)
         acc = list(map(sum, zip(*rows)))
