@@ -437,6 +437,7 @@ class CliTest(StoreCase):
         self.assertNotIn("originals kept", out)
 
     def test_skill_guidance_depends_on_plugin_dir_or_external_dirs(self):
+        import importlib.metadata
         import sys
         import tempfile
         import types
@@ -450,30 +451,41 @@ class CliTest(StoreCase):
             (skills_dir / "tidy-memory").mkdir(parents=True)
             (skills_dir / "tidy-memory/SKILL.md").write_text("---\nname: tidy-memory\n---\n# Tidy\n", encoding="utf-8")
 
-            sc_mod = types.SimpleNamespace(scan_skill_commands=lambda: {})
-            su_mod = types.SimpleNamespace(
-                get_external_skills_dirs=lambda: [],
-                get_skills_dir=lambda: Path(tmp) / "local-skills",
+            external_dirs = []
+            st_mod = types.SimpleNamespace(
+                find_all_skills=lambda **_k: [],
+                locate_skill=lambda *_a: ("not found", None, None),
+                skill_search_dirs=lambda: ([], Path(tmp) / "local-skills"),
             )
-            pm_mod = types.SimpleNamespace(
-                find_provider_dir=lambda _name: Path(tmp) / "site-packages" / "memory_buckets",
-                find_provider_entry_point=lambda _name: types.SimpleNamespace(value="memory_buckets:register"),
-                load_memory_provider=lambda *a, **k: None,
+            hconst_mod = types.SimpleNamespace(
+                get_hermes_home=lambda: self.home,
+                get_skills_dir=lambda: Path(tmp) / "local-skills",
             )
             hc_mod = types.SimpleNamespace(
                 load_config_readonly=lambda: {},
-                cfg_get=lambda _cfg, *keys: "memory-buckets" if keys == ("memory", "provider") else None,
+                cfg_get=lambda _cfg, *keys: (
+                    "memory-buckets" if keys == ("memory", "provider")
+                    else list(external_dirs) if keys == ("skills", "external_dirs")
+                    else None
+                ),
             )
             mm_mod = types.SimpleNamespace(memory_provider_tools_enabled=lambda *a, **k: True)
+            fake_ep = types.SimpleNamespace(
+                name="memory-buckets",
+                value="memory_buckets:register",
+                load=lambda: (_ for _ in ()).throw(RuntimeError("boom")),
+            )
 
             fakes = {
                 "agent.memory_manager": mm_mod,
-                "agent.skill_commands": sc_mod,
-                "agent.skill_utils": su_mod,
                 "hermes_cli.config": hc_mod,
-                "plugins.memory": pm_mod,
+                "hermes_constants": hconst_mod,
+                "tools.skills_tool": st_mod,
             }
-            with mock.patch.dict(sys.modules, fakes), mock.patch.object(cli, "SKILLS_DIR", skills_dir):
+            with mock.patch.dict(sys.modules, fakes), \
+                    mock.patch.object(cli, "SKILLS_DIR", skills_dir), \
+                    mock.patch.object(importlib.metadata, "entry_points",
+                                      return_value=types.SimpleNamespace(select=lambda **_k: [fake_ep])):
                 self.assertFalse(cli._is_plugin_dir_install())
 
                 diag_out = io.StringIO()
@@ -483,16 +495,21 @@ class CliTest(StoreCase):
                 self.assertIn("external_dirs", diag_out.getvalue())
                 self.assertNotIn("Asking the agent to sort your imported memory still works", diag_out.getvalue())
 
-                _, full_diag_out = self.run_cli("diagnose")
+                with self.assertLogs("memory_buckets", "WARNING") as logs:
+                    _, full_diag_out = self.run_cli("diagnose")
                 self.assertIn("found by entry point memory_buckets:register", full_diag_out)
+                self.assertIn("FAIL  failed to load (see Hermes's log for the traceback)", full_diag_out)
                 self.assertNotIn("found at ", full_diag_out)
+                self.assertTrue(any("RuntimeError: boom" in msg for msg in logs.output), logs.output)
 
                 _, prompt_out = self.run_cli("import-prompt")
                 self.assertIn("hermes memory-buckets import-prompt", prompt_out)
                 self.assertIn("external_dirs", prompt_out)
                 self.assertNotIn("(it uses memory-buckets's sort-imports skill)", prompt_out)
 
-                pm_mod.find_provider_dir = lambda _name: Path(tmp) / "plugins" / "memory-buckets"
+                plugin_dir = self.home / "plugins" / "memory-buckets"
+                plugin_dir.mkdir(parents=True)
+                (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
                 self.assertTrue(cli._is_plugin_dir_install())
                 diag_out = io.StringIO()
                 with contextlib.redirect_stdout(diag_out):
@@ -502,12 +519,11 @@ class CliTest(StoreCase):
                 _, prompt_out = self.run_cli("import-prompt")
                 self.assertIn("(it uses memory-buckets's sort-imports skill)", prompt_out)
 
-                pm_mod.find_provider_dir = lambda _name: Path(tmp) / "site-packages" / "memory_buckets"
-                su_mod.get_external_skills_dirs = lambda: [skills_dir]
-                sc_mod.scan_skill_commands = lambda: {
-                    "/sort-imports": {"skill_md_path": str(skills_dir / "sort-imports/SKILL.md")},
-                    "/tidy-memory": {"skill_md_path": str(skills_dir / "tidy-memory/SKILL.md")},
-                }
+                (plugin_dir / "__init__.py").unlink()
+                plugin_dir.rmdir()
+                external_dirs.append(str(skills_dir))
+                st_mod.find_all_skills = lambda **_k: [{"name": "sort-imports"}, {"name": "tidy-memory"}]
+                st_mod.locate_skill = lambda name, *_a: (None, skills_dir / name, skills_dir / name / "SKILL.md")
                 say_lines = []
                 diag_out = io.StringIO()
                 with contextlib.redirect_stdout(diag_out):
@@ -517,6 +533,150 @@ class CliTest(StoreCase):
                 self.assertIn("A running chat or gateway keeps its old skill list", diag_out.getvalue())
                 _, prompt_out = self.run_cli("import-prompt")
                 self.assertIn("(it uses memory-buckets's sort-imports skill)", prompt_out)
+
+    def test_external_skills_dirs_normalises_strings_relative_paths_and_missing_dirs(self):
+        import sys
+        import types
+
+        rel_dir = self.home / "rel-skills"
+        rel_dir.mkdir()
+        local_dir = self.home / "skills"
+        local_dir.mkdir()
+        raw_value = None
+
+        hconst_mod = types.SimpleNamespace(
+            get_hermes_home=lambda: self.home,
+            get_skills_dir=lambda: local_dir,
+        )
+        hc_mod = types.SimpleNamespace(
+            load_config_readonly=lambda: {},
+            cfg_get=lambda _cfg, *keys: raw_value if keys == ("skills", "external_dirs") else None,
+        )
+        fakes = {"hermes_cli.config": hc_mod, "hermes_constants": hconst_mod}
+        with mock.patch.dict(sys.modules, fakes):
+            raw_value = "rel-skills"
+            self.assertEqual(cli._external_skills_dirs(), [rel_dir.resolve()])
+
+            raw_value = ["rel-skills", "rel-skills", str(local_dir), "missing-dir", ""]
+            self.assertEqual(cli._external_skills_dirs(), [rel_dir.resolve()])
+
+    def test_status_and_diagnose_use_public_hermes_surfaces(self):
+        import sys
+        import tempfile
+        import types
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skills_dir = Path(tmp) / "skills"
+            skill_md = skills_dir / "sort-imports" / "SKILL.md"
+            skill_md.parent.mkdir(parents=True)
+            skill_md.write_text("---\nname: sort-imports\n---\n# Sort\n", encoding="utf-8")
+            tidy_md = skills_dir / "tidy-memory" / "SKILL.md"
+            tidy_md.parent.mkdir(parents=True)
+            tidy_md.write_text("---\nname: tidy-memory\n---\n# Tidy\n", encoding="utf-8")
+            local_dir = Path(tmp) / "local-skills"
+            local_dir.mkdir()
+            plugin_dir = self.home / "plugins" / "memory-buckets"
+            plugin_dir.mkdir(parents=True)
+            (plugin_dir / "__init__.py").write_text("", encoding="utf-8")
+
+            cfg = {
+                "memory": {"provider": "memory-buckets", "memory_enabled": "false", "user_profile_enabled": False},
+                "skills": {"external_dirs": [str(skills_dir)]},
+                "platform_toolsets": {"cli": ["hermes"], "telegram": '["terminal", "file"]'},
+                "agent": {"disabled_toolsets": "['browser']"},
+            }
+
+            def cfg_get(d, *keys):
+                cur = d
+                for k in keys:
+                    if not isinstance(cur, dict):
+                        return None
+                    cur = cur.get(k)
+                return cur
+
+            registered_tools = ["read_file", "terminal"]
+            reg_mod = types.SimpleNamespace(
+                discover_builtin_tools=lambda: registered_tools,
+                registry=types.SimpleNamespace(get_all_tool_names=lambda: list(registered_tools)),
+            )
+            located_md = {"sort-imports": skill_md, "tidy-memory": tidy_md}
+            loadable_names = [{"name": "sort-imports"}, {"name": "tidy-memory"}]
+            st_mod = types.SimpleNamespace(
+                find_all_skills=lambda **_k: list(loadable_names),
+                locate_skill=lambda name, *_a: (None, located_md[name].parent, located_md[name]),
+                skill_search_dirs=lambda: ([(3, skills_dir)], local_dir),
+            )
+            hconst_mod = types.SimpleNamespace(
+                get_hermes_home=lambda: self.home,
+                get_skills_dir=lambda: local_dir,
+            )
+            hc_mod = types.SimpleNamespace(
+                load_config_readonly=lambda: cfg,
+                cfg_get=cfg_get,
+            )
+            seen_toolsets = []
+
+            def memory_provider_tools_enabled(enabled, disabled=None, *, memory_tool_present=False):
+                seen_toolsets.append((list(enabled), disabled, memory_tool_present))
+                if disabled and "memory" in disabled:
+                    return False
+                return any(t in ("memory", "hermes-cli", "hermes-api-server", "hermes-whatsapp", "hermes-my_platform")
+                           for t in enabled)
+
+            mm_mod = types.SimpleNamespace(memory_provider_tools_enabled=memory_provider_tools_enabled)
+            fakes = {
+                "agent.memory_manager": mm_mod,
+                "hermes_cli.config": hc_mod,
+                "hermes_constants": hconst_mod,
+                "tools.registry": reg_mod,
+                "tools.skills_tool": st_mod,
+            }
+            with mock.patch.dict(sys.modules, fakes), mock.patch.object(cli, "SKILLS_DIR", skills_dir):
+                code, status_out = self.run_cli("status")
+                self.assertEqual(code, 0, status_out)
+                self.assertIn("built-in    memory off", status_out)
+                self.assertIn("no clashes with core tools", status_out)
+
+                code, diag_out = self.run_cli("diagnose")
+                self.assertEqual(code, 1, diag_out)  # telegram has no memory toolset
+                self.assertIn("found at " + str(plugin_dir), diag_out)
+                self.assertIn("ok    cli: memory tools and prompt block exposed", diag_out)
+                self.assertIn("FAIL  telegram: memory tools and prompt block WITHHELD", diag_out)
+                self.assertIn((["hermes-cli", "hermes-api-server"], ["browser"], False), seen_toolsets)
+
+                seen_toolsets.clear()
+                code, ws_out = self.run_cli("diagnose", "--platform", "whatsapp_cloud", "--platform", "my_platform")
+                self.assertEqual(code, 0, ws_out)
+                self.assertIn("ok    whatsapp_cloud: memory tools and prompt block exposed", ws_out)
+                self.assertIn("ok    my_platform: memory tools and prompt block exposed", ws_out)
+                self.assertIn((["hermes-whatsapp"], ["browser"], False), seen_toolsets)
+                self.assertIn((["hermes-my_platform"], ["browser"], False), seen_toolsets)
+
+                cfg["plugins"] = {"disabled": ["memory-buckets"]}
+                with self.assertLogs("memory_buckets", "WARNING") as parked_logs:
+                    code, parked_out = self.run_cli("diagnose", "--platform", "cli")
+                self.assertEqual(code, 1, parked_out)
+                self.assertIn("FAIL  not loaded: parked in plugins.disabled", parked_out)
+                self.assertTrue(any("parked in plugins.disabled" in m for m in parked_logs.output), parked_logs.output)
+
+                registered_tools.append("memory_read")
+                code, clash_status = self.run_cli("status")
+                self.assertEqual(code, 1, clash_status)
+                self.assertIn("CLASH with Hermes core tools (ours are ignored): memory_read", clash_status)
+
+                reg_mod.discover_builtin_tools = lambda: (_ for _ in ()).throw(OSError("cache read failed"))
+                self.assertIsNone(cli._core_tool_clashes())
+
+                other_md = local_dir / "sort-imports" / "SKILL.md"
+                other_md.parent.mkdir()
+                other_md.write_text("---\nname: sort-imports\n---\nglobal/inbox.md\n", encoding="utf-8")
+                located_md["sort-imports"] = other_md
+                findings = []
+                with contextlib.redirect_stdout(io.StringIO()):
+                    cli._diagnose_skill(skills_dir, lambda ok, msg: findings.append((ok, msg)))
+                self.assertIn((False, f"/sort-imports is claimed by another skill: {other_md}"), findings)
+                self.assertTrue(any(not ok and "copy of a sort prompt" in msg for ok, msg in findings), findings)
 
     def test_reindex_and_search(self):
         self.put("global/topics/nix.md", doc("nix", "Nix", "- flakes pin inputs\n"))
