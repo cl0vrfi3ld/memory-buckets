@@ -5,7 +5,9 @@ the accompanying `threat_patterns.json` file. Each pattern has a pattern string 
 pattern_id, and scope. Scope is cumulative: "all" everywhere, "context" adds promptware /
 C2 / role hijack for context files, memory and tool results (warn-level: that content is
 not user-authored), "strict" adds aggressive checks only for user-mediated writes (memory,
-skill installs) where a block is resolvable.
+skill installs) where a block is resolvable. New patterns must anchor on C2 vocabulary
+or unambiguous attack behaviour, not bossy English ("you must" is common in legitimate
+documentation).
 """
 
 from __future__ import annotations
@@ -20,7 +22,6 @@ from typing import Optional
 MAX_SCAN_CHARS = 65_536
 
 THREAT_PATTERNS_FILE = Path(__file__).resolve().parent / "threat_patterns.json"
-_PATTERNS_FILE = THREAT_PATTERNS_FILE
 
 
 def load_threat_patterns(path: Path | str | None = None) -> list[tuple[str, str, str]]:
@@ -31,28 +32,32 @@ def load_threat_patterns(path: Path | str | None = None) -> list[tuple[str, str,
     patterns: list[tuple[str, str, str]] = []
     if isinstance(data, dict):
         for pid, val in data.items():
+            pattern = None
+            scope = None
             if isinstance(val, dict):
                 pattern = val.get("pattern") or val.get("regex")
                 scope = val.get("scope")
-            elif isinstance(val, (list, tuple)):
+            elif isinstance(val, (list, tuple)) and len(val) >= 2:
                 pattern, scope = val[0], val[1]
-            else:
-                continue
-            if pattern and pid and scope:
-                patterns.append((pattern, pid, scope))
+            if not pattern or not pid or not scope:
+                raise ValueError(f"threat_patterns: invalid pattern entry {pid!r}: {val!r}")
+            patterns.append((pattern, pid, scope))
     elif isinstance(data, list):
         for item in data:
-            if isinstance(item, (list, tuple)):
+            pattern = None
+            pid = None
+            scope = None
+            if isinstance(item, (list, tuple)) and len(item) >= 3:
                 pattern, pid, scope = item[0], item[1], item[2]
             elif isinstance(item, dict):
                 pid = item.get("pattern_id") or item.get("id") or item.get("name")
                 pattern = item.get("pattern") or item.get("regex")
                 scope = item.get("scope")
-            else:
-                continue
             if not pattern or not pid or not scope:
                 raise ValueError(f"threat_patterns: invalid pattern entry {item!r}")
             patterns.append((pattern, pid, scope))
+    else:
+        raise ValueError(f"threat_patterns: expected dict or list, got {type(data).__name__}")
     return patterns
 
 

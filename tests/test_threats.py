@@ -562,6 +562,50 @@ class ThreatPatternsTest(unittest.TestCase):
             self.assertTrue(pattern)
             self.assertTrue(pid)
 
+    def test_load_threat_patterns_validation(self):
+        from memory_buckets import threat_patterns
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "patterns.json"
+
+            # Valid dict format
+            p.write_text(
+                json.dumps({"p1": {"pattern": "abc", "scope": "all"}, "p2": ["def", "context"]}),
+                encoding="utf-8",
+            )
+            loaded = threat_patterns.load_threat_patterns(p)
+            self.assertEqual(loaded, [("abc", "p1", "all"), ("def", "p2", "context")])
+
+            # Malformed dict entries raise ValueError
+            p.write_text(json.dumps({"p1": {"pattern": "abc"}}), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                threat_patterns.load_threat_patterns(p)
+
+            p.write_text(json.dumps({"p1": ["abc"]}), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                threat_patterns.load_threat_patterns(p)
+
+            p.write_text(json.dumps({"p1": "bad"}), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                threat_patterns.load_threat_patterns(p)
+
+            # Malformed list entries raise ValueError
+            p.write_text(json.dumps([{"pattern": "abc", "scope": "all"}]), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                threat_patterns.load_threat_patterns(p)
+
+            p.write_text(json.dumps([["abc", "p1"]]), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                threat_patterns.load_threat_patterns(p)
+
+            p.write_text(json.dumps(["not_a_valid_entry"]), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                threat_patterns.load_threat_patterns(p)
+
+            # Invalid root type raises ValueError
+            p.write_text(json.dumps("invalid"), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                threat_patterns.load_threat_patterns(p)
+
     def test_scopes_and_validation(self):
         from memory_buckets import threat_patterns
         with self.assertRaises(ValueError):
