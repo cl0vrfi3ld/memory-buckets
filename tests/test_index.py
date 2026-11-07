@@ -1,7 +1,9 @@
 import json
 import os
+from pathlib import Path
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -522,6 +524,64 @@ class HintsProjectAndRescueTest(StoreCase):
                                   min_similarity=0.1, project="proj-1", boost=1.3)
         self.assertEqual([h[0] for h in hints][:2],
                          ["proj-1/topics/shared.md", "global/topics/shared.md"])
+
+
+class StopwordsTest(unittest.TestCase):
+    """Unit tests for stopwords loading and validation."""
+
+    def test_stopwords_json_file_and_loader(self):
+        from memory_buckets import index
+        self.assertTrue(index.STOPWORDS_FILE.is_file(), f"missing {index.STOPWORDS_FILE}")
+        stopwords = index.load_stopwords()
+        self.assertIsInstance(stopwords, frozenset)
+        # Verify English, German, and French words are loaded
+        self.assertIn("about", stopwords)
+        self.assertIn("wie", stopwords)
+        self.assertIn("die", stopwords)
+        self.assertIn("und", stopwords)
+        self.assertIn("les", stopwords)
+        self.assertIn("pour", stopwords)
+        # _STOPWORDS module constant matches load_stopwords()
+        self.assertEqual(stopwords, index._STOPWORDS)
+
+    def test_load_stopwords_validation(self):
+        from memory_buckets import index
+        with tempfile.TemporaryDirectory() as tmpdir:
+            p = Path(tmpdir) / "stopwords.json"
+
+            # Valid dict format
+            p.write_text(json.dumps({"en": ["foo", "bar"], "de": ["baz"]}), encoding="utf-8")
+            self.assertEqual(index.load_stopwords(p), frozenset({"foo", "bar", "baz"}))
+
+            # Valid list format
+            p.write_text(json.dumps(["alpha", "beta"]), encoding="utf-8")
+            self.assertEqual(index.load_stopwords(p), frozenset({"alpha", "beta"}))
+
+            # Invalid root types raise ValueError
+            for invalid_root in [123, "invalid", None, True]:
+                p.write_text(json.dumps(invalid_root), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    index.load_stopwords(p)
+
+            # Invalid dict keys or values raise ValueError
+            p.write_text(json.dumps({"en": "not_a_list"}), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                index.load_stopwords(p)
+
+            p.write_text(json.dumps({"en": [123]}), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                index.load_stopwords(p)
+
+            p.write_text(json.dumps(["valid", 456]), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                index.load_stopwords(p)
+
+    def test_nix_package_includes_stopwords_json(self):
+        repo = Path(__file__).resolve().parent.parent
+        nix_package = repo / "nix" / "package.nix"
+        self.assertTrue(nix_package.is_file(), f"missing {nix_package}")
+        content = nix_package.read_text(encoding="utf-8")
+        self.assertIn("../memory_buckets/stopwords.json", content)
 
 
 if __name__ == "__main__":
