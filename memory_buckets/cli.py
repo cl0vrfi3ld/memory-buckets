@@ -182,10 +182,10 @@ INLINE_TAILS = ("profile.md", "preferences.md")  # snapshot.build inlines these 
 
 
 def _blocked_reason(text: str) -> Optional[str]:
-    """Why Hermes's threat scanner keeps ``text`` out of the prompt, None when it passes.
+    """Why the threat scanner keeps ``text`` out of the prompt, None when it passes.
     The two rejections of ``snapshot._screened``, as one question lint and status can ask
-    without the warning that belongs to prompt time. Outside Hermes there is no scanner
-    (scan_threats returns [] and scan_window_chars is None), so nothing is reported off."""
+    without the warning that belongs to prompt time. When the scanner is unavailable
+    or disabled (scan_threats returns [] and scan_window_chars is None), nothing is reported off."""
     window = _compat.scan_window_chars
     if window is not None and len(text) > window:
         return f"over the {window}-character threat-scan window"
@@ -196,7 +196,7 @@ def _blocked_reason(text: str) -> Optional[str]:
 
 
 def _scanner_blocking(store: Store) -> List[Tuple[str, str]]:
-    """``(path, reason)`` for what Hermes's threat scanner keeps out of the prompt.
+    """``(path, reason)`` for what the threat scanner keeps out of the prompt.
 
     ``snapshot._screened`` silently blocks two kinds of text: the file-listing
     descriptions (which also feed the prefetch hints), and the whole bodies of the

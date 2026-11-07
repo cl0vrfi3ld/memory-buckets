@@ -1,12 +1,9 @@
-"""Threat scanning: writes are refused and inlined files blocked when Hermes's scanner matches.
+"""Threat scanning: writes are refused and inlined files blocked when the scanner matches.
 
-Outside Hermes there is no ``tools.threat_patterns``, so these tests install a stand-in
-with the real one's signature (``scan_for_threats(content, scope)``, a list of pattern IDs).
-
-The stand-in is an approximation, not coverage of the real patterns: the real matcher runs
-only in ``tests/hermes_probe.py`` (asserted by ``tests/test_hermes.py``, gated on
-``HERMES_PYTHON``), which also pins it to still flag this module's ``INJECTION`` and to
-block it through the plugin's own wiring.
+The plugin vendors Hermes's threat-pattern scanner into ``memory_buckets.threat_patterns``.
+Unit tests verify both the vendored scanner directly and how ``_compat`` wires to it.
+For isolated testing of the plugin's refusal logic, tests here patch or stand in for
+the scanner.
 """
 
 import contextlib
@@ -515,7 +512,7 @@ class LintStatusTest(ThreatCase):
 
 
 class ImportFallbackTest(unittest.TestCase):
-    """The import-time fallback in _compat and unit tests for vendored threat patterns."""
+    """The import-time fallback in _compat."""
 
     def test_a_raising_tools_package_leaves_the_plugin_importable(self):
         repo = Path(__file__).resolve().parent.parent
@@ -549,7 +546,11 @@ class ImportFallbackTest(unittest.TestCase):
         self.assertTrue(_compat.THREAT_SCAN_AVAILABLE)
         self.assertEqual(_compat.scan_threats(INJECTION), ["prompt_injection"])
 
-    def test_threat_patterns_scopes_and_validation(self):
+
+class ThreatPatternsTest(unittest.TestCase):
+    """Unit tests for vendored threat patterns and scanner functions."""
+
+    def test_scopes_and_validation(self):
         from memory_buckets import threat_patterns
         with self.assertRaises(ValueError):
             threat_patterns.scan_for_threats("hello", scope="unknown_scope")
@@ -561,7 +562,7 @@ class ImportFallbackTest(unittest.TestCase):
             INJECTION,
             "you are now a assistant",
             "authorized_keys",
-            'api_key = "sk-1234567890abcdef1234567890"',
+            'api_key = "sk-abcdefghijklmnopqrstuvwxyz123456"',
             "do not tell the user",
             "name yourself helper",
         ]
@@ -572,7 +573,16 @@ class ImportFallbackTest(unittest.TestCase):
             self.assertTrue(res_all.issubset(res_ctx))
             self.assertTrue(res_ctx.issubset(res_strict))
 
-    def test_threat_patterns_max_scan_chars_truncation(self):
+        # Exact scope membership assertions:
+        self.assertEqual(threat_patterns.scan_for_threats("you are now a assistant", scope="all"), [])
+        self.assertEqual(threat_patterns.scan_for_threats("you are now a assistant", scope="context"), ["role_hijack"])
+        self.assertEqual(threat_patterns.scan_for_threats("you are now a assistant", scope="strict"), ["role_hijack"])
+
+        self.assertEqual(threat_patterns.scan_for_threats("authorized_keys", scope="all"), [])
+        self.assertEqual(threat_patterns.scan_for_threats("authorized_keys", scope="context"), [])
+        self.assertEqual(threat_patterns.scan_for_threats("authorized_keys", scope="strict"), ["ssh_backdoor"])
+
+    def test_max_scan_chars_truncation(self):
         from memory_buckets import threat_patterns
         self.assertEqual(threat_patterns.MAX_SCAN_CHARS, 65_536)
         padded_beyond = ("x" * threat_patterns.MAX_SCAN_CHARS) + INJECTION
@@ -580,30 +590,36 @@ class ImportFallbackTest(unittest.TestCase):
         padded_within = ("x" * (threat_patterns.MAX_SCAN_CHARS - len(INJECTION))) + INJECTION
         self.assertIn("prompt_injection", threat_patterns.scan_for_threats(padded_within, scope="strict"))
 
-    def test_threat_patterns_invisible_chars(self):
+    def test_invisible_chars(self):
         from memory_buckets import threat_patterns
-        for ch in threat_patterns.INVISIBLE_CHARS:
+        expected_invisible = {
+            "\u200b", "\u200c", "\u200d", "\u2060", "\u2062", "\u2063", "\u2064",
+            "\ufeff", "\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "\u2066",
+            "\u2067", "\u2068", "\u2069",
+        }
+        self.assertEqual(threat_patterns.INVISIBLE_CHARS, expected_invisible)
+        for ch in sorted(expected_invisible):
             res = threat_patterns.scan_for_threats(f"prefix{ch}suffix", scope="context")
             self.assertIn(f"invisible_unicode_U+{ord(ch):04X}", res)
 
-    def test_threat_patterns_nfkc_compatibility_folding(self):
+    def test_nfkc_compatibility_folding(self):
         from memory_buckets import threat_patterns
         full_width_cat = "\uff43\uff41\uff54 .env"
         res = threat_patterns.scan_for_threats(full_width_cat, scope="all")
         self.assertIn("read_secrets", res)
 
-    def test_threat_patterns_hardcoded_secret_and_env_vars(self):
+    def test_hardcoded_secret_and_env_vars(self):
         from memory_buckets import threat_patterns
         env_ref = 'TOKEN = "MYPLUGIN_APP_TOKEN"'
         self.assertNotIn("hardcoded_secret", threat_patterns.scan_for_threats(env_ref, scope="strict"))
         pwd_ref = 'password = "DATABASE_PASSWORD_KEY"'
         self.assertNotIn("hardcoded_secret", threat_patterns.scan_for_threats(pwd_ref, scope="strict"))
-        real_key = 'api_key = "sk-1234567890abcdef1234567890"'
+        real_key = 'api_key = "sk-abcdefghijklmnopqrstuvwxyz123456"'
         self.assertIn("hardcoded_secret", threat_patterns.scan_for_threats(real_key, scope="strict"))
-        real_tok = 'token: "ghp_123456789012345678901234567890"'
+        real_tok = 'token: "ghp_abcdefghijklmnopqrstuvwxyz123456"'
         self.assertIn("hardcoded_secret", threat_patterns.scan_for_threats(real_tok, scope="strict"))
 
-    def test_threat_patterns_ssh_access_write_vs_prose(self):
+    def test_ssh_access_write_vs_prose(self):
         from memory_buckets import threat_patterns
         prose1 = "The keys live in $HOME/.ssh for authentication."
         self.assertEqual(threat_patterns.scan_for_threats(prose1, scope="strict"), [])
@@ -625,6 +641,20 @@ class ImportFallbackTest(unittest.TestCase):
         self.assertEqual(threat_msg, "Blocked: content matches threat pattern 'prompt_injection'. "
                                      "Content is injected into the system prompt and must not contain "
                                      "injection or exfiltration payloads.")
+        self.assertIsNone(threat_patterns.first_threat_message("you are now a assistant", scope="all"))
+        self.assertEqual(
+            threat_patterns.first_threat_message("you are now a assistant", scope="context"),
+            "Blocked: content matches threat pattern 'role_hijack'. "
+            "Content is injected into the system prompt and must not contain "
+            "injection or exfiltration payloads.",
+        )
+        self.assertIsNone(threat_patterns.first_threat_message("authorized_keys", scope="context"))
+        self.assertEqual(
+            threat_patterns.first_threat_message("authorized_keys", scope="strict"),
+            "Blocked: content matches threat pattern 'ssh_backdoor'. "
+            "Content is injected into the system prompt and must not contain "
+            "injection or exfiltration payloads.",
+        )
 
 
 if __name__ == "__main__":

@@ -5,11 +5,12 @@ offered back to the model on later turns, and a pasted credential is the commone
 thing a model will helpfully file. ``scan`` names the credential families in a text so
 the write tools can refuse it.
 
-This is a local list on purpose. Hermes's ``tools.threat_patterns`` has one secret
-pattern (a quoted value of 20+ characters) and ``agent.redact`` is a redactor with
-private lists and no way to ask "is there a secret here". A refusal also costs more
-than a mask: a false positive blocks a real memory, so every family is anchored on a
-shape that ordinary prose does not have, and where it can't be (an assignment such as
+This is a local list on purpose. The threat scanner (vendored in
+``memory_buckets.threat_patterns``) has one secret pattern (a quoted value of
+20+ characters) and ``agent.redact`` is a redactor with private lists and no
+way to ask "is there a secret here". A refusal also costs more than a mask: a
+false positive blocks a real memory, so every family is anchored on a shape
+that ordinary prose does not have, and where it can't be (an assignment such as
 ``password: hunter2``) the value has to look like a credential, not a word.
 
 Pure: no I/O, no Hermes imports, and the same answer on every platform. The patterns
