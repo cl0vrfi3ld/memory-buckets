@@ -1,7 +1,9 @@
 import sys
+import tempfile
 import types
 import unittest
 from unittest import mock
+from pathlib import Path
 
 from .helpers import fake_hermes
 from memory_buckets import projects
@@ -74,6 +76,34 @@ class ProjectsTest(unittest.TestCase):
         with fake_hermes({"global": "/g", "ok": "/ok"}):
             self.assertIsNone(projects.project_for_path("/g/x"))
             self.assertEqual([p.bucket for p in projects.list_projects()], ["ok"])
+
+    def test_absent_projects_db_answers_without_opening_it(self):
+        # The rows exist, so any lookup that reached connect_closing would find "outer".
+        # With the DB absent the guard must answer "no project" before opening it: Hermes's
+        # connect, which the fake now really performs, would create an empty projects.db.
+        # The file check is what pins that side effect: the answers alone pass either way.
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "projects.db"
+            with fake_hermes({"outer": "/src"}, db_path=db):
+                self.assertIsNone(projects.project_for_path("/src/inner"))
+                self.assertEqual(projects.list_projects(), [])
+                self.assertFalse(db.is_file())
+
+    def test_present_projects_db_reads_as_usual(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "projects.db"
+            db.touch()
+            with fake_hermes({"outer": "/src"}, db_path=db):
+                self.assertEqual(projects.project_for_path("/src/x").bucket, "outer")
+                self.assertEqual([p.bucket for p in projects.list_projects()], ["outer"])
+
+    def test_legacy_layout_without_projects_db_path(self):
+        # Older Hermes layouts keep no projects_db_path at all: the guard must fall
+        # through to connect_closing there rather than answer "absent". This is now
+        # opt-in: the fake's default carries a real projects_db_path instead.
+        with fake_hermes({"outer": "/src"}, db_path=None):
+            self.assertEqual(projects.project_for_path("/src/inner").bucket, "outer")
+            self.assertEqual([p.bucket for p in projects.list_projects()], ["outer"])
 
     def test_carries_folders_and_description(self):
         row = types.SimpleNamespace(slug="proj_1", name="Proj", primary_path="/a", description="  A web app  ",

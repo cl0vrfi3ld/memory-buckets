@@ -258,6 +258,11 @@ if set_session_cwd is not None and reset_session_cwd is not None:
 # Project lookup: _to_project reads these attributes with getattr defaults, so a rename would
 # quietly drop the folder list or the description instead of failing.
 pdb_list_projects = need("hermes_cli.projects_db", "list_projects")
+# The plugin also reads projects_db_path() to decide whether the DB exists before opening it.
+pdb_db_path = need("hermes_cli.projects_db", "projects_db_path")
+accepts("projects_db_path()", pdb_db_path)
+if pdb_db_path is not None and not pdb_db_path().is_file():
+    internals.append("projects_db.projects_db_path: the DB created above is not at the path it reports")
 found = []
 if pdb_list_projects is not None:
     with pdb.connect_closing() as conn:
