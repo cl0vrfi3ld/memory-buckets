@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import sqlite3
 import threading
@@ -40,19 +41,40 @@ SEARCH_MIN_SIMILARITY = 0.20
 
 _GENERIC_STEMS = frozenset({"profile", "preferences", "inbox"})
 
-_STOPWORDS = frozenset({
-    "a", "about", "also", "an", "and", "are", "as", "at", "be", "by", "can",
-    "could", "did", "do", "does", "for", "from", "get", "got", "had", "has",
-    "have", "help", "helping", "how", "i", "in", "into", "is", "it", "its",
-    "just", "know", "like", "make", "may", "me", "might", "more", "most",
-    "much", "must", "my", "need", "now", "of", "on", "only", "or", "other",
-    "our", "out", "over", "read", "reading", "should", "some", "such", "tell",
-    "than", "that", "the", "their", "them", "then", "there", "these", "they",
-    "thin", "think", "this", "those", "through", "to", "too", "under", "up",
-    "use", "using", "very", "want", "was", "we", "what", "when", "where",
-    "which", "who", "whom", "why", "will", "with", "work", "working", "would",
-    "you", "your",
-})
+STOPWORDS_FILE = Path(__file__).resolve().parent / "stopwords.json"
+
+
+def load_stopwords(path: Path | str | None = None) -> frozenset[str]:
+    """Load stopwords from a JSON file (dict of language -> list of words, or flat list).
+
+    Returns a frozenset of lowercased stopword strings.
+    """
+    target = Path(path) if path is not None else STOPWORDS_FILE
+    with open(target, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        words: set[str] = set()
+        for lang_code, lang_words in data.items():
+            if not isinstance(lang_code, str):
+                raise ValueError(f"stopwords: expected string language code, got {type(lang_code).__name__}")
+            if not isinstance(lang_words, (list, tuple, set)):
+                raise ValueError(f"stopwords: expected list of words for '{lang_code}', got {type(lang_words).__name__}")
+            for w in lang_words:
+                if not isinstance(w, str):
+                    raise ValueError(f"stopwords: expected string in '{lang_code}', got {type(w).__name__}")
+                words.add(w.lower())
+        return frozenset(words)
+    if isinstance(data, (list, tuple, set)):
+        words = set()
+        for w in data:
+            if not isinstance(w, str):
+                raise ValueError(f"stopwords: expected string word, got {type(w).__name__}")
+            words.add(w.lower())
+        return frozenset(words)
+    raise ValueError(f"stopwords: expected dict or list, got {type(data).__name__}")
+
+
+_STOPWORDS: frozenset[str] = load_stopwords()
 
 _DESC_PREFIX_RE = re.compile(
     r"^(?:read\s+(?:when\s+(?:working\s+on|helping\s+(?:\S+\s+)?with|touching)|for)\s+)",

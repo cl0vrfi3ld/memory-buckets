@@ -39,6 +39,7 @@ buildPythonPackage {
       ../skills
       ../tests
       ../memory_buckets/threat_patterns.json
+      ../memory_buckets/stopwords.json
       (lib.fileset.fileFilter (f: f.hasExt "py") ../memory_buckets)
     ];
   };
