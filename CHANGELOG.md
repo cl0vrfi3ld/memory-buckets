@@ -6,7 +6,15 @@ Notable changes to memory-buckets, newest first. The format follows
 change the store's layout; the plugin migrates the store itself (see
 [Migrating](README.md#migrating)).
 
-## [Unreleased]
+## [0.5.0] - 2026-11-06
+
+Safety and recoverability: threat and credential scanning on every write, import and
+tool result, recoverable file history with `history` and `restore`, a bundled
+`/tidy-memory` skill, the plugin's settings in the setup wizard, and the store kept
+private to the user. No store file changes on upgrade: `.history/` is created on demand
+and the first writable session tightens permissions. The index schema moves to v5, so
+the search cache rebuilds itself once on startup, and the supported Python floor is
+now 3.11.
 
 ### Added
 
@@ -23,6 +31,75 @@ change the store's layout; the plugin migrates the store itself (see
   - Upgrading scans an existing store for the first time, so a file you never changed can
     newly match. One matching line removes the file from the prompt; nothing is deleted,
     and fixing the line puts it back.
+- **Credential refusal.** `memory_write`, `memory_append` and `memory_str_replace`
+  refuse content that looks like a credential: AWS key ids, `sk-` keys, GitHub,
+  GitLab and Slack tokens, PEM private key blocks, and a `password`, `secret`,
+  `token` or `api_key` value that looks like one. The error is `secret_detected`,
+  names the credential families in `patterns`, and never quotes the text. A
+  credential in a mirrored built-in write is logged and dropped, and
+  `hermes memory-buckets import` runs the same credential, threat and size-window
+  checks before writing to `global/inbox.md`.
+- **Recoverable history.** Before a memory file is overwritten or deleted, its previous
+  content is kept under `.history/<path>/<UTC timestamp>-<version>.md`. Retention
+  keeps the newest `history_keep` versions per file (default 20, `0` turns history off)
+  and drops versions older than `history_days` days (default 90, `0` keeps them
+  forever), both under `plugins.memory-buckets`, with `MEMORY_BUCKETS_HISTORY_KEEP`
+  and `MEMORY_BUCKETS_HISTORY_DAYS` overrides. `hermes memory-buckets history PATH`
+  lists a file's recorded versions; `hermes memory-buckets restore PATH [VERSION]`
+  writes one back through the normal compare-and-swap path, so a concurrent change is
+  refused rather than clobbered, and restoring after a delete recreates the file and
+  says so. Appends and creations record nothing.
+- **A bundled `/tidy-memory` skill.** It finds duplicate facts, conflicts, stale time
+  words, finished one-off tasks, oversized files (8000 bytes or more) and vague
+  descriptions, proposes fixes as a numbered list, and applies only what you
+  approve. `diagnose` checks `/tidy-memory` alongside `/sort-imports`.
+- **The plugin's settings in `hermes memory setup`.** All fourteen non-secret settings
+  (the history retention settings included) surface in the wizard with their types and
+  defaults, and answers are written through Hermes's own config writer, so every
+  unrelated key survives.
+- **Private store modes.** New stores are created private on POSIX: directories at
+  0700 and files at 0600, the search index with its journal files, the lock file and
+  migration backups included.
+  - `status` prints a `permissions` line when anything under the store is readable by
+    group or other, and still exits 0.
+  - `migrate`, which also runs at provider start, removes group and world access from
+    everything under the store: it only ever removes access, skips symlinks and the
+    downloaded models, and reports a path it cannot change while the rest are still
+    tightened. A store deliberately shared through `store_path` therefore loses that
+    access on the first writable session after upgrading; there is no opt-out switch.
+  - Off POSIX nothing is done, since Python 3.13 rewrites the ACL when a mode is
+    passed to mkdir.
+- **`memory_read` pages at the 48 KiB cap.** The size cap was checked on writes only,
+  so a hand-edited or synced file over 48 KiB came back whole and could take most of
+  the context window in one call. `memory_read` now returns at most 48 KiB per file,
+  with `truncated`, `total_bytes` and `next_offset` in the result, and an `offset`
+  argument reads the next page. Page boundaries back up over UTF-8 continuation
+  bytes, so a page never cuts inside a letter. Files under the cap are unchanged, and
+  `status` now names files over the cap alongside `lint`.
+- **The prompt listing keeps the most recently edited files.** When the file index in
+  the prompt block does not fit under `snapshot_max_chars`, the cut keeps the most
+  recently edited files instead of whatever sorts first by path. A file's age is its
+  `edited_at` stamp, so a hand edit to a stamped file still moves it; only a file
+  without a readable stamp falls back to its indexed mtime.
+- **`status` reports what the index skips.** Files outside the path rules and symlinks
+  (never followed) are counted on `ignored` lines, and files whose frontmatter does
+  not parse on a `frontmatter` line. A notice, not a fault: `status` still exits 0.
+- **`lint` and `status` name scanner-blocked files.** `lint` reports, per file, which
+  text matched which threat patterns and why it stays out of the prompt (screened
+  from `frontmatter.parse` alone, matching what the index and snapshot see); `status`
+  prints one `blocked` line counting them and pointing at `lint`. Bodies of listed
+  (not inlined) files are not reported: they never enter the prompt, and
+  `memory_read` still returns them on request.
+- **A filing reminder ahead of compression.** When Hermes is about to compress the
+  transcript, the provider queues the save-durable-facts reminder for the turn after
+  compression, even mid-interval, so facts that would die with the transcript get a
+  last call to be filed. Sessions with `nudge_interval` 0 and read-only sessions opt
+  out, as they do for the interval reminder.
+
+### Changed
+
+- **The supported Python floor is 3.11** (was 3.10), matching Hermes itself. The 3.10
+  support nothing exercised is gone; installs on 3.10 should stay on 0.4.x.
 
 ### Fixed
 
@@ -32,6 +109,58 @@ change the store's layout; the plugin migrates the store itself (see
   `shutdown()` now waits for prefetches in flight, within the same 10 seconds it gives the
   embedding worker, and leaves the index open, with a warning, if one outlasts that. A
   `queue_prefetch` that starts after `shutdown()` does nothing.
+- **Keyword search keeps the end of a long query.** The FTS leg sampled only the first
+  32 tokens of a query, so a long message whose key terms sat at the end never
+  matched. It now samples head and tail (32 tokens each), mirroring what the vector
+  leg already did. Query-side only: nothing is re-indexed.
+- **An always-kept file honours `snapshot_max_chars`.** A `global/profile.md` bigger
+  than the cap went whole into the prompt block on every turn. It is now cut to fit,
+  ending with a line that says how much was cut and points at `memory_read` for the
+  rest.
+- **Descriptions in tool results are screened.** `memory_list` and `memory_search` run
+  the frontmatter description they return through the same screen as the prompt
+  listing, so a hand-edited poisoned description can no longer reach the model through
+  a tool result: a matching one comes back as the `[BLOCKED: ...]` stand-in. A search
+  result whose file has no body chunks returns an empty snippet instead of falling
+  back on its identity text.
+- **Aliases containing commas stay one alias.** Aliases were stored comma-joined and
+  split on read, so `Smith, John` indexed as two aliases and the word `John` alone
+  could prefetch the file. They are now stored as a JSON array, and `SCHEMA_VERSION`
+  moves from 4 to 5: an existing cache is dropped and rebuilt automatically on
+  startup.
+- **Whole-line `#` comments no longer break frontmatter.** A comment line starting in
+  column 0 used to make the file unparseable, and so invisible to the index. It is
+  now accepted, kept in place when the file is rendered again, and invisible to `get`,
+  `keys` and `pairs`. Indented `#` lines remain an error, so a list item cut off from
+  its key cannot pass as a comment.
+- **Every boolean spelling loads, and junk warns instead of silently disabling.**
+  Boolean settings and their environment overrides accepted only `1/true/yes/on` and
+  treated every other spelling as false, so `MEMORY_BUCKETS_EMBEDDINGS_AUTO_DOWNLOAD=y`
+  disabled the background download. All the usual spellings now load
+  (`MEMORY_BUCKETS_TRACE` included, so `0` and `false` stay off), and unrecognised
+  text warns and keeps the default.
+- **Switching projects mid-session updates the prompt context with a one-off note.**
+  Scope followed the session's project on every tool call, but the frozen system
+  prompt block still described the project the session started in. When `prefetch`
+  sees the session has moved into another project (or out of one), it emits a one-off
+  note with the new project's routing rules, `profile.md` and `preferences.md` in
+  full, and demotes the previous project to add-only, leaving the frozen block in
+  place so prefix caching stays warm.
+- **`StaticModel._row_cache` is bounded at 4,096 rows.** Unpacked token rows are kept
+  as `array("f")` (~2 KB per row instead of ~16 KB for boxed-float tuples) and the
+  cache clears at 4,096 rows, keeping RSS bounded in long-lived processes that encode
+  many distinct tokens.
+- **Project lookups do not create an empty `projects.db` when it is absent.**
+  Resolving a session's project or known project slugs skips opening
+  `$HERMES_HOME/projects.db` when the file does not exist yet, avoiding an empty
+  database on fresh profiles and errors on a read-only `$HERMES_HOME`.
+- **`status` and `diagnose` use Hermes's public plugin surfaces.** Both commands read
+  config, default platform toolsets (`api_server`, `whatsapp_cloud`, `wecom_callback`,
+  and unconfigured platforms), and plugin declaration attributes through Hermes's
+  public helpers rather than private core modules, and pass `hermes plugin validate`.
+- **Session rotation and in-place resets handle `state.turns` cleanly.** An in-place
+  session reset zeroes `state.turns` alongside the snapshot and hint cooldown, while
+  switching to another session id preserves its turn count.
 
 ## [0.4.0] - 2026-10-16
 
@@ -408,6 +537,7 @@ will do.
 
 Initial release.
 
+[0.5.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.4.0...v0.5.0
 [0.4.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.3.0...v0.4.0
 [0.3.0]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.2.1...v0.3.0
 [0.2.1]: https://git.cl0vr.co/cl0vr/memory-buckets/compare/v0.2.0...v0.2.1
