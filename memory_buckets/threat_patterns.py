@@ -29,35 +29,25 @@ def load_threat_patterns(path: Path | str | None = None) -> list[tuple[str, str,
     target = Path(path) if path is not None else THREAT_PATTERNS_FILE
     with open(target, encoding="utf-8") as f:
         data = json.load(f)
+    if not isinstance(data, list):
+        raise ValueError(f"threat_patterns: expected list, got {type(data).__name__}")
     patterns: list[tuple[str, str, str]] = []
-    if isinstance(data, dict):
-        for pid, val in data.items():
-            pattern = None
-            scope = None
-            if isinstance(val, dict):
-                pattern = val.get("pattern") or val.get("regex")
-                scope = val.get("scope")
-            elif isinstance(val, (list, tuple)) and len(val) >= 2:
-                pattern, scope = val[0], val[1]
-            if not pattern or not pid or not scope:
-                raise ValueError(f"threat_patterns: invalid pattern entry {pid!r}: {val!r}")
-            patterns.append((pattern, pid, scope))
-    elif isinstance(data, list):
-        for item in data:
-            pattern = None
-            pid = None
-            scope = None
-            if isinstance(item, (list, tuple)) and len(item) >= 3:
-                pattern, pid, scope = item[0], item[1], item[2]
-            elif isinstance(item, dict):
-                pid = item.get("pattern_id") or item.get("id") or item.get("name")
-                pattern = item.get("pattern") or item.get("regex")
-                scope = item.get("scope")
-            if not pattern or not pid or not scope:
-                raise ValueError(f"threat_patterns: invalid pattern entry {item!r}")
-            patterns.append((pattern, pid, scope))
-    else:
-        raise ValueError(f"threat_patterns: expected dict or list, got {type(data).__name__}")
+    for item in data:
+        if not isinstance(item, dict):
+            raise ValueError(f"threat_patterns: expected dict entry, got {type(item).__name__}")
+        pattern = item.get("pattern")
+        pid = item.get("pattern_id")
+        scope = item.get("scope")
+        if not (
+            isinstance(pattern, str)
+            and bool(pattern)
+            and isinstance(pid, str)
+            and bool(pid)
+            and isinstance(scope, str)
+            and bool(scope)
+        ):
+            raise ValueError(f"threat_patterns: invalid pattern entry {item!r}")
+        patterns.append((pattern, pid, scope))
     return patterns
 
 

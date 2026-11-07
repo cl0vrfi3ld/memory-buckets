@@ -567,44 +567,57 @@ class ThreatPatternsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             p = Path(tmpdir) / "patterns.json"
 
-            # Valid dict format
+            # Valid list of dicts
             p.write_text(
-                json.dumps({"p1": {"pattern": "abc", "scope": "all"}, "p2": ["def", "context"]}),
+                json.dumps([{"pattern": "abc", "pattern_id": "p1", "scope": "all"}]),
                 encoding="utf-8",
             )
             loaded = threat_patterns.load_threat_patterns(p)
-            self.assertEqual(loaded, [("abc", "p1", "all"), ("def", "p2", "context")])
+            self.assertEqual(loaded, [("abc", "p1", "all")])
 
-            # Malformed dict entries raise ValueError
-            p.write_text(json.dumps({"p1": {"pattern": "abc"}}), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                threat_patterns.load_threat_patterns(p)
+            # Non-list root types raise ValueError
+            for invalid_root in [{}, {"p1": {"pattern": "abc"}}, "invalid", 123, None]:
+                p.write_text(json.dumps(invalid_root), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    threat_patterns.load_threat_patterns(p)
 
-            p.write_text(json.dumps({"p1": ["abc"]}), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                threat_patterns.load_threat_patterns(p)
+            # Non-dict item entries raise ValueError
+            for invalid_item in [["abc", "p1", "all"], "not_a_valid_entry", 123, None]:
+                p.write_text(json.dumps([invalid_item]), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    threat_patterns.load_threat_patterns(p)
 
-            p.write_text(json.dumps({"p1": "bad"}), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                threat_patterns.load_threat_patterns(p)
+            # Missing or empty fields raise ValueError
+            for missing_or_empty in [
+                {"pattern": "abc", "scope": "all"},
+                {"pattern_id": "p1", "scope": "all"},
+                {"pattern_id": "p1", "pattern": "abc"},
+                {"pattern": "", "pattern_id": "p1", "scope": "all"},
+                {"pattern": "abc", "pattern_id": "", "scope": "all"},
+                {"pattern": "abc", "pattern_id": "p1", "scope": ""},
+            ]:
+                p.write_text(json.dumps([missing_or_empty]), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    threat_patterns.load_threat_patterns(p)
 
-            # Malformed list entries raise ValueError
-            p.write_text(json.dumps([{"pattern": "abc", "scope": "all"}]), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                threat_patterns.load_threat_patterns(p)
+            # Non-string field types raise ValueError
+            for non_string in [
+                {"pattern": 123, "pattern_id": "p1", "scope": "all"},
+                {"pattern": "abc", "pattern_id": 123, "scope": "all"},
+                {"pattern": "abc", "pattern_id": "p1", "scope": 123},
+                {"pattern": ["abc"], "pattern_id": "p1", "scope": "all"},
+                {"pattern": True, "pattern_id": "p1", "scope": "all"},
+            ]:
+                p.write_text(json.dumps([non_string]), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    threat_patterns.load_threat_patterns(p)
 
-            p.write_text(json.dumps([["abc", "p1"]]), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                threat_patterns.load_threat_patterns(p)
-
-            p.write_text(json.dumps(["not_a_valid_entry"]), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                threat_patterns.load_threat_patterns(p)
-
-            # Invalid root type raises ValueError
-            p.write_text(json.dumps("invalid"), encoding="utf-8")
-            with self.assertRaises(ValueError):
-                threat_patterns.load_threat_patterns(p)
+    def test_nix_package_includes_threat_patterns_json(self):
+        repo = Path(__file__).resolve().parent.parent
+        nix_package = repo / "nix" / "package.nix"
+        self.assertTrue(nix_package.is_file(), f"missing {nix_package}")
+        content = nix_package.read_text(encoding="utf-8")
+        self.assertIn("../memory_buckets/threat_patterns.json", content)
 
     def test_scopes_and_validation(self):
         from memory_buckets import threat_patterns

@@ -113,13 +113,13 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertIsNone(out["elsewhere_scope"])
         # The threat scanner. With the scanner vendored in memory_buckets.threat_patterns,
         # _compat wires directly to the vendored module. These probe fields verify that
-        # the scanner is wired and available, Hermes still flags the canonical injection
+        # the scanner is wired and available, the vendored scanner flags the canonical injection
         # line, and flagged text is blocked through the plugin's wiring.
         self.assertTrue(out["threat_scan_available"], "the plugin loaded no threat scanner")
         self.assertTrue(out["plugin_scan_is_wired"], "the plugin threat scanner is not wired to threat_patterns.scan_for_threats")
         self.assertTrue(out["scan_window_matches"], "the plugin's scan window is not threat_patterns.MAX_SCAN_CHARS")
         self.assertIn("prompt_injection", out["injection_patterns"],
-                      "Hermes's matcher no longer flags test_threats.py's canonical INJECTION line")
+                      "the vendored scanner no longer flags test_threats.py's canonical INJECTION line")
         refused = out["write_refused"]
         self.assertFalse(refused["ok"], refused)
         self.assertEqual(refused["error"]["code"], "threat_detected")
