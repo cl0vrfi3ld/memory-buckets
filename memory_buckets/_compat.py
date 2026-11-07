@@ -63,42 +63,23 @@ except ImportError:  # not running inside Hermes
         return threading.Thread(target=target, args=args, kwargs=kwargs, name=name, daemon=daemon)
 
 
-# The scanner itself, imported on its own: a Hermes that renames only the window
-# constant below must not take the scanner with it and switch all scanning off.
-try:
-    from tools.threat_patterns import scan_for_threats as _scan_for_threats
-except Exception:  # not in Hermes, or a Hermes without the shared pattern library
-    # Exception, not ImportError: outside Hermes ``tools`` can be someone else's package,
-    # and whatever its __init__ raises must not stop this plugin loading.
-    _scan_for_threats = None
-
-# The window comes with the scanner: ``scan_for_threats`` reads only this many leading
-# characters of its input, so callers must not pass longer text off as scanned.
-if _scan_for_threats is None:
-    # No scanner means no window either: nothing is scanned, so callers fail open.
-    scan_window_chars = None
-else:
-    try:
-        from tools.threat_patterns import MAX_SCAN_CHARS as scan_window_chars
-    except Exception:
-        # The scanner is here but its window constant is gone or renamed. Scanning must
-        # keep working, yet text of unknown size may not pass as scanned, so fail closed
-        # on size with the one bound no tool write can exceed: store caps writes at
-        # MAX_FILE_BYTES bytes, and a UTF-8 file never has more characters than bytes.
-        from .store import MAX_FILE_BYTES as scan_window_chars
-        logger.warning("memory-buckets: Hermes's threat scanner has no MAX_SCAN_CHARS; "
-                       "capping scanned text at %s characters instead", scan_window_chars)
+# The threat scanner is vendored into .threat_patterns so the plugin never imports
+# Hermes's private tools.threat_patterns module.
+from .threat_patterns import (  # noqa: E402
+    MAX_SCAN_CHARS as scan_window_chars,  # noqa: F401
+    scan_for_threats as _scan_for_threats,
+)
 
 THREAT_SCAN_AVAILABLE = _scan_for_threats is not None
 _scan_failure_logged = False
 
 
 def scan_threats(content: str) -> List[str]:
-    """IDs of the Hermes threat patterns ``content`` matches, at the ``strict`` scope the
+    """IDs of the threat patterns ``content`` matches, at the ``strict`` scope the
     built-in memory uses for writes (it is the one scope meant for content a user can
     fix, and everything we scan is memory). Empty when nothing matches.
 
-    Also empty when Hermes has no scanner (a bare Python, an older Hermes) or the
+    Also empty when the scanner is disabled (e.g. patched to None in tests) or the
     scanner raises: a missing safety check must not stop memory working, so this fails
     open. A scanner that exists but errors is logged once, since that is the case where
     the protection has silently gone."""
@@ -110,7 +91,7 @@ def scan_threats(content: str) -> List[str]:
     except Exception:
         if not _scan_failure_logged:
             _scan_failure_logged = True
-            logger.warning("memory-buckets: Hermes's threat scanner failed; memory is not being scanned",
+            logger.warning("memory-buckets: threat scanner failed; memory is not being scanned",
                            exc_info=True)
         return []
 

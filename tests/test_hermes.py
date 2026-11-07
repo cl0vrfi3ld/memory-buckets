@@ -111,16 +111,15 @@ class HermesIntegrationTest(unittest.TestCase):
         self.assertEqual(out["project_scope"]["source"], "hermes-project")
         self.assertEqual(out["project_scope"]["writes"], ["proj-1/", "global/"])
         self.assertIsNone(out["elsewhere_scope"])
-        # The real threat matcher. tests/test_threats.py patches _compat._scan_for_threats
-        # with a hand-written FakeScanner (outside Hermes there is no tools.threat_patterns),
-        # so these probe fields are the only coverage of the real one: the plugin must have
-        # resolved to Hermes's own scanner, Hermes must still flag the canonical injection
-        # line, and flagged text must be blocked through the plugin's wiring.
+        # The threat scanner. With the scanner vendored in memory_buckets.threat_patterns,
+        # _compat wires directly to the vendored module. These probe fields verify that
+        # the scanner is wired and available, the vendored scanner flags the canonical injection
+        # line, and flagged text is blocked through the plugin's wiring.
         self.assertTrue(out["threat_scan_available"], "the plugin loaded no threat scanner")
-        self.assertTrue(out["plugin_scan_is_real"], "the plugin did not resolve to Hermes's own scanner")
-        self.assertTrue(out["scan_window_matches"], "the plugin's scan window is not Hermes's MAX_SCAN_CHARS")
+        self.assertTrue(out["plugin_scan_is_wired"], "the plugin threat scanner is not wired to threat_patterns.scan_for_threats")
+        self.assertTrue(out["scan_window_matches"], "the plugin's scan window is not threat_patterns.MAX_SCAN_CHARS")
         self.assertIn("prompt_injection", out["injection_patterns"],
-                      "Hermes's matcher no longer flags test_threats.py's canonical INJECTION line")
+                      "the vendored scanner no longer flags test_threats.py's canonical INJECTION line")
         refused = out["write_refused"]
         self.assertFalse(refused["ok"], refused)
         self.assertEqual(refused["error"]["code"], "threat_detected")

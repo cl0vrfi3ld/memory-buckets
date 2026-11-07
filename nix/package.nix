@@ -38,6 +38,7 @@ buildPythonPackage {
       ../hatch_build.py
       ../skills
       ../tests
+      ../memory_buckets/threat_patterns.json
       (lib.fileset.fileFilter (f: f.hasExt "py") ../memory_buckets)
     ];
   };

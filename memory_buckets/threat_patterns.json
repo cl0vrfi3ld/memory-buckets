@@ -1,0 +1,218 @@
+[
+  {
+    "pattern_id": "prompt_injection",
+    "pattern": "ignore\\s+(?:\\w+\\s+){0,8}(previous|all|above|prior)\\s+(?:\\w+\\s+){0,8}instructions",
+    "scope": "all",
+    "description": "Classic prompt injection (instructions ignore)"
+  },
+  {
+    "pattern_id": "sys_prompt_override",
+    "pattern": "system\\s+prompt\\s+override",
+    "scope": "all",
+    "description": "System prompt override"
+  },
+  {
+    "pattern_id": "disregard_rules",
+    "pattern": "disregard\\s+(?:\\w+\\s+){0,8}(your|all|any)\\s+(?:\\w+\\s+){0,8}(instructions|rules|guidelines)",
+    "scope": "all",
+    "description": "Disregard instructions or rules"
+  },
+  {
+    "pattern_id": "bypass_restrictions",
+    "pattern": "act\\s+as\\s+(if|though)\\s+(?:\\w+\\s+){0,8}you\\s+(?:\\w+\\s+){0,8}(have\\s+no|don\\'t\\s+have)\\s+(?:\\w+\\s+){0,8}(restrictions|limits|rules)",
+    "scope": "all",
+    "description": "Act as if no restrictions"
+  },
+  {
+    "pattern_id": "html_comment_injection",
+    "pattern": "<!--[^>]{0,512}(?:ignore|override|system|secret|hidden)[^>]{0,512}-->",
+    "scope": "all",
+    "description": "HTML comment injection with control keywords"
+  },
+  {
+    "pattern_id": "hidden_div",
+    "pattern": "<\\s*div\\s+style\\s*=\\s*[\"\\'][^>]{0,2048}display\\s*:\\s*none",
+    "scope": "all",
+    "description": "Hidden div element display none"
+  },
+  {
+    "pattern_id": "translate_execute",
+    "pattern": "translate\\s+[^\\n]{0,512}\\s+into\\s+\\w+(?:[\\s-]+\\w+){0,2}\\s+and\\s+(execute|run|eval)\\b",
+    "scope": "all",
+    "description": "Translate and execute payload"
+  },
+  {
+    "pattern_id": "deception_hide",
+    "pattern": "do\\s+not\\s+(?:\\w+\\s+){0,8}tell\\s+(?:\\w+\\s+){0,8}the\\s+user",
+    "scope": "all",
+    "description": "Deception instruction to hide from user"
+  },
+  {
+    "pattern_id": "role_hijack",
+    "pattern": "you\\s+are\\s+(?:\\w+\\s+){0,8}now\\s+(?:a|an|the)\\s+",
+    "scope": "context",
+    "description": "Role-play / identity hijack (new persona)"
+  },
+  {
+    "pattern_id": "role_pretend",
+    "pattern": "pretend\\s+(?:\\w+\\s+){0,8}(you\\s+are|to\\s+be)\\s+",
+    "scope": "context",
+    "description": "Pretend to be another entity"
+  },
+  {
+    "pattern_id": "leak_system_prompt",
+    "pattern": "output\\s+(?:\\w+\\s+){0,8}(system|initial)\\s+prompt",
+    "scope": "context",
+    "description": "Output system prompt"
+  },
+  {
+    "pattern_id": "remove_filters",
+    "pattern": "(respond|answer|reply)\\s+without\\s+(?:\\w+\\s+){0,8}(restrictions|limitations|filters|safety)",
+    "scope": "context",
+    "description": "Respond without filters or safety"
+  },
+  {
+    "pattern_id": "fake_update",
+    "pattern": "you\\s+have\\s+been\\s+(?:\\w+\\s+){0,8}(updated|upgraded|patched)\\s+to",
+    "scope": "context",
+    "description": "Fake update or patch notification"
+  },
+  {
+    "pattern_id": "identity_override",
+    "pattern": "\\bname\\s+yourself\\s+\\w+",
+    "scope": "context",
+    "description": "Identity override via name yourself"
+  },
+  {
+    "pattern_id": "c2_node_registration",
+    "pattern": "register\\s+(as\\s+)?a?\\s*node",
+    "scope": "context",
+    "description": "C2 node registration command"
+  },
+  {
+    "pattern_id": "c2_heartbeat",
+    "pattern": "(heartbeat|beacon|check[\\s\\-]?in)\\s+(to|with)\\s+",
+    "scope": "context",
+    "description": "C2 heartbeat or beacon check-in"
+  },
+  {
+    "pattern_id": "c2_task_pull",
+    "pattern": "pull\\s+(down\\s+)?(?:new\\s+)?task(?:ing|s)?\\b",
+    "scope": "context",
+    "description": "C2 task pull or tasking command"
+  },
+  {
+    "pattern_id": "c2_network_connect",
+    "pattern": "connect\\s+to\\s+the\\s+network\\b",
+    "scope": "context",
+    "description": "C2 network connection instruction"
+  },
+  {
+    "pattern_id": "forced_action",
+    "pattern": "you\\s+must\\s+(?:\\w+\\s+){0,3}(register|connect|report|beacon)\\b",
+    "scope": "context",
+    "description": "Forced action (must register/connect/beacon)"
+  },
+  {
+    "pattern_id": "anti_forensic_oneliner",
+    "pattern": "only\\s+use\\s+one[\\s\\-]?liners?\\b",
+    "scope": "context",
+    "description": "Anti-forensic instruction: use one-liners"
+  },
+  {
+    "pattern_id": "anti_forensic_disk",
+    "pattern": "never\\s+(?:\\w+\\s+){0,8}(?:create|write)\\s+(?:\\w+\\s+){0,8}(?:script|file)\\s+(?:\\w+\\s+){0,8}disk",
+    "scope": "context",
+    "description": "Anti-forensic instruction: never write to disk"
+  },
+  {
+    "pattern_id": "env_var_unset_agent",
+    "pattern": "unset\\s+\\w*(?:CLAUDE|CODEX|HERMES|AGENT|OPENAI|ANTHROPIC)\\w*",
+    "scope": "context",
+    "description": "Unset agent runtime environment variables"
+  },
+  {
+    "pattern_id": "known_c2_framework",
+    "pattern": "\\b(?:cobalt\\s*strike|sliver|havoc|mythic|metasploit|brainworm)\\b",
+    "scope": "context",
+    "description": "Known C2 framework names (Cobalt Strike, Sliver, etc.)"
+  },
+  {
+    "pattern_id": "c2_explicit",
+    "pattern": "\\bc2\\s+(?:server|channel|infrastructure|beacon)\\b",
+    "scope": "context",
+    "description": "Explicit C2 infrastructure terminology"
+  },
+  {
+    "pattern_id": "c2_explicit_long",
+    "pattern": "\\bcommand\\s+and\\s+control\\b",
+    "scope": "context",
+    "description": "Explicit command and control terminology"
+  },
+  {
+    "pattern_id": "exfil_curl",
+    "pattern": "curl\\s+[^\\n]{0,2048}\\$\\{?\\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)S?\\b",
+    "scope": "all",
+    "description": "Exfiltration via curl with secret environment variables"
+  },
+  {
+    "pattern_id": "exfil_wget",
+    "pattern": "wget\\s+[^\\n]{0,2048}\\$\\{?\\w*(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)S?\\b",
+    "scope": "all",
+    "description": "Exfiltration via wget with secret environment variables"
+  },
+  {
+    "pattern_id": "read_secrets",
+    "pattern": "cat\\s+[^\\n]{0,2048}(\\.env|credentials|\\.netrc|\\.pgpass|\\.npmrc|\\.pypirc)",
+    "scope": "all",
+    "description": "Read credential and secret files via cat"
+  },
+  {
+    "pattern_id": "send_to_url",
+    "pattern": "(send|post|upload|transmit)\\s+[^\\n]{0,2048}\\s+(to|at)\\s+https?://",
+    "scope": "strict",
+    "description": "Transmit or send data to external URL"
+  },
+  {
+    "pattern_id": "context_exfil",
+    "pattern": "(include|output|print|share)\\s+(?:\\w+\\s+){0,8}(conversation|chat\\s+history|previous\\s+messages|full\\s+context|entire\\s+context)",
+    "scope": "strict",
+    "description": "Exfiltration of conversation or context history"
+  },
+  {
+    "pattern_id": "ssh_backdoor",
+    "pattern": "authorized_keys",
+    "scope": "strict",
+    "description": "Authorized keys file reference"
+  },
+  {
+    "pattern_id": "ssh_access",
+    "pattern": "(?:\\b(?:echo|cat|cp|mv|dd|tee|install|printf|rsync|scp|ln|append|add|write|sed|chmod|chown|truncate|rm|touch|curl|wget|git)\\b|\\bopen\\s*\\(|>>?)[^\\n]{0,512}(?:\\$HOME/\\.ssh|~/\\.ssh)",
+    "scope": "strict",
+    "description": "Write or modification access to SSH directory"
+  },
+  {
+    "pattern_id": "hermes_env",
+    "pattern": "\\$HOME/\\.hermes/\\.env|\\~/\\.hermes/\\.env",
+    "scope": "strict",
+    "description": "Access to Hermes environment file"
+  },
+  {
+    "pattern_id": "agent_config_mod",
+    "pattern": "(update|modify|edit|write|change|append|add\\s+to)\\s+[^\\n]{0,2048}(?:AGENTS\\.md|CLAUDE\\.md|\\.cursorrules|\\.clinerules)",
+    "scope": "strict",
+    "description": "Modification of agent instructions and config files"
+  },
+  {
+    "pattern_id": "hermes_config_mod",
+    "pattern": "(update|modify|edit|write|change|append|add\\s+to)\\s+[^\\n]{0,2048}\\.hermes/(config\\.yaml|SOUL\\.md)",
+    "scope": "strict",
+    "description": "Modification of Hermes config or soul file"
+  },
+  {
+    "pattern_id": "hardcoded_secret",
+    "pattern": "(?:api[_-]?key|token|secret|password)\\s*[=:]\\s*[\"\\'](?!(?-i:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)[\"\\'])[A-Za-z0-9+/=_-]{20,}",
+    "scope": "strict",
+    "description": "Hardcoded secret, API key, token, or password"
+  }
+]
