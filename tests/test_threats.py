@@ -550,6 +550,18 @@ class ImportFallbackTest(unittest.TestCase):
 class ThreatPatternsTest(unittest.TestCase):
     """Unit tests for vendored threat patterns and scanner functions."""
 
+    def test_patterns_json_file_and_loader(self):
+        from memory_buckets import threat_patterns
+        self.assertTrue(threat_patterns.THREAT_PATTERNS_FILE.is_file())
+        patterns = threat_patterns.load_threat_patterns()
+        self.assertEqual(len(patterns), 36)
+        for pattern, pid, scope in patterns:
+            self.assertIsInstance(pattern, str)
+            self.assertIsInstance(pid, str)
+            self.assertIn(scope, {"all", "context", "strict"})
+            self.assertTrue(pattern)
+            self.assertTrue(pid)
+
     def test_scopes_and_validation(self):
         from memory_buckets import threat_patterns
         with self.assertRaises(ValueError):
